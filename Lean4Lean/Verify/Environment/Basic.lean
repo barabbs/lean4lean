@@ -106,7 +106,12 @@ re-deriving `addInduct`'s internal steps, it bakes the theory result: `env_eq`
 records the whole `env₁.addInduct decl` and `cis` lists the registered constant
 infos with their model constants. `.safe` is hardcoded as in `AddQuot`; the
 `rec_find` field is what ties a kernel recursor lookup to the `addInduct_pat`
-ι-rule, down to the telescope split and the translation of each rule's reduct. -/
+ι-rule, down to the telescope split and the translation of each rule's reduct.
+The dual `ctor_find` field ties a kernel *constructor* lookup to the same data:
+a resolved `.ctorInfo` is either old or is a constructor of one of `decl`'s
+inductive types whose field/param counts (`numFields`/`numParams`) agree with the
+recursor rule (`ru ∈ r.rules`, `r ∈ decl.recs`) whose ι rule fires on it — the
+projection-reduction analogue of `rec_find`, used by `TrEnv.proj_defeq`. -/
 structure AddInduct (m₁ : ConstMap) (env₁ : VEnv) (decl : VInductDecl)
     (m₂ : ConstMap) (env₂ : VEnv) where
   cis : List (ConstantInfo × VConstant)
@@ -126,6 +131,18 @@ structure AddInduct (m₁ : ConstMap) (env₁ : VEnv) (decl : VInductDecl)
       ∀ rule ∈ rval.rules, ∃ ru ∈ r.rules,
         ru.ctor = rule.ctor ∧ ru.nfields = rule.nfields ∧ ru.rhs.Closed ∧
         TrExprS env₂ rval.levelParams [] rule.rhs ru.rhs
+  -- Mirrors `rec_find` on the `.ctorInfo` side. Since nothing constructs an
+  -- `AddInduct` yet (`Verify/Environment.lean`'s `inductDecl` case is `sorry`),
+  -- adding this field only *strengthens the hypothesis* `AddInduct` — it creates
+  -- NO proof obligation today; a future constructor of `AddInduct` will discharge
+  -- it (each constructor of a well-formed inductive has one recursor rule with
+  -- matching counts).
+  ctor_find : ∀ {ctorName : Name} {cval : ConstructorVal},
+    m₂.find? ctorName = some (.ctorInfo cval) →
+    m₁.find? ctorName = some (.ctorInfo cval) ∨
+    ∃ t ∈ decl.types, ∃ c ∈ t.ctors, c.name = ctorName ∧
+      ∃ r ∈ decl.recs, ∃ ru ∈ r.rules,
+        ru.ctor = ctorName ∧ ru.nfields = cval.numFields ∧ r.numParams = cval.numParams
   value_find : ∀ {name : Name} {ci : ConstantInfo} {v : Expr},
     m₂.find? name = some ci → ci.deltaValue? = some v → m₁.find? name = some ci
 

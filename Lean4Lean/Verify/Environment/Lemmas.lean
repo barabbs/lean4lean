@@ -511,3 +511,26 @@ theorem TrEnv.iota_rec {safety : DefinitionSafety} {env : Environment} {venv : V
         rval.numMotives rval.numMinors rval.numIndices rule.nfields rhs hc).apply m1 m2) := by
   obtain ⟨rhs, hc, htr, hp⟩ := H.pats_iota' hrec hrule hsafe
   exact ⟨rhs, hc, htr, TrEnv.iota_defeq hp hm hty (chk := []) trivial nofun⟩
+
+/-- **Projection reduction.** If `e''` is the recursor expansion of the `i`-th
+projection of a structure value `d` (`TrProj`), and `d` is definitionally equal to
+a constructor spine `ctorName cus (params ++ fields)`, then `e''` is definitionally
+equal to the named field `fields[i]`. This is the interface the `proj` case of
+`TrExprS` soundness consumes: firing the structure's ι rule on the rewritten
+constructor spine, whose reduct (η-long minor application `fun … minor fields =>
+minor fields`) β-reduces through the `fieldSelector` telescope to `fields[i]`.
+
+Proof route (see the PROJ-TODO): from `hp`, `e'' = recName us params motive
+(fieldSelector fieldTys i) d` with a registered ι rule `venv.pats (iota recName
+(np+1+1+0) ctorName …) r`; rewrite `d` by `hd` to the constructor spine so the ι
+rule fires (`iota_defeq`/`IsDefEq.pat`), then β-reduce the structure reduct. -/
+theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environment}
+    {venv : VEnv} {U : Nat} {Γ : List VExpr} {S ctorName : Name} {i np nf : Nat}
+    {us cus : List VLevel} {params fields : List VExpr} {d e'' A : VExpr}
+    (H : TrEnv safety kenv venv)
+    (hp : TrProj venv U Γ S i d e'')
+    (hd : venv.IsDefEqU U Γ d ((VExpr.const ctorName cus).mkApps (params ++ fields)))
+    (hty : venv.HasType U Γ d A)
+    (hlen : params.length = np) (hflen : fields.length = nf) (hi : i < nf) :
+    venv.IsDefEqU U Γ e'' (fields[i]'(hflen ▸ hi)) := by
+  sorry -- PROJ-TODO(soundness): structure recursor rhs is the η-long minor application; β-reduces to fields[i]
