@@ -555,12 +555,119 @@ inductive SortList : VLCtx → List VLevel → Prop
 
 end VLCtx
 
-theorem TrProj.weak' (W : Ctx.Lift' n Γ Γ')
-    (H : TrProj Γ s i e e') : TrProj Γ' s i (e.lift' n) (e'.lift' n) := sorry
+/-! ### Structural lemmas for `VExpr.mkApps` and `VExpr.fieldSelector`
 
-theorem TrProj.weakN (W : Ctx.LiftN n k Γ Γ')
-    (H : TrProj Γ s i e e') : TrProj Γ' s i (e.liftN n k) (e'.liftN n k) := by
-  simpa [VExpr.lift'_consN_skipN] using H.weak' <| Ctx.liftN_iff_lift'.1 W
+`TrProj` expresses a projection as `(const recName us).mkApps (params ++ [motive,
+fieldSelector fieldTys i, e])`. Weakening / instantiation / level-instantiation all
+distribute over `mkApps` (a left fold of `.app`) and over `fieldSelector` (a right fold
+of `.lam` selecting a bound variable). These helpers do the distribution. -/
+namespace VExpr
+
+theorem mkApps_lift' {f : VExpr} {args : List VExpr} {ρ : Lift} :
+    (f.mkApps args).lift' ρ = (f.lift' ρ).mkApps (args.map (·.lift' ρ)) := by
+  induction args generalizing f with
+  | nil => rfl
+  | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
+
+theorem mkApps_inst {f : VExpr} {args : List VExpr} {e₀ : VExpr} {k : Nat} :
+    (f.mkApps args).inst e₀ k = (f.inst e₀ k).mkApps (args.map (·.inst e₀ k)) := by
+  induction args generalizing f with
+  | nil => rfl
+  | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
+
+theorem mkApps_instL {f : VExpr} {args : List VExpr} {ls : List VLevel} :
+    (f.mkApps args).instL ls = (f.instL ls).mkApps (args.map (·.instL ls)) := by
+  induction args generalizing f with
+  | nil => rfl
+  | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
+
+theorem mkApps_concat {f : VExpr} {L : List VExpr} {x : VExpr} :
+    f.mkApps (L ++ [x]) = (f.mkApps L).app x := by
+  simp [VExpr.mkApps, List.foldl_append]
+
+theorem consN_fixes : ∀ (m : Nat) (ρ : Lift), (ρ.consN m).Fixes m
+  | 0, _ => trivial
+  | m+1, ρ => consN_fixes m ρ
+
+theorem foldr_lam_lift'_aux : ∀ (Fs : List VExpr) (base : VExpr) (ρ : Lift) (d : Nat),
+    (List.foldr lam base Fs).lift' (ρ.consN d) =
+      List.foldr lam (base.lift' (ρ.consN (d + Fs.length)))
+        (Fs.mapIdx fun j F => F.lift' (ρ.consN (d + j))) := by
+  intro Fs; induction Fs with
+  | nil => intro base ρ d; simp
+  | cons F Fs ih =>
+    intro base ρ d
+    simp only [List.foldr_cons, lift', List.mapIdx_cons, List.length_cons, Nat.add_zero]
+    rw [show (ρ.consN d).cons = ρ.consN (d+1) from rfl, ih base ρ (d+1)]
+    have e1 : d + 1 + Fs.length = d + (Fs.length + 1) := by omega
+    have e2 : (fun (j : Nat) (F : VExpr) => F.lift' (ρ.consN (d + 1 + j)))
+            = (fun (j : Nat) (F : VExpr) => F.lift' (ρ.consN (d + (j + 1)))) := by
+      funext j F; rw [show d + 1 + j = d + (j + 1) from by omega]
+    rw [e1, e2]
+
+theorem foldr_lam_lift' (Fs : List VExpr) (base : VExpr) (ρ : Lift) :
+    (List.foldr lam base Fs).lift' ρ =
+      List.foldr lam (base.lift' (ρ.consN Fs.length)) (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) := by
+  have := foldr_lam_lift'_aux Fs base ρ 0; simpa using this
+
+theorem fieldSelector_lift' {Fs : List VExpr} {ρ : Lift} {i : Nat} (hi : i < Fs.length) :
+    (fieldSelector Fs i).lift' ρ = fieldSelector (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i := by
+  rw [fieldSelector, fieldSelector, foldr_lam_lift', List.length_mapIdx, lift',
+      (consN_fixes _ _).liftVar_eq (show Fs.length - 1 - i < Fs.length by omega)]
+
+theorem foldr_lam_inst_aux : ∀ (Fs : List VExpr) (base e₀ : VExpr) (k : Nat),
+    (List.foldr lam base Fs).inst e₀ k =
+      List.foldr lam (base.inst e₀ (k + Fs.length)) (Fs.mapIdx fun j F => F.inst e₀ (k + j)) := by
+  intro Fs; induction Fs with
+  | nil => intro base e₀ k; simp
+  | cons F Fs ih =>
+    intro base e₀ k
+    simp only [List.foldr_cons, inst, List.mapIdx_cons, List.length_cons, Nat.add_zero]
+    rw [ih base e₀ (k+1)]
+    have e1 : k + 1 + Fs.length = k + (Fs.length + 1) := by omega
+    have e2 : (fun (j : Nat) (F : VExpr) => F.inst e₀ (k + 1 + j))
+            = (fun (j : Nat) (F : VExpr) => F.inst e₀ (k + (j + 1))) := by
+      funext j F; rw [show k + 1 + j = k + (j + 1) from by omega]
+    rw [e1, e2]
+
+theorem fieldSelector_inst {Fs : List VExpr} {e₀ : VExpr} {k i : Nat} (hi : i < Fs.length) :
+    (fieldSelector Fs i).inst e₀ k = fieldSelector (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i := by
+  rw [fieldSelector, fieldSelector, foldr_lam_inst_aux, List.length_mapIdx]
+  have : (bvar (Fs.length - 1 - i)).inst e₀ (k + Fs.length) = bvar (Fs.length - 1 - i) := by
+    simp only [inst, instVar]; rw [if_pos (by omega)]
+  rw [this]
+
+theorem foldr_lam_instL {Fs : List VExpr} {base : VExpr} {ls : List VLevel} :
+    (List.foldr lam base Fs).instL ls = List.foldr lam (base.instL ls) (Fs.map (·.instL ls)) := by
+  induction Fs with
+  | nil => rfl
+  | cons F Fs ih => simp [List.foldr, instL, ih]
+
+theorem fieldSelector_instL {Fs : List VExpr} {ls : List VLevel} {i : Nat} :
+    (fieldSelector Fs i).instL ls = fieldSelector (Fs.map (·.instL ls)) i := by
+  rw [fieldSelector, fieldSelector, foldr_lam_instL]; simp [instL, List.length_map]
+
+end VExpr
+
+theorem TrProj.weak' (henv : Ordered env) (W : Ctx.Lift' n Γ Γ')
+    (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.lift' n) (e'.lift' n) := by
+  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  have hlen : (fieldTys.mapIdx fun j F => F.lift' (n.consN j)).length = fieldTys.length :=
+    List.length_mapIdx
+  obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota recName (np+1+1+0) ctorName
+      (np + (fieldTys.mapIdx fun j F => F.lift' (n.consN j)).length)).toPattern r' := by
+    rw [hlen]; exact ⟨r, hpat⟩
+  refine ⟨recName, ctorName, us, params.map (·.lift' n),
+    fieldTys.mapIdx fun j F => F.lift' (n.consN j), motive.lift' n, np,
+    r', hrec, hpat', by simpa using hpl, by rw [hlen]; exact hi, ?_, _, hty.weak' henv W⟩
+  rw [VExpr.mkApps_lift']
+  simp only [List.map_append, List.map_cons, List.map_nil, VExpr.lift',
+    VExpr.fieldSelector_lift' hi]
+
+theorem TrProj.weakN (henv : Ordered env) (W : Ctx.LiftN n k Γ Γ')
+    (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.liftN n k) (e'.liftN n k) := by
+  simpa [VExpr.lift'_consN_skipN] using H.weak' henv <| Ctx.liftN_iff_lift'.1 W
 
 variable! (henv : Ordered env) in
 theorem TrExprS.weakFV' (W : VLCtx.FVLift' Δ Δ' dk n k) (hΔ' : Δ'.WF env Us.length)
@@ -584,7 +691,7 @@ theorem TrExprS.weakFV' (W : VLCtx.FVLift' Δ Δ' dk n k) (hΔ' : Δ'.WF env Us.
     exact .letE h1 (ih1 W hΔ') (ih2 W hΔ') (ih3 (W.cons_bvar _) ⟨hΔ', nofun, h1⟩)
   | lit h1 _ ih => exact .lit h1 (ih W hΔ')
   | mdata _ ih => exact .mdata (ih W hΔ')
-  | proj _ h2 ih => exact .proj (ih W hΔ') (h2.weak' W.toCtx)
+  | proj _ h2 ih => exact .proj (ih W hΔ') (h2.weak' henv W.toCtx)
 
 variable! (henv : WF env) in
 theorem TrExpr.weakFV' (W : VLCtx.FVLift' Δ Δ' dk n k) (hΔ' : Δ'.WF env Us.length)
@@ -623,7 +730,7 @@ theorem TrExprS.weakBV (W : VLCtx.BVLift Δ Δ' dn dk n k)
     refine .lit h1 (Expr.liftLooseBVars_eq_self ?_ ▸ ih W :)
     exact Closed.toConstructor.looseBVarRange_le
   | mdata _ ih => exact .mdata (ih W)
-  | proj _ h2 ih => exact .proj (ih W) (h2.weakN W.toCtx)
+  | proj _ h2 ih => exact .proj (ih W) (h2.weakN henv W.toCtx)
 
 variable! (henv : WF env) in
 theorem TrExpr.weakBV (W : VLCtx.BVLift Δ Δ' dn dk n k)
@@ -637,16 +744,45 @@ theorem HasType.skips (W : Ctx.LiftN n k Γ Γ')
   IsDefEq.skips henv hΓ' W h1 h2 h2
 
 theorem TrProj.weak'_inv (henv : VEnv.WF env) (hΓ' : OnCtx Γ' (env.IsType U))
-    (W : Ctx.Lift' l Γ Γ') : TrProj Γ' s i (e.lift' l) e' → ∃ e', TrProj Γ s i e e' := sorry
+    (W : Ctx.Lift' l Γ Γ') : TrProj env U Γ' s i (e.lift' l) e' → ∃ e', TrProj env U Γ s i e e' :=
+  sorry -- PROJ-TODO(soundness): TrProj strengthening (inverse of weakening); needs weakN_iff
 
+open VExpr in
 theorem TrProj.defeqDFC (henv : VEnv.WF env) (hΓ : env.IsDefEqCtx U [] Γ₁ Γ₂)
-    (he : env.IsDefEqU U Γ₁ e₁ e₂) (H : TrProj Γ₁ s i e₁ e') :
-    ∃ e', TrProj Γ₂ s i e₂ e' := sorry
+    (he : env.IsDefEqU U Γ₁ e₁ e₂) (H : TrProj env U Γ₁ s i e₁ e') :
+    ∃ e', TrProj env U Γ₂ s i e₂ e' := by
+  -- The reduct `e'` ends in the (only) occurrence of the projection source `e₁`, so it is
+  -- `F.app e₁` for `F` the recursor applied to `params ++ [motive, fieldSelector fieldTys i]`.
+  -- Transport `F.app e₁`'s well-typedness to `Γ₂`, invert the application, replace `e₁` by the
+  -- defeq `e₂`, and re-apply. (Routes through `HasType.defeqU_l`, hence inherits the pre-existing
+  -- unique-typing `sorryAx`; it adds no new trust.)
+  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  have hsplit : ∀ z, (const recName us).mkApps (params ++ [motive, fieldSelector fieldTys i, z])
+      = ((const recName us).mkApps (params ++ [motive, fieldSelector fieldTys i])).app z := by
+    intro z
+    rw [show params ++ [motive, fieldSelector fieldTys i, z]
+          = (params ++ [motive, fieldSelector fieldTys i]) ++ [z] by simp, mkApps_concat]
+  rw [hsplit e₁] at hty
+  have hΓ₂ := (hΓ.symm henv).isType
+  obtain ⟨C, D, hF₂, he₁⟩ := (hty.defeqDFC henv hΓ).app_inv henv hΓ₂
+  have he₂ := HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) he₁
+  refine ⟨(const recName us).mkApps (params ++ [motive, fieldSelector fieldTys i, e₂]),
+    recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, hpat, hpl, hi, rfl, ?_⟩
+  rw [hsplit e₂]; exact ⟨_, hF₂.app he₂⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.ContainsLits l
   | .natVal _, ⟨_, H⟩ => ⟨_, henv.1 H⟩
   | .strVal _, ⟨⟨_, H1⟩, ⟨_, H2⟩⟩ => ⟨⟨_, henv.1 H1⟩, ⟨_, henv.1 H2⟩⟩
+
+variable! {env env' : VEnv} (henv : env ≤ env') in
+theorem TrProj.mono (H : TrProj env U Γ s i e e') : TrProj env' U Γ s i e e' := by
+  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, hpat, hpl, hi, he, A, hty⟩ := H
+  exact ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, henv.pats hpat, hpl, hi, he, A, hty.mono henv⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrExprS.mono (H : TrExprS env Us Δ e e') : TrExprS env' Us Δ e e' := by
@@ -661,7 +797,7 @@ theorem TrExprS.mono (H : TrExprS env Us Δ e e') : TrExprS env' Us Δ e e' := b
   | letE h1 _ _ _ ih1 ih2 ih3 => exact .letE (h1.mono henv) ih1 ih2 ih3
   | lit h1 _ ih => refine .lit (h1.mono henv) ih
   | mdata _ ih => exact .mdata ih
-  | proj _ h2 ih => exact .proj ih h2
+  | proj _ h2 ih => exact .proj ih (h2.mono henv)
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrExpr.mono (H : TrExpr env Us Δ e e') : TrExpr env' Us Δ e e' :=
@@ -807,7 +943,10 @@ theorem TrExpr.fvarsIn (H : TrExpr env Us Δ e e') : FVarsIn (· ∈ Δ.fvars) e
 theorem TrExpr.fvarsList (H : TrExpr env Us Δ e e') : e.fvarsList ⊆ Δ.fvars :=
   (fvarsIn_iff.1 H.fvarsIn).1
 
-theorem TrProj.wf (H1 : TrProj Δ s i e e') (H2 : VExpr.WF env U Γ e) : VExpr.WF env U Γ e' := sorry
+theorem TrProj.wf (H1 : TrProj env U Γ s i e e') (H2 : VExpr.WF env U Γ e) :
+    VExpr.WF env U Γ e' := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hty⟩ := H1
+  exact hty
 
 theorem TrExpr.wf (H : TrExpr env Us Δ e e') : VExpr.WF env Us.length Δ.toCtx e' :=
   let ⟨_, _, _, H⟩ := H; ⟨_, H.hasType.2⟩
@@ -850,9 +989,10 @@ theorem TrExpr.app (henv : VEnv.WF env) (hΔ : OnCtx Δ.toCtx (env.IsType Us.len
   ⟨_, .app h3.hasType.1 h4.hasType.1 s3 s4, _, h3.appDF h4⟩
 
 variable! (henv : VEnv.WF env) (hΓ : IsDefEqCtx env U [] Γ₁ Γ₂) in
-theorem TrProj.uniq (H1 : TrProj Γ₁ s₁ i e₁ e₁') (H2 : TrProj Γ₂ s₂ i e₂ e₂')
+theorem TrProj.uniq (H1 : TrProj env U Γ₁ s₁ i e₁ e₁') (H2 : TrProj env U Γ₂ s₂ i e₂ e₂')
     (H : env.IsDefEqU U Γ₁ e₁ e₂) :
-    env.IsDefEqU U Γ₁ e₁' e₂' := sorry
+    env.IsDefEqU U Γ₁ e₁' e₂' :=
+  sorry -- PROJ-TODO(soundness): TrProj determines the reduct up to defeq (via unique typing)
 
 variable! (henv : VEnv.WF env) {Us : List Name} (hΔ : VLCtx.IsDefEq env Us.length Δ₁ Δ₂) in
 theorem TrExprS.uniq (H1 : TrExprS env Us Δ₁ e e₁) (H2 : TrExprS env Us Δ₂ e e₂) :
@@ -1020,7 +1160,7 @@ theorem TrExpr.mdata (h : TrExpr env Us Δ e e') : TrExpr env Us Δ (.mdata d e)
   let ⟨_, s2, h2⟩ := h; ⟨_, .mdata s2, h2⟩
 
 theorem TrExpr.proj {env Us Δ e e' s i e''} (henv : VEnv.WF env) (hΔ : VLCtx.WF env Us.length Δ)
-    (H : TrExpr env Us Δ e e') (H2 : TrProj Δ.toCtx s i e' e'') :
+    (H : TrExpr env Us Δ e e') (H2 : TrProj env Us.length Δ.toCtx s i e' e'') :
     TrExpr env Us Δ (.proj s i e) e'' :=
   let ⟨_, s2, h2⟩ := H
   have ⟨_, H2'⟩ := H2.defeqDFC henv (.refl hΔ) h2.symm
@@ -1153,8 +1293,22 @@ theorem TrExprS.instN_var (W : VLCtx.InstN Δ₀ e₀' A₀ dk k Δ₁ Δ) (H : 
         refine ⟨_, _, h, ?_, rfl⟩
         cases d <;> simp [VLocalDecl.depth, VLocalDecl.inst, VExpr.lift_instN_lo]
 
-theorem TrProj.instN (W : Ctx.InstN Γ₀ e₀ A₀ k Γ₁ Γ)
-    (H : TrProj Γ₁ s i e e') : TrProj Γ s i (e.inst e₀ k) (e'.inst e₀ k) := sorry
+theorem TrProj.instN (henv : Ordered env) (W : Ctx.InstN Γ₀ e₀ A₀ k Γ₁ Γ)
+    (H : TrProj env U Γ₁ s i e e') (h₀ : env.HasType U Γ₀ e₀ A₀) :
+    TrProj env U Γ s i (e.inst e₀ k) (e'.inst e₀ k) := by
+  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  have hlen : (fieldTys.mapIdx fun j F => F.inst e₀ (k + j)).length = fieldTys.length :=
+    List.length_mapIdx
+  obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota recName (np+1+1+0) ctorName
+      (np + (fieldTys.mapIdx fun j F => F.inst e₀ (k + j)).length)).toPattern r' := by
+    rw [hlen]; exact ⟨r, hpat⟩
+  refine ⟨recName, ctorName, us, params.map (·.inst e₀ k),
+    fieldTys.mapIdx fun j F => F.inst e₀ (k + j), motive.inst e₀ k, np,
+    r', hrec, hpat', by simpa using hpl, by rw [hlen]; exact hi, ?_, _, hty.instN henv W h₀⟩
+  rw [VExpr.mkApps_inst]
+  simp only [List.map_append, List.map_cons, List.map_nil, VExpr.inst,
+    VExpr.fieldSelector_inst hi]
 
 variable! (henv : Ordered env) (h₀ : TrExprS env Us Δ₀ e₀ e₀')
   (t₀ : env.HasType Us.length Δ₀.toCtx e₀' A₀) in
@@ -1177,7 +1331,7 @@ theorem TrExprS.instN (W : VLCtx.InstN Δ₀ e₀' A₀ dk k Δ₁ Δ) (H : TrEx
     refine .lit h1 (Expr.instantiate1'_eq_self ?_ ▸ ih W :)
     exact Closed.toConstructor.looseBVarRange_le
   | mdata _ ih => exact .mdata (ih W)
-  | proj _ h2 ih => exact .proj (ih W) (h2.instN W.toCtx)
+  | proj _ h2 ih => exact .proj (ih W) (h2.instN henv W.toCtx t₀)
 
 theorem TrExprS.inst {Δ : VLCtx} (henv : Ordered env)
     (t₀ : env.HasType Us.length Δ.toCtx e₀' A₀)
@@ -1422,8 +1576,19 @@ theorem ofLevel_mkLevelIMax'
   simp [VLevel.ofLevel]; exact ⟨_, ⟨_, h1, _, h2, rfl⟩, rfl⟩
 
 variable! {ls : List VLevel} (hls : ∀ l ∈ ls, l.WF U') in
-theorem TrProj.instL (H : TrProj Γ s i e e') :
-    TrProj (Γ.map (VExpr.instL ls)) s i (e.instL ls) (e'.instL ls) := sorry
+theorem TrProj.instL (H : TrProj env U Γ s i e e') :
+    TrProj env U' (Γ.map (VExpr.instL ls)) s i (e.instL ls) (e'.instL ls) := by
+  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
+    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  have hlen : (fieldTys.map (·.instL ls)).length = fieldTys.length := List.length_map _
+  obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota recName (np+1+1+0) ctorName
+      (np + (fieldTys.map (·.instL ls)).length)).toPattern r' := by rw [hlen]; exact ⟨r, hpat⟩
+  refine ⟨recName, ctorName, us.map (VLevel.inst ls), params.map (·.instL ls),
+    fieldTys.map (·.instL ls), motive.instL ls, np,
+    r', hrec, hpat', by simpa using hpl, by rw [hlen]; exact hi, ?_, _, hty.instL hls⟩
+  rw [VExpr.mkApps_instL]
+  simp only [List.map_append, List.map_cons, List.map_nil, VExpr.instL,
+    VExpr.fieldSelector_instL]
 
 section
 

@@ -64,7 +64,40 @@ theorem VLCtx.WF.fvwf : ∀ {Δ}, VLCtx.WF env U Δ → Δ.FVWF
   | [], h => h
   | _ :: _, ⟨h1, h2, _⟩ => ⟨h1.fvwf, h2⟩
 
-def TrProj : ∀ (Γ : List VExpr) (structName : Name) (idx : Nat) (e : VExpr), VExpr → Prop := sorry
+/-- Left fold of applications: `f.mkApps [a₀, …, aₙ] = f a₀ … aₙ`. -/
+def VExpr.mkApps (f : VExpr) : List VExpr → VExpr := List.foldl .app f
+
+/-- The λ-telescope over field types `Fs` that selects its `i`-th binder:
+`fun (f₀ : Fs[0]) … (f_{n-1} : Fs[n-1]) => fᵢ`. In de Bruijn form the `i`-th
+field (numbered from the outside) sits at index `Fs.length - 1 - i`. This is the
+minor premise of a structure's recursor that reads out field `i`. -/
+def VExpr.fieldSelector (Fs : List VExpr) (i : Nat) : VExpr :=
+  Fs.foldr .lam (.bvar (Fs.length - 1 - i))
+
+/-- `TrProj env U Γ S i e e'` relates the translated structure value `e` to the
+translation `e'` of its `i`-th projection `S.i e`. `VExpr` has no projection
+node, so a projection is expressed through the structure's **recursor**:
+`e' = S.rec us params motive (fun fields => fieldᵢ) e`. The recursor name, the
+parameter count `np`, the constructor, and the field count are read out of the
+ι rule registered for `S` in `env.pats` — the only inductive metadata a `VEnv`
+retains, and what makes `TrProj` monotone under `VEnv.LE`. A structure is a
+single-constructor, non-recursive inductive with no indices, so its recursor has
+one motive and one minor premise and no index arguments (`numMotives = 1`,
+`numMinors = 1`, `numIndices = 0`), giving the argument list
+`params ++ [motive, minor, major]`. The closing `HasType` conjunct pins `params`
+and `motive` up to definitional equality (used by `TrProj.uniq`). -/
+def TrProj (env : VEnv) (U : Nat) (Γ : List VExpr)
+    (S : Name) (i : Nat) (e e' : VExpr) : Prop :=
+  ∃ (recName ctorName : Name) (us : List VLevel) (params fieldTys : List VExpr)
+    (motive : VExpr) (np : Nat)
+    (r : (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.RHS ×
+         (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.Check),
+    recName = mkRecName S ∧
+    env.pats (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern r ∧
+    params.length = np ∧ i < fieldTys.length ∧
+    e' = (VExpr.const recName us).mkApps
+           (params ++ [motive, VExpr.fieldSelector fieldTys i, e]) ∧
+    ∃ A, env.HasType U Γ e' A
 
 def VEnv.ContainsLits (env : VEnv) : Literal → Prop
   | .natVal _ => env.contains ``Nat
@@ -100,13 +133,10 @@ inductive TrExprS : VLCtx → Expr → VExpr → Prop
     TrExprS Δ (.letE name ty val body nd) body'
   | lit : env.ContainsLits l → TrExprS Δ l.toConstructor e → TrExprS Δ (.lit l) e
   | mdata : TrExprS Δ e e' → TrExprS Δ (.mdata d e) e'
-  | proj : TrExprS Δ e e' → TrProj Δ.toCtx s i e' e'' → TrExprS Δ (.proj s i e) e''
+  | proj : TrExprS Δ e e' → TrProj env Us.length Δ.toCtx s i e' e'' → TrExprS Δ (.proj s i e) e''
 
 def TrExpr (env : VEnv) (Us : List Name) (Δ : VLCtx) (e : Expr) (e' : VExpr) : Prop :=
   ∃ e₂, TrExprS env Us Δ e e₂ ∧ env.IsDefEqU Us.length Δ.toCtx e₂ e'
-
-/-- Left fold of applications: `f.mkApps [a₀, …, aₙ] = f a₀ … aₙ`. -/
-def VExpr.mkApps (f : VExpr) : List VExpr → VExpr := List.foldl .app f
 
 def VExpr.bool : VExpr := .const ``Bool []
 def VExpr.boolTrue : VExpr := .const ``Bool.true []
