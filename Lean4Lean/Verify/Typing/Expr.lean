@@ -74,30 +74,51 @@ minor premise of a structure's recursor that reads out field `i`. -/
 def VExpr.fieldSelector (Fs : List VExpr) (i : Nat) : VExpr :=
   Fs.foldr .lam (.bvar (Fs.length - 1 - i))
 
-/-- `TrProj env U Γ S i e e'` relates the translated structure value `e` to the
-translation `e'` of its `i`-th projection `S.i e`. `VExpr` has no projection
-node, so a projection is expressed through the structure's **recursor**:
-`e' = S.rec us params motive (fun fields => fieldᵢ) e`. The recursor name, the
-parameter count `np`, the constructor, and the field count are read out of the
-ι rule registered for `S` in `env.pats` — the only inductive metadata a `VEnv`
-retains, and what makes `TrProj` monotone under `VEnv.LE`. A structure is a
-single-constructor, non-recursive inductive with no indices, so its recursor has
-one motive and one minor premise and no index arguments (`numMotives = 1`,
-`numMinors = 1`, `numIndices = 0`), giving the argument list
-`params ++ [motive, minor, major]`. The closing `HasType` conjunct pins `params`
-and `motive` up to definitional equality (used by `TrProj.uniq`). -/
+/-- `TrProj env U Γ S i e e'` relates the translated structure value `e` (of type
+`structTy = S params`) to the translation `e'` of its `i`-th projection `S.i e`.
+`VExpr` has no projection node, so a projection is expressed through the
+structure's **recursor**: `e' = S.rec us params motive (fun fields => fieldᵢ) e`.
+The recursor name, the parameter count `np`, the constructor, and the field count
+are read out of the ι rule registered for `S` in `env.pats` — the only inductive
+metadata a `VEnv` retains, and what makes `TrProj` monotone under `VEnv.LE`. A
+structure is a single-constructor, non-recursive inductive with no indices, so
+its recursor has one motive and one minor premise and no index arguments
+(`numMotives = 1`, `numMinors = 1`, `numIndices = 0`), giving the argument list
+`params ++ [motive, minor, major]`.
+
+The `motive` is pinned to the **canonical constant motive** `fun _ => fieldTy`,
+where `fieldTy` is the projection's own type. Pinning it (rather than leaving it
+existential) is what makes `TrProj` a *functional* relation: two derivations
+share a motive up to definitional equality as soon as their `structTy`/`fieldTy`
+agree, which follows from unique typing — no inductive type-former injectivity is
+needed for the motive (this is what `TrProj.uniq` requires). A free motive is
+under-determined on a *neutral* major (well-typedness only constrains it on
+constructor-shaped inputs, `C (mk params fields) ≡ fieldTys[i]`), so two
+recursor spines with motives agreeing on constructors but differing on a variable
+would both satisfy a loose `TrProj` yet not be defeq — breaking uniqueness. The
+kernel avoids this via **structure-η** (`x ≡ mk (proj x)`), which the model's
+`IsDefEq` does not have.
+
+Scope: the constant motive is correct exactly for **non-dependent** structure
+fields — where field `i`'s type does not mention earlier fields (all typeclass
+projections, and everything but Σ/Subtype-shaped structures). This is precisely
+the fragment for which Carneiro's thesis does *not* need structure-η; dependent
+fields (the thesis's Σ, `Wtypes.tex:75-93`) require either structure-η in
+`IsDefEq` or the recursor's dependent motive `fun x => fieldTyᵢ[proj x]`, both of
+which are out of scope here. -/
 def TrProj (env : VEnv) (U : Nat) (Γ : List VExpr)
     (S : Name) (i : Nat) (e e' : VExpr) : Prop :=
   ∃ (recName ctorName : Name) (us : List VLevel) (params fieldTys : List VExpr)
-    (motive : VExpr) (np : Nat)
+    (np : Nat) (structTy fieldTy : VExpr)
     (r : (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.RHS ×
          (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.Check),
     recName = mkRecName S ∧
     env.pats (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern r ∧
     params.length = np ∧ i < fieldTys.length ∧
+    env.HasType U Γ e structTy ∧
     e' = (VExpr.const recName us).mkApps
-           (params ++ [motive, VExpr.fieldSelector fieldTys i, e]) ∧
-    ∃ A, env.HasType U Γ e' A
+           (params ++ [.lam structTy fieldTy.lift, VExpr.fieldSelector fieldTys i, e]) ∧
+    env.HasType U Γ e' fieldTy
 
 def VEnv.ContainsLits (env : VEnv) : Literal → Prop
   | .natVal _ => env.contains ``Nat

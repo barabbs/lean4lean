@@ -647,23 +647,37 @@ theorem fieldSelector_instL {Fs : List VExpr} {ls : List VLevel} {i : Nat} :
     (fieldSelector Fs i).instL ls = fieldSelector (Fs.map (·.instL ls)) i := by
   rw [fieldSelector, fieldSelector, foldr_lam_instL]; simp [instL, List.length_map]
 
+/-! The pinned constant motive of a projection is `.lam structTy fieldTy.lift`
+(`fun _ : structTy => fieldTy`, with `fieldTy` shifted under the binder as `fieldTy.lift`).
+Weakening / instantiation / level-instantiation each commute with the `.lift` sitting under
+the extra binder, so the motive tracks its `structTy`/`fieldTy` structurally. These three
+lemmas discharge that inner-`.lift` commutation. -/
+theorem lift_lift'_cons {b : VExpr} {ρ : Lift} :
+    (b.lift).lift' ρ.cons = (b.lift' ρ).lift := by
+  rw [lift_eq_lift', lift_eq_lift', ← lift'_comp, ← lift'_comp]
+  simp [Lift.comp, Lift.refl_comp]
+
+theorem lift_inst_cons {b e₀ : VExpr} {k : Nat} :
+    (b.lift).inst e₀ (k+1) = (b.inst e₀ k).lift := (lift_instN_lo ..).symm
+
 end VExpr
 
 theorem TrProj.weak' (henv : Ordered env) (W : Ctx.Lift' n Γ Γ')
     (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.lift' n) (e'.lift' n) := by
-  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  obtain ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, hpat, hnp, hi, hStructTy, rfl, hFieldTy⟩ := H
   have hlen : (fieldTys.mapIdx fun j F => F.lift' (n.consN j)).length = fieldTys.length :=
     List.length_mapIdx
   obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota recName (np+1+1+0) ctorName
       (np + (fieldTys.mapIdx fun j F => F.lift' (n.consN j)).length)).toPattern r' := by
     rw [hlen]; exact ⟨r, hpat⟩
   refine ⟨recName, ctorName, us, params.map (·.lift' n),
-    fieldTys.mapIdx fun j F => F.lift' (n.consN j), motive.lift' n, np,
-    r', hrec, hpat', by simpa using hpl, by rw [hlen]; exact hi, ?_, _, hty.weak' henv W⟩
+    fieldTys.mapIdx fun j F => F.lift' (n.consN j), np, structTy.lift' n, fieldTy.lift' n,
+    r', hrec, hpat', by simpa using hnp, by rw [hlen]; exact hi,
+    hStructTy.weak' henv W, ?_, hFieldTy.weak' henv W⟩
   rw [VExpr.mkApps_lift']
   simp only [List.map_append, List.map_cons, List.map_nil, VExpr.lift',
-    VExpr.fieldSelector_lift' hi]
+    VExpr.lift_lift'_cons, VExpr.fieldSelector_lift' hi]
 
 theorem TrProj.weakN (henv : Ordered env) (W : Ctx.LiftN n k Γ Γ')
     (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.liftN n k) (e'.liftN n k) := by
@@ -753,24 +767,34 @@ theorem TrProj.defeqDFC (henv : VEnv.WF env) (hΓ : env.IsDefEqCtx U [] Γ₁ Γ
     ∃ e', TrProj env U Γ₂ s i e₂ e' := by
   -- The reduct `e'` ends in the (only) occurrence of the projection source `e₁`, so it is
   -- `F.app e₁` for `F` the recursor applied to `params ++ [motive, fieldSelector fieldTys i]`.
-  -- Transport `F.app e₁`'s well-typedness to `Γ₂`, invert the application, replace `e₁` by the
-  -- defeq `e₂`, and re-apply. (Routes through `HasType.defeqU_l`, hence inherits the pre-existing
-  -- unique-typing `sorryAx`; it adds no new trust.)
-  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
-  have hsplit : ∀ z, (const recName us).mkApps (params ++ [motive, fieldSelector fieldTys i, z])
-      = ((const recName us).mkApps (params ++ [motive, fieldSelector fieldTys i])).app z := by
+  -- Transport both pinned `HasType`s to `Γ₂` (`structTy` on the major `e₁`, `fieldTy` on the
+  -- reduct), swap `e₁` for the defeq `e₂` on the major, and rebuild `F.app e₂` — its `fieldTy`
+  -- typing follows from the reduct's typing and the application-congruence `F.app e₁ ≡ F.app e₂`.
+  -- (Routes through `HasType.defeqU_l`, hence inherits the pre-existing unique-typing `sorryAx`;
+  -- it adds no new trust.)
+  obtain ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, hpat, hnp, hi, hStructTy, rfl, hFieldTy⟩ := H
+  have hsplit : ∀ z, (const recName us).mkApps
+        (params ++ [.lam structTy fieldTy.lift, fieldSelector fieldTys i, z])
+      = ((const recName us).mkApps
+          (params ++ [.lam structTy fieldTy.lift, fieldSelector fieldTys i])).app z := by
     intro z
-    rw [show params ++ [motive, fieldSelector fieldTys i, z]
-          = (params ++ [motive, fieldSelector fieldTys i]) ++ [z] by simp, mkApps_concat]
-  rw [hsplit e₁] at hty
+    rw [show params ++ [.lam structTy fieldTy.lift, fieldSelector fieldTys i, z]
+          = (params ++ [.lam structTy fieldTy.lift, fieldSelector fieldTys i]) ++ [z] by simp,
+        mkApps_concat]
+  rw [hsplit e₁] at hFieldTy
   have hΓ₂ := (hΓ.symm henv).isType
-  obtain ⟨C, D, hF₂, he₁⟩ := (hty.defeqDFC henv hΓ).app_inv henv hΓ₂
-  have he₂ := HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) he₁
-  refine ⟨(const recName us).mkApps (params ++ [motive, fieldSelector fieldTys i, e₂]),
-    recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, hpat, hpl, hi, rfl, ?_⟩
-  rw [hsplit e₂]; exact ⟨_, hF₂.app he₂⟩
+  have hStructTy₂ :=
+    HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) (hStructTy.defeqDFC henv hΓ)
+  obtain ⟨C, D, hF₂, he₁⟩ := (hFieldTy.defeqDFC henv hΓ).app_inv henv hΓ₂
+  refine ⟨(const recName us).mkApps
+      (params ++ [.lam structTy fieldTy.lift, fieldSelector fieldTys i, e₂]),
+    recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, hpat, hnp, hi, hStructTy₂, rfl, ?_⟩
+  rw [hsplit e₂]
+  exact HasType.defeqU_l henv hΓ₂
+    ⟨_, hF₂.appDF (IsDefEqU.of_l henv hΓ₂ (he.defeqDFC henv hΓ) he₁)⟩
+    (hFieldTy.defeqDFC henv hΓ)
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.ContainsLits l
@@ -779,10 +803,10 @@ nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.Con
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrProj.mono (H : TrProj env U Γ s i e e') : TrProj env' U Γ s i e e' := by
-  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, hpat, hpl, hi, he, A, hty⟩ := H
-  exact ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, henv.pats hpat, hpl, hi, he, A, hty.mono henv⟩
+  obtain ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, hpat, hnp, hi, hStructTy, he', hFieldTy⟩ := H
+  exact ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, henv.pats hpat, hnp, hi, hStructTy.mono henv, he', hFieldTy.mono henv⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrExprS.mono (H : TrExprS env Us Δ e e') : TrExprS env' Us Δ e e' := by
@@ -945,8 +969,8 @@ theorem TrExpr.fvarsList (H : TrExpr env Us Δ e e') : e.fvarsList ⊆ Δ.fvars 
 
 theorem TrProj.wf (H1 : TrProj env U Γ s i e e') (H2 : VExpr.WF env U Γ e) :
     VExpr.WF env U Γ e' := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hty⟩ := H1
-  exact hty
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hFieldTy⟩ := H1
+  exact ⟨_, hFieldTy⟩
 
 theorem TrExpr.wf (H : TrExpr env Us Δ e e') : VExpr.WF env Us.length Δ.toCtx e' :=
   let ⟨_, _, _, H⟩ := H; ⟨_, H.hasType.2⟩
@@ -992,7 +1016,11 @@ variable! (henv : VEnv.WF env) (hΓ : IsDefEqCtx env U [] Γ₁ Γ₂) in
 theorem TrProj.uniq (H1 : TrProj env U Γ₁ s₁ i e₁ e₁') (H2 : TrProj env U Γ₂ s₂ i e₂ e₂')
     (H : env.IsDefEqU U Γ₁ e₁ e₂) :
     env.IsDefEqU U Γ₁ e₁' e₂' :=
-  sorry -- PROJ-TODO(soundness): TrProj determines the reduct up to defeq (via unique typing)
+  -- PROJ-TODO(soundness): TrProj.uniq residual — inductive type-former injectivity
+  -- (Injectivity.lean) for recName/us/params agreement + iota pat_uniq for the field count;
+  -- motive now pinned (both sides `.lam structTyⱼ fieldTyⱼ.lift`, defeq from the majors'
+  -- structTy₁≡structTy₂ and the projections' fieldTy₁≡fieldTy₂ via unique typing), so no motive gap
+  sorry
 
 variable! (henv : VEnv.WF env) {Us : List Name} (hΔ : VLCtx.IsDefEq env Us.length Δ₁ Δ₂) in
 theorem TrExprS.uniq (H1 : TrExprS env Us Δ₁ e e₁) (H2 : TrExprS env Us Δ₂ e e₂) :
@@ -1296,19 +1324,20 @@ theorem TrExprS.instN_var (W : VLCtx.InstN Δ₀ e₀' A₀ dk k Δ₁ Δ) (H : 
 theorem TrProj.instN (henv : Ordered env) (W : Ctx.InstN Γ₀ e₀ A₀ k Γ₁ Γ)
     (H : TrProj env U Γ₁ s i e e') (h₀ : env.HasType U Γ₀ e₀ A₀) :
     TrProj env U Γ s i (e.inst e₀ k) (e'.inst e₀ k) := by
-  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  obtain ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, hpat, hnp, hi, hStructTy, rfl, hFieldTy⟩ := H
   have hlen : (fieldTys.mapIdx fun j F => F.inst e₀ (k + j)).length = fieldTys.length :=
     List.length_mapIdx
   obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota recName (np+1+1+0) ctorName
       (np + (fieldTys.mapIdx fun j F => F.inst e₀ (k + j)).length)).toPattern r' := by
     rw [hlen]; exact ⟨r, hpat⟩
   refine ⟨recName, ctorName, us, params.map (·.inst e₀ k),
-    fieldTys.mapIdx fun j F => F.inst e₀ (k + j), motive.inst e₀ k, np,
-    r', hrec, hpat', by simpa using hpl, by rw [hlen]; exact hi, ?_, _, hty.instN henv W h₀⟩
+    fieldTys.mapIdx fun j F => F.inst e₀ (k + j), np, structTy.inst e₀ k, fieldTy.inst e₀ k,
+    r', hrec, hpat', by simpa using hnp, by rw [hlen]; exact hi,
+    hStructTy.instN henv W h₀, ?_, hFieldTy.instN henv W h₀⟩
   rw [VExpr.mkApps_inst]
   simp only [List.map_append, List.map_cons, List.map_nil, VExpr.inst,
-    VExpr.fieldSelector_inst hi]
+    VExpr.lift_inst_cons, VExpr.fieldSelector_inst hi]
 
 variable! (henv : Ordered env) (h₀ : TrExprS env Us Δ₀ e₀ e₀')
   (t₀ : env.HasType Us.length Δ₀.toCtx e₀' A₀) in
@@ -1578,17 +1607,18 @@ theorem ofLevel_mkLevelIMax'
 variable! {ls : List VLevel} (hls : ∀ l ∈ ls, l.WF U') in
 theorem TrProj.instL (H : TrProj env U Γ s i e e') :
     TrProj env U' (Γ.map (VExpr.instL ls)) s i (e.instL ls) (e'.instL ls) := by
-  obtain ⟨recName, ctorName, us, params, fieldTys, motive, np, r,
-    hrec, hpat, hpl, hi, rfl, A, hty⟩ := H
+  obtain ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r,
+    hrec, hpat, hnp, hi, hStructTy, rfl, hFieldTy⟩ := H
   have hlen : (fieldTys.map (·.instL ls)).length = fieldTys.length := List.length_map _
   obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota recName (np+1+1+0) ctorName
       (np + (fieldTys.map (·.instL ls)).length)).toPattern r' := by rw [hlen]; exact ⟨r, hpat⟩
   refine ⟨recName, ctorName, us.map (VLevel.inst ls), params.map (·.instL ls),
-    fieldTys.map (·.instL ls), motive.instL ls, np,
-    r', hrec, hpat', by simpa using hpl, by rw [hlen]; exact hi, ?_, _, hty.instL hls⟩
+    fieldTys.map (·.instL ls), np, structTy.instL ls, fieldTy.instL ls,
+    r', hrec, hpat', by simpa using hnp, by rw [hlen]; exact hi,
+    hStructTy.instL hls, ?_, hFieldTy.instL hls⟩
   rw [VExpr.mkApps_instL]
   simp only [List.map_append, List.map_cons, List.map_nil, VExpr.instL,
-    VExpr.fieldSelector_instL]
+    VExpr.instL_liftN, VExpr.fieldSelector_instL]
 
 section
 
