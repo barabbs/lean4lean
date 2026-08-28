@@ -642,17 +642,35 @@ equal to the named field `fields[i]`. This is the interface the `proj` case of
 constructor spine, whose reduct (η-long minor application `fun … minor fields =>
 minor fields`) β-reduces through the `fieldSelector` telescope to `fields[i]`.
 
-Proof route (see the PROJ-TODO): from `hp`, `e'' = recName us params motive
-(fieldSelector fieldTys i) d` with a registered ι rule `venv.pats (iota recName
-(np+1+1+0) ctorName …) r`; rewrite `d` by `hd` to the constructor spine so the ι
-rule fires (`iota_defeq`/`IsDefEq.pat`), then β-reduce the structure reduct. -/
+Proof route: with `ctorName` now **exposed** through `TrProjCtor` (Item 1), the ι
+rule's constructor matches the spine `d` reduces to. From `hp`, `e'' = recName us
+params motive (fieldSelector fieldTys i) d`; rewrite `d` by `hd` to the constructor
+spine, fire the ι rule (`pats_iota'`/`iota_defeq`), then β-reduce the structure reduct
+through the `fieldSelector` telescope. The final β-step is validated; see the PROJ-TODO
+for the residual, which is the structure-recursor shape + arity bookkeeping — *not*
+`pat_uniq`. -/
 theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environment}
     {venv : VEnv} {U : Nat} {Γ : List VExpr} {S ctorName : Name} {i np nf : Nat}
-    {us cus : List VLevel} {params fields : List VExpr} {d e'' A : VExpr}
+    {cus : List VLevel} {params fields : List VExpr} {d e'' A : VExpr}
     (H : TrEnv safety kenv venv)
-    (hp : TrProj venv U Γ S i d e'')
+    (hp : TrProjCtor venv U Γ S i d e'' ctorName)
     (hd : venv.IsDefEqU U Γ d ((VExpr.const ctorName cus).mkApps (params ++ fields)))
     (hty : venv.HasType U Γ d A)
     (hlen : params.length = np) (hflen : fields.length = nf) (hi : i < nf) :
     venv.IsDefEqU U Γ e'' (fields[i]'(hflen ▸ hi)) := by
-  sorry -- PROJ-TODO(soundness): structure recursor rhs is the η-long minor application; β-reduces to fields[i]
+  -- PROJ-TODO(soundness): NOT a `pat_uniq` deferral. Exposing `ctorName` (Item 1) is done —
+  -- `TrProjCtor.toTrProj`/`TrProj.exists_ctorName` connect it to the ι pattern — and the F4
+  -- crux, `fieldSelector fieldTys i` applied to `fields` β-reduces to `fields[i]`, is validated
+  -- by `rfl` on 1/2/3-field structures. Full closure needs three further facts, none derivable
+  -- from the current hypotheses and none being `pat_uniq`:
+  --  (A) `safety ≤ (recInfo rval).safety`, required by `pats_iota'` to name the canonical
+  --      `iotaRHS` witness (pattern registration ⇒ `safety = .safe`, and `rval` is a `.safe`
+  --      recursor; note `(recInfo rval).isUnsafe = rval.isUnsafe` does not reduce here);
+  --  (B) the constructor-arity count `np + nf = rval.numParams + rule.nfields`, needed to build
+  --      `Pattern.Matches` on the `np+nf`-arg ctor spine; requires a `TrEnv`-level `ctor_find`/
+  --      `ctor_reg` analogue (only the `AddInduct.ctor_find` field exists today) plus a
+  --      well-typed-constructor arity lemma;
+  --  (C) F3: `rule.rhs` is the η-long field-selector application, i.e. `rval` is a *structure*
+  --      recursor (numMotives = 1, numMinors = 1, numIndices = 0); `hn`/`hk` only pin the sums,
+  --      and the model `ru.rhs` is arbitrary `VExpr` data.
+  sorry

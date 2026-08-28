@@ -120,6 +120,37 @@ def TrProj (env : VEnv) (U : Nat) (Γ : List VExpr)
            (params ++ [.lam structTy fieldTy.lift, VExpr.fieldSelector fieldTys i, e]) ∧
     env.HasType U Γ e' fieldTy
 
+/-- `TrProjCtor` is `TrProj` with the constructor name `ctorName` **exposed** as a
+parameter instead of buried under the leading existential. The two are equivalent
+(`TrProjCtor.toTrProj` / `TrProj.exists_ctorName`); exposing `ctorName` is what lets
+`TrEnv.proj_defeq` tie the registered ι rule's constructor to the constructor spine
+`d` reduces to. -/
+def TrProjCtor (env : VEnv) (U : Nat) (Γ : List VExpr)
+    (S : Name) (i : Nat) (e e' : VExpr) (ctorName : Name) : Prop :=
+  ∃ (recName : Name) (us : List VLevel) (params fieldTys : List VExpr)
+    (np : Nat) (structTy fieldTy : VExpr)
+    (r : (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.RHS ×
+         (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.Check),
+    recName = mkRecName S ∧
+    env.pats (SimplePattern.iota recName (np+1+1+0) ctorName (np+fieldTys.length)).toPattern r ∧
+    params.length = np ∧ i < fieldTys.length ∧
+    env.HasType U Γ e structTy ∧
+    e' = (VExpr.const recName us).mkApps
+           (params ++ [.lam structTy fieldTy.lift, VExpr.fieldSelector fieldTys i, e]) ∧
+    env.HasType U Γ e' fieldTy
+
+theorem TrProjCtor.toTrProj {env : VEnv} {U : Nat} {Γ : List VExpr} {S : Name} {i : Nat}
+    {e e' : VExpr} {ctorName : Name} (H : TrProjCtor env U Γ S i e e' ctorName) :
+    TrProj env U Γ S i e e' :=
+  let ⟨recName, us, params, fieldTys, np, structTy, fieldTy, r, h⟩ := H
+  ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r, h⟩
+
+theorem TrProj.exists_ctorName {env : VEnv} {U : Nat} {Γ : List VExpr} {S : Name} {i : Nat}
+    {e e' : VExpr} (H : TrProj env U Γ S i e e') :
+    ∃ ctorName, TrProjCtor env U Γ S i e e' ctorName :=
+  let ⟨recName, ctorName, us, params, fieldTys, np, structTy, fieldTy, r, h⟩ := H
+  ⟨ctorName, recName, us, params, fieldTys, np, structTy, fieldTy, r, h⟩
+
 def VEnv.ContainsLits (env : VEnv) : Literal → Prop
   | .natVal _ => env.contains ``Nat
   | .strVal _ => env.contains ``Char.ofNat ∧ env.contains ``String.ofList
