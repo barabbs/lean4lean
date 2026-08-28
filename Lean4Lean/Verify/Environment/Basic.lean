@@ -145,6 +145,32 @@ structure AddInduct (m₁ : ConstMap) (env₁ : VEnv) (decl : VInductDecl)
         ru.ctor = ctorName ∧ ru.nfields = cval.numFields ∧ r.numParams = cval.numParams
   value_find : ∀ {name : Name} {ci : ConstantInfo} {v : Expr},
     m₂.find? name = some ci → ci.deltaValue? = some v → m₁.find? name = some ci
+  -- The two fields below, like `ctor_find`, only *strengthen the hypothesis*
+  -- `AddInduct`: since nothing constructs an `AddInduct` yet
+  -- (`Verify/Environment.lean`'s `inductDecl` case is `sorry`), they create NO
+  -- proof obligation today; a future constructor discharges them (adding an
+  -- inductive only *adds* constants, and every theory recursor becomes a kernel
+  -- recursor with one rule per constructor). They power the *inverse* lemma
+  -- `TrEnv.pats_iota_inv`, the converse of `pats_iota'`.
+  --
+  -- `find?_mono`: `addInduct` only registers fresh names, so every pre-existing
+  -- binding survives into `m₂`.
+  find?_mono : ∀ {name : Name} {ci : ConstantInfo},
+    m₁.find? name = some ci → m₂.find? name = some ci
+  -- `rec_reg`: the theory→kernel dual of `rec_find`. Each theory recursor
+  -- `r ∈ decl.recs` is registered in `m₂` as a kernel `.recInfo` under `r.name`,
+  -- with matching telescope split, and each of its ι rules `ru ∈ r.rules` is
+  -- found (keyed by constructor) among that kernel recursor's rules, with matching
+  -- field count.
+  rec_reg : ∀ {r : VRecursor}, r ∈ decl.recs →
+    ∃ rval : RecursorVal,
+      m₂.find? r.name = some (.recInfo rval) ∧
+      r.getMajorIdx = rval.getMajorIdx ∧
+      r.numParams = rval.numParams ∧
+      ∀ {ru : VRecRule}, ru ∈ r.rules →
+        ∃ rule : RecursorRule,
+          rval.rules.find? (·.ctor == ru.ctor) = some rule ∧
+          ru.nfields = rule.nfields
 
 theorem AddInduct.to_addInduct
     (H : AddInduct m₁ env₁ decl m₂ env₂) : env₁.addInduct decl = some env₂ :=
