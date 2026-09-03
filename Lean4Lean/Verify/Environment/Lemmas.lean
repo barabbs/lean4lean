@@ -658,19 +658,46 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
     (hty : venv.HasType U Γ d A)
     (hlen : params.length = np) (hflen : fields.length = nf) (hi : i < nf) :
     venv.IsDefEqU U Γ e'' (fields[i]'(hflen ▸ hi)) := by
-  -- PROJ-TODO(soundness): NOT a `pat_uniq` deferral. Exposing `ctorName` (Item 1) is done —
-  -- `TrProjCtor.toTrProj`/`TrProj.exists_ctorName` connect it to the ι pattern — and the F4
-  -- crux, `fieldSelector fieldTys i` applied to `fields` β-reduces to `fields[i]`, is validated
-  -- by `rfl` on 1/2/3-field structures. Full closure needs three further facts, none derivable
-  -- from the current hypotheses and none being `pat_uniq`:
+  -- PROJ-TODO(soundness): NOT a `pat_uniq` deferral — and, after investigation, NOT closable by
+  -- strengthening `AddInduct.rec_reg` with the count split either. Exposing `ctorName` (Item 1) is
+  -- done: `TrProjCtor` gives `e'' = (const recName us).mkApps (params' ++ [motive, fieldSelector
+  -- fieldTys i, d])` with `venv.pats (iota recName (np'+1+1+0) ctorName (np'+fieldTys.length)) r`,
+  -- and `pats_iota_inv` (from that `pats` witness) yields a kernel `rval`/`rule` with
+  --   `hn : np'+1+1+0 = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices`
+  --   `hk : np'+fieldTys.length = rval.numParams + rule.nfields`.
+  -- The F4 crux (`fieldSelector fieldTys i` applied to `fields` β-reduces to `fields[i]`) is
+  -- `rfl`-validated for 1/2/3 fields and is closable in isolation via raw `IsDefEq.beta`; it may
+  -- NOT go through `ParRed`/`ChurchRosser`, whose β-lemmas are `sorryAx`-tainted for a concrete
+  -- `VEnv` through `VEnv.toParams` (`InductiveParams.lean:423`). Full closure needs three facts,
+  -- none derivable from the hypotheses here:
   --  (A) `safety ≤ (recInfo rval).safety`, required by `pats_iota'` to name the canonical
-  --      `iotaRHS` witness (pattern registration ⇒ `safety = .safe`, and `rval` is a `.safe`
-  --      recursor; note `(recInfo rval).isUnsafe = rval.isUnsafe` does not reduce here);
-  --  (B) the constructor-arity count `np + nf = rval.numParams + rule.nfields`, needed to build
-  --      `Pattern.Matches` on the `np+nf`-arg ctor spine; requires a `TrEnv`-level `ctor_find`/
-  --      `ctor_reg` analogue (only the `AddInduct.ctor_find` field exists today) plus a
-  --      well-typed-constructor arity lemma;
-  --  (C) F3: `rule.rhs` is the η-long field-selector application, i.e. `rval` is a *structure*
-  --      recursor (numMotives = 1, numMinors = 1, numIndices = 0); `hn`/`hk` only pin the sums,
-  --      and the model `ru.rhs` is arbitrary `VExpr` data.
+  --      `iotaRHS` witness. Additively resolvable: record `(recInfo rval).safety = .safe` as a new
+  --      `rec_reg` conjunct (true for every recursor of a `.safe` inductive — `List.rec` included)
+  --      and thread it through `pats_iota_inv`. This is the *only* one of the three that the
+  --      `rec_reg` route reaches.
+  --  (B) the arity link `np + nf = rval.numParams + rule.nfields`, needed to build
+  --      `Pattern.Matches` on the `hd`-spine `ctorName cus (params ++ fields)`. IRREDUCIBLE here:
+  --      `hlen`/`hflen` fix only the *outer* spine's own lengths; nothing ties them to the
+  --      recursor's arity without a fully-applied-constructor hypothesis (absent from the fixed
+  --      statement) or constructor-application typing inversion (tainted, `Strong.lean`).
+  --  (C) the structure-recursor shape — `rval.numMotives = 1 ∧ rval.numMinors = 1 ∧
+  --      rval.numIndices = 0`, and `rule.rhs`/`ru.rhs` being the η-long minor application.
+  --      IRREDUCIBLE here on two independent counts:
+  --      (i) the *split* is lost: `venv.pats` stores the major as the single `Nat`
+  --          `getMajorIdx = np'+2` (the `1+1+0` in `TrProj`'s pattern normalises away), so `hn`
+  --          pins only the SUM. `omega` on `hn`/`hk` cannot derive `rval.numParams = np'` (verified
+  --          — it returns a counterexample). Recovering `(1,1,0)` needs `fieldTys.length =
+  --          rule.nfields` (⇒ `rval.numParams = np'` via `hk`), which is NOT recordable: `fieldTys`
+  --          is `TrProjCtor` data, and `rec_reg` relates `rval` only to a *general* theory recursor
+  --          `r ∈ decl.recs` whose own split is equally unconstrained (`VInductDecl.WF` imposes no
+  --          count/shape condition), so `pats_iota_inv` can only ever expose the sum. Asserting
+  --          `(1,1,0)` in `rec_reg` is FALSE for `List.rec` (2 minors), so it cannot be recorded.
+  --      (ii) `ru.rhs` is arbitrary closed input to `addInduct`; `VInductDecl.WF` does not
+  --          constrain the recursor-rule rhs shape, so `ru.rhs` being the η-long minor application
+  --          needs the scoped-out recursor/rule-shape well-formedness. (A `Stream`-style recursive
+  --          single-ctor recursor has counts `(1,1,0)` yet a non-η-long rhs, so even (i) would not
+  --          imply the rhs shape.)
+  -- Closing this therefore requires model-level changes beyond `rec_reg`: constrain recursor
+  -- telescope/rhs shape in `VInductDecl.WF` (or widen `SimplePattern.iota` to store the split), and
+  -- supply the constructor-arity link (a fully-applied-ctor premise or a `ctor_reg` arity lemma).
   sorry
