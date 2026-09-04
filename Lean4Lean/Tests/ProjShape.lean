@@ -20,7 +20,7 @@ the second field), and a three-field chain `V3` whose last motive mentions two e
 projections, one of them inside the other's motive.
 
 `decide` pins the de Bruijn form of the builders on the hand-written expansions of
-`Sigma.snd` (thesis `π₂`, `λ p. β[π₁ p/x]`).
+`Sigma.snd` (the motive `λ p. β[π₁ p/x]` realising the thesis's `π₂ p : β[π₁ p/x]`).
 -/
 
 namespace Lean4Lean.Tests.ProjShape
@@ -140,7 +140,7 @@ run_meta do
     throwError "binderArity? accepts the reflexive Refl.rec minor as field-only"
   unless rty.binderArity? 1 = some 2 do throwError "binderArity? of Refl.rec's minor is not 2"
 
-/-! The hand-written expansion of `Sigma.snd` (thesis `π₂ : Σ x:α. β → β[π₁ p/x]`), over
+/-! The hand-written expansion of `Sigma.snd` (thesis `π₂ p : β[π₁ p/x]` for `p : Σ x:α. β`), over
 `Γ ⊢ A : Type u, B : A → Type v` as `bvar 1`, `bvar 0`: field telescope
 `Fs = [A, B f₀]`, `P₀ = Sigma.rec.{u+1,u,v} A B (λ _. A) (λ a b. a)`, and the motive of the
 second projection `λ p. B (P₀ p)`. -/

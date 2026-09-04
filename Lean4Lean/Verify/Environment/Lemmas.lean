@@ -1006,7 +1006,11 @@ registered ι rule of `S.rec` on `ctorName` (`pats_iota_inv_shape`) fires on `P_
 (`IsDefEq.pat`, trivial check); its reduct is the rule template — by `rule_shape` and the
 minor's arity pin, `λ params motive minor fields, minor fields` with no recursive arguments —
 applied to the redex's arguments, which β-reduces (`IsDefEqU.betaN`) to
-`fieldSelector fieldTys i fields`, and once more to `fields[i]`. -/
+`fieldSelector fieldTys i fields`, and once more to `fields[i]`.
+
+No `sorry` of its own: the `sorryAx` in its `#print axioms` is inherited only from the
+pre-existing unique-typing / Π-injectivity sorries (`Injectivity.lean`'s `IsDefEqU.sort_inv`,
+`IsDefEqU.forallE_inv_stratified`; `UniqueTyping.lean`) and from `VEnv.WF.patsStrong`. -/
 theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environment}
     {venv : VEnv} {U : Nat} {Γ : List VExpr} {S ctorName : Name} {i : Nat}
     {rval : RecursorVal} {cval : ConstructorVal}

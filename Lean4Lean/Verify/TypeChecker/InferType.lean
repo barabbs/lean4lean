@@ -385,6 +385,11 @@ theorem inferLet.WF
   refine (c.withMLC_self ▸ inferLet.loop.WF (Nat.zero_le _) [] rfl rfl rfl rfl rfl ?_ hr) hinf
   exact fun P hP he => ⟨(AllAbove.wf wf.trctx.wf.fvwf).2 hP, he.mono fun _ h _ => h, fun _ => id⟩
 
+/-- PROJ-TODO(boundary): restated against the dependent-motive `TrProj` (the typing premise
+on the projection function, conclusion `∃ e'' ty'`). Its proof is the inductive-translation
+boundary: it needs the `AddInduct` witness in the `inductDecl` case of `addDecl.WF`
+(`Verify/Environment.lean`). With the dependent motive it is provable in principle — the
+constant motive made it unprovable for dependent fields. -/
 theorem inferProj.WF
     (he : c.TrExprS e e') (hty : c.TrExprS ety ety') (hasty : c.HasType e' ety') :
     (inferProj st i e ety).WF c s fun ty _ =>

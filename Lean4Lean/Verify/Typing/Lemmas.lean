@@ -653,9 +653,13 @@ theorem HasType.skips (W : Ctx.LiftN n k Γ Γ')
     (h1 : env.HasType U Γ' e A) (h2 : e.Skips n k) : ∃ B, env.HasType U Γ' e B ∧ B.Skips n k :=
   IsDefEq.skips henv hΓ' W h1 h2 h2
 
+/-- PROJ-TODO(soundness): `TrProj` strengthening, the inverse of `TrProj.weak'`. The type of
+`e.lift' l` is only *defeq* to a lifted type, so recovering a parameter list over `Γ` needs
+both `IsDefEqU.weakN_iff` (`UniqueTyping.lean:172`, itself a `sorry`) and type-former
+injectivity (`Injectivity.lean`, open). -/
 theorem TrProj.weak'_inv (henv : VEnv.WF env) (hΓ' : OnCtx Γ' (env.IsType U))
     (W : Ctx.Lift' l Γ Γ') : TrProj env U Γ' s i (e.lift' l) e' → ∃ e', TrProj env U Γ s i e e' :=
-  sorry -- PROJ-TODO(soundness): TrProj strengthening (inverse of weakening); needs weakN_iff
+  sorry
 
 theorem TrProj.defeqDFC (henv : VEnv.WF env) (hΓ : env.IsDefEqCtx U [] Γ₁ Γ₂)
     (he : env.IsDefEqU U Γ₁ e₁ e₂) (H : TrProj env U Γ₁ s i e₁ e') :
@@ -889,18 +893,20 @@ theorem TrExpr.app (henv : VEnv.WF env) (hΔ : OnCtx Δ.toCtx (env.IsType Us.len
   ⟨_, .app h3.hasType.1 h4.hasType.1 s3 s4, _, h3.appDF h4⟩
 
 variable! (henv : VEnv.WF env) (hΓ : IsDefEqCtx env U [] Γ₁ Γ₂) in
+/-- PROJ-TODO(soundness): the `TrProj.uniq` residual. Both sides are `P_i e` with `P_i` a
+*function* of `(s, ctorName, usS, uss, params, i)` given `env` (`fieldTys` is pinned to the
+constructor's telescope), so what is left is: (i) `S usS₁ params₁ ≡ S usS₂ params₂` from
+unique typing of `e₁ ≡ e₂`; (ii) type-former injectivity (`Injectivity.lean`, open) giving
+`usS₁ ≈ usS₂` and `params₁ ≡ params₂`; (iii) `np₁ = np₂`, pinning each `np` to the kernel's
+`numParams` by inversion of the typing premise `HasType e (S usS params)` — the `np+1+1+0`
+key alone cannot exclude a two-minor recursor read as `(np+1)+1+1+0`; (iv) `ctorName₁ =
+ctorName₂` from the registry being single-constructor for `s`; (v) `uss₁ j ≈ uss₂ j` for the
+used `j` from sort uniqueness of `F_j`; then two congruences — `instPis` under pointwise
+`IsDefEq` of `params` (`IsDefEq.instDF`) and `projFn` by induction on `i`
+(`constDF`/`appDF`/`lamDF`) — and `appDF`. No recursor-typing inversion is needed. -/
 theorem TrProj.uniq (H1 : TrProj env U Γ₁ s₁ i e₁ e₁') (H2 : TrProj env U Γ₂ s₂ i e₂ e₂')
     (H : env.IsDefEqU U Γ₁ e₁ e₂) :
     env.IsDefEqU U Γ₁ e₁' e₂' :=
-  -- PROJ-TODO(soundness): TrProj.uniq residual. Both sides are `P_i e` with `P_i` a *function*
-  -- of `(s, ctorName, usS, uss, params, i)` given `env` (`fieldTys` is pinned to the
-  -- constructor's telescope), so the residual is: (i) `S usS₁ params₁ ≡ S usS₂ params₂` from
-  -- unique typing of `e₁ ≡ e₂`; (ii) type-former injectivity (`Injectivity.lean`, open) giving
-  -- `usS₁ ≈ usS₂` and `params₁ ≡ params₂`; (iii) `ctorName₁ = ctorName₂` from the registry
-  -- being single-constructor for `s`; (iv) `uss₁ j ≈ uss₂ j` for the used `j` from sort
-  -- uniqueness of `F_j`; then two congruences — `instPis` under pointwise `IsDefEq` of `params`
-  -- (`IsDefEq.instDF`) and `projFn` by induction on `i` (`constDF`/`appDF`/`lamDF`) — and
-  -- `appDF`. No recursor-typing inversion is needed.
   sorry
 
 variable! (henv : VEnv.WF env) {Us : List Name} (hΔ : VLCtx.IsDefEq env Us.length Δ₁ Δ₂) in

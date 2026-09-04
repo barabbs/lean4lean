@@ -4,8 +4,9 @@ import Lean4Lean.Theory.VExpr
 # Structure projections as recursor expansions
 
 `VExpr` has no projection node. A projection `.proj S i e` of a structure value `e : S ps` is
-modelled by the recursor expansion of Carneiro's thesis (`inv_x`, typesys.tex
-§"Undecidability of definitional equality"; `π₂`, Wtypes.tex):
+modelled by a recursor expansion in the style of Carneiro's thesis's `inv_x` (typesys.tex
+§"Undecidability of definitional equality"), which projects the argument of `intro` out of a
+proof of `acc x` through `rec_acc`:
 
     P_i e,   P_i = S.rec (uss i) ps (λ x : S ps. F_i[f_j := P_j x]) (λ f₀ … f_{n-1}. f_i)
 
@@ -15,11 +16,14 @@ under the earlier fields `f₀ … f_{i-1}`, and the earlier projection *functio
 are the same expansions (`VExpr.projFns`, well-founded on `i`). The motive of field `i` is
 the field's type with the earlier fields replaced by their projections of the bound major,
 so that `P_i e : F_i[f_j := P_j e]` (`VExpr.projTy`) — the kernel's `inferProj` result with
-`.proj S j e ↦ P_j e`. For field `0` and for every field whose type does not mention earlier
+`.proj S j e ↦ P_j e`, and the dependent typing shape of the thesis's *primitive* projections
+`π₂ p : β[π₁ p/x]` (Wtypes.tex, whose W-type system omits the recursors for `Σ` in favour of
+projections). For field `0` and for every field whose type does not mention earlier
 fields this is the constant motive `λ _. F_i` (`projMotiveBody_zero`). The elimination level
 of `P_j` is the sort of `F_j`, which differs between fields (`Sigma.fst` uses
 `Sigma.rec.{u+1,u,v}`, `Sigma.snd` `Sigma.rec.{v+1,u,v}`), hence a level list `uss j` per
-field — the thesis's `κ`, a *fresh* universe variable per use of `rec_P` (axioms.tex §2.6.3).
+field — the thesis's motive type `κ = ∀ a::α. P a → U_u` for a large-eliminating type (`→ P`
+otherwise), with `u` a *fresh* universe variable per use of `rec_P` (axioms.tex §2.6.3).
 
 De Bruijn conventions. Contexts are listed outermost first, `bvar 0` is innermost. Over
 `Γ, f₀ … f_{n-1}` field `j` is `bvar (n-1-j)` (`fieldSelector`); `F_i` lives over
@@ -102,7 +106,7 @@ def projMotiveBody (S : Name) (usS : List VLevel) (uss : Nat → List VLevel) (p
     (i : Nat) : VExpr :=
   projMotiveBodyOf Fs i (projFns S usS uss ps Fs i)
 
-/-- The projection *function* `P_i : ∀ x : S usS ps, projMotiveBody … i` (thesis `inv_x`, `π₂`):
+/-- The projection *function* `P_i : ∀ x : S usS ps, projMotiveBody … i` (thesis `inv_x`):
 `S.rec (uss i) ps (λ x. Fs[i][f_j := P_j x]) (λ f. f_i)`. -/
 def projFn (S : Name) (usS : List VLevel) (uss : Nat → List VLevel) (ps Fs : List VExpr)
     (i : Nat) : VExpr :=
@@ -110,7 +114,7 @@ def projFn (S : Name) (usS : List VLevel) (uss : Nat → List VLevel) (ps Fs : L
     (ps ++ [.lam ((const S usS).mkApps ps) (projMotiveBody S usS uss ps Fs i), fieldSelector Fs i])
 
 /-- The type of `P_i e`, over `Γ`: `Fs[i][f_j := P_j e]` — the kernel's `inferProj` result with
-`.proj S j struct ↦ P_j struct'` (`(projMotiveBody … i).inst e`, `projMotiveBody_inst`). -/
+`.proj S j struct ↦ P_j struct'` (`(projMotiveBody … i).inst e`). -/
 def projTy (S : Name) (usS : List VLevel) (uss : Nat → List VLevel) (ps Fs : List VExpr)
     (i : Nat) (e : VExpr) : VExpr :=
   instFields (Fs.getD i default) ((projFns S usS uss ps Fs i).map fun P => .app P e)
@@ -124,8 +128,6 @@ def binderArity? (ty : VExpr) (k : Nat) : Option Nat := ty.piBinders[k]?.map piA
 
 /-! ### Unfolding facts -/
 
-theorem projFns_zero : projFns S usS uss ps Fs 0 = [] := rfl
-
 theorem projFn_eq : projFn S usS uss ps Fs i = projFnOf S usS uss ps Fs i (projFns S usS uss ps Fs i) :=
   rfl
 
@@ -136,16 +138,6 @@ theorem projFns_succ :
   induction i with
   | zero => rfl
   | succ i ih => simp [projFns_succ, ih]
-
-theorem projFns_getElem? (h : j < i) :
-    (projFns S usS uss ps Fs i)[j]? = some (projFn S usS uss ps Fs j) := by
-  induction i with
-  | zero => cases h
-  | succ i ih =>
-    rw [projFns_succ]
-    rcases Nat.lt_or_eq_of_le (Nat.le_of_lt_succ h) with h | rfl
-    · rw [List.getElem?_append_left (by simp [h]), ih h]
-    · rw [List.getElem?_append_right (by simp), projFns_length, Nat.sub_self]; rfl
 
 /-- The motive of field `0` is the constant motive `fun _ => Fs[0]`. -/
 @[simp] theorem projMotiveBody_zero :
@@ -173,10 +165,6 @@ theorem mkApps_instL {f : VExpr} {args : List VExpr} {ls : List VLevel} :
   induction args generalizing f with
   | nil => rfl
   | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
-
-theorem mkApps_concat {f : VExpr} {L : List VExpr} {x : VExpr} :
-    f.mkApps (L ++ [x]) = (f.mkApps L).app x := by
-  simp [VExpr.mkApps, List.foldl_append]
 
 theorem consN_fixes : ∀ (m : Nat) (ρ : Lift), (ρ.consN m).Fixes m
   | 0, _ => trivial
@@ -384,9 +372,6 @@ theorem piBinders_instL : ∀ (T : VExpr) (ls : List VLevel),
   | .forallE A B, ls => by simp only [instL, piBinders, List.map_cons, piBinders_instL B]
   | .bvar _, _ | .sort _, _ | .const .., _ | .app .., _ | .lam .., _ => rfl
 
-theorem piArity_lift' (T : VExpr) (ρ : Lift) : (T.lift' ρ).piArity = T.piArity := by
-  rw [← piBinders_length, piBinders_lift', List.length_mapIdx, piBinders_length]
-
 theorem piArity_inst_of_ctorHeaded {T : VExpr} (h : T.CtorHeaded) (e₀ : VExpr) (k : Nat) :
     (T.inst e₀ k).piArity = T.piArity := by
   rw [← piBinders_length, piBinders_inst_of_ctorHeaded h, List.length_mapIdx, piBinders_length]
@@ -574,15 +559,6 @@ theorem projMotiveBody_instL {S usS uss ps Fs i} (ls : List VLevel) :
         (ps.map (·.instL ls)) (Fs.map (·.instL ls)) i := by
   unfold projMotiveBody
   rw [projMotiveBodyOf_instL ls, projFns_instL ls]
-
-/-- Instantiating the motive's binder: `(λ x. Fs[i][f_j := P_j x]) e ≡ Fs[i][f_j := P_j e]`,
-the kernel's `inferProj` result. -/
-theorem projMotiveBody_inst {S usS uss ps Fs i} (e : VExpr) :
-    (projMotiveBody S usS uss ps Fs i).inst e = projTy S usS uss ps Fs i e := by
-  unfold projMotiveBody projMotiveBodyOf projTy
-  rw [instFields_inst, List.map_map, List.length_map, projFns_length, Nat.zero_add, inst_liftN]
-  congr 1
-  simp only [Function.comp_def, inst, inst_lift, instVar_zero]
 
 /-! ### λ-telescopes and `instFields` on variable spines
 

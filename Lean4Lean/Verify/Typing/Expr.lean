@@ -68,9 +68,9 @@ theorem VLCtx.WF.fvwf : ∀ {Δ}, VLCtx.WF env U Δ → Δ.FVWF
 /-- `TrProjCtor env U Γ S i e e' c` relates the translated structure value `e : S usS params`
 to the translation `e'` of its `i`-th projection `.proj S i e`, with the structure's constructor
 `c` exposed (`TrProj` hides it; `TrEnv.proj_defeq` needs it to tie the registered ι rule to the
-constructor spine `e` reduces to). `VExpr` has no projection node; a projection is the
-recursor expansion of Carneiro's thesis (`inv_x`, typesys.tex §"Undecidability"; `π₂`,
-Wtypes.tex) applied to `e`:
+constructor spine `e` reduces to). `VExpr` has no projection node; a projection is a recursor
+expansion in the style of Carneiro's thesis's `inv_x` (typesys.tex §"Undecidability of
+definitional equality") applied to `e`:
 
     e' = P_i e,   P_i = S.rec (uss i) params (λ x : S usS params. F_i[f_j := P_j x]) (λ f. f_i)
 
@@ -79,9 +79,10 @@ instantiated at `params` — read off `c`'s type as `inferProj` does (`instPis`/
 and the earlier projections `P_j`, `j < i`, are the same expansions (`VExpr.projFns`,
 well-founded on `i`). The motive of field `i` is the field's type with the earlier fields
 replaced by their projections of the bound major, so that `P_i e : F_i[f_j := P_j e]`
-(`VExpr.projTy`) — the kernel's `inferProj` result with `.proj S j e ↦ P_j e`. For field `0`
-and for every field whose type does not mention earlier fields this is the constant motive
-`λ _. F_i`.
+(`VExpr.projTy`) — the kernel's `inferProj` result with `.proj S j e ↦ P_j e`, and the
+dependent typing shape of the thesis's *primitive* projections `π₂ p : β[π₁ p/x]`
+(Wtypes.tex). For field `0` and for every field whose type does not mention earlier fields
+this is the constant motive `λ _. F_i`.
 
 What is pinned and why:
 * the ι rule of `S.rec` on `c` (`env.pats`, key `iota S.rec (np+1+1+0) c (np+n)`): the only
