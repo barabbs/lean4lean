@@ -65,14 +65,17 @@ def VExpr.majorFormer? (ty : VExpr) (idx : Nat) : Option Name :=
 
 /-- Thesis §2.6.4: the reduct of the ι rule using minor `j` (counted from the outermost
 minor binder) is `λ params motives minors fields, minor_j fields v`, minor `j` applied
-η-long to the fields and then to further arguments `v` (`recArgs`, an arbitrary list). The
-terms `v` are not pinned, syntactically or through typing: `VInductDecl.WF.rules_wf` types
-the reduct at the redex's type, which forces only the *types* of `v` — those of the minor's
-binders after the fields (`δ`, themselves unpinned by `MinorFor`) — not that they are the
-thesis's recursive calls `rec … (u_i x)`. -/
-def VExpr.RuleShape (rhs : VExpr) (np nm nmin nf j : Nat) : Prop :=
+η-long to the fields and then to `nrec` further arguments `v` (`recArgs`). The terms `v` are
+not pinned, syntactically or through typing: `VInductDecl.WF.rules_wf` types the reduct at
+the redex's type, which forces only the *types* of `v` — those of the minor's binders after
+the fields (`δ`, themselves unpinned by `MinorFor`) — not that they are the thesis's
+recursive calls `rec … (u_i x)`. Their *number* is pinned: `VInductDecl.WF.rule_shape` sets
+`nrec` to the number of the minor's binders after the fields (`v::δ` has the length of `δ`),
+so the reduct applies the minor to exactly its binders — none beyond the fields for a
+non-recursive constructor. -/
+def VExpr.RuleShape (rhs : VExpr) (np nm nmin nf nrec j : Nat) : Prop :=
   rhs.lamArity = np + nm + nmin + nf ∧
-  ∃ recArgs : List VExpr,
+  ∃ recArgs : List VExpr, recArgs.length = nrec ∧
     rhs.lamBody = (VExpr.bvar (nf + (nmin - 1 - j))).mkApps (VExpr.bvarsDesc 0 nf ++ recArgs)
 
 instance {A : VExpr} : Decidable A.MotiveShape := by unfold VExpr.MotiveShape; infer_instance
@@ -84,13 +87,14 @@ instance {ty : VExpr} {np nm nmin nind : Nat} : Decidable (ty.RecShape np nm nmi
   unfold VExpr.RecShape; infer_instance
 instance {ty : VExpr} {arity : Nat} : Decidable (ty.CtorShape arity) := by
   unfold VExpr.CtorShape; infer_instance
-instance {rhs : VExpr} {np nm nmin nf j : Nat} : Decidable (rhs.RuleShape np nm nmin nf j) := by
+instance {rhs : VExpr} {np nm nmin nf nrec j : Nat} :
+    Decidable (rhs.RuleShape np nm nmin nf nrec j) := by
   unfold VExpr.RuleShape; infer_instance
 
 /-- A rule reduct is a λ-abstraction: its λ-arity counts at least the minor premises, of
 which there is at least one (`j < nmin`). -/
-theorem VExpr.RuleShape.lam {rhs : VExpr} {np nm nmin nf j : Nat}
-    (h : rhs.RuleShape np nm nmin nf j) (hj : j < nmin) : ∃ A b, rhs = .lam A b := by
+theorem VExpr.RuleShape.lam {rhs : VExpr} {np nm nmin nf nrec j : Nat}
+    (h : rhs.RuleShape np nm nmin nf nrec j) (hj : j < nmin) : ∃ A b, rhs = .lam A b := by
   have h1 := h.1
   cases rhs with
   | lam A b => exact ⟨A, b, rfl⟩
@@ -187,7 +191,8 @@ constant that of the major premise);
 every type former has a recursor and every recursor over one of the block's type formers has
 one rule per constructor (`types_have_rec`, `rules_total`, `rules_nodup`); the rule reducts
 have the §2.6.4 shape tied to their minor premise (`rule_shape`: the rule for `c` reduces to
-a minor whose last argument is headed by `c`); every rule's `ctor` is a declared constant of
+a minor whose last argument is headed by `c`, applied to the fields and to as many further
+arguments as the minor has remaining binders); every rule's `ctor` is a declared constant of
 `CtorShape` arity `ctorParams + nfields` (`rules_ctor` — a constants lookup and an arity,
 not "is a constructor", which a bare `VEnv` cannot express), with `ctorParams` equal in
 count to the recursor's when it is one of the block's own constructors
@@ -209,12 +214,13 @@ is the separate strong-system obligation `VEnv.WF.patsStrong`.
 **Not pinned syntactically, and only in type through `rules_wf`:** the field binders `b::β`
 of a minor premise (those of its constructor) and the binders `v::δ` after them —
 `MinorHeaded`/`MinorFor` fix only a minor's head (some motive) and the head constant of its
-last argument, so `δ` is free. The
+last argument, so `δ` is free in its types; `rule_shape` pins its *length* — the reduct
+applies the minor to the fields and to exactly as many further arguments as the minor has
+binders after them (thesis `e_c b v` with `v::δ`). The
 typing `rules_wf` forces the reduct's arguments `v` to have the types `δ` the minor expects,
 but pins neither `δ` nor the terms `v`: a rule whose `v` are not the thesis's recursive
-calls `rec … (u_i x)` passes every field — a case-analysis principle with fewer inductive
-hypotheses, but equally a well-typed `v` that does not call the recursor on a subterm, or a
-minor with an extra binder whose rule, though typed, need not normalise.
+calls `rec … (u_i x)` passes every field — a well-typed `v` that does not call the recursor
+on a subterm, or a minor with an extra binder whose rule, though typed, need not normalise.
 
 **Not pinned:** the parameter arguments of the type-former applications in the major premise
 and in the motives (the thesis's shared `Γ`) — `IndApp` fixes only the index suffix of the
@@ -299,10 +305,15 @@ structure VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop where
     ∀ c ∈ t.ctors, ∃ ru ∈ r.rules, ru.ctor = c.name
   /-- §2.6.4, the reduct shape, tied to §2.6.3's constructor↔minor correspondence: the rule
   for `ru.ctor` reduces to minor `j`, a minor whose last argument is headed by `ru.ctor`
-  (`MinorFor` pins that head constant only; nothing pins a unique such minor). -/
-  rule_shape : ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ∃ j < r.numMinors,
-    ru.rhs.RuleShape r.numParams r.numMotives r.numMinors ru.nfields j ∧
-    ∃ A, r.type.piBinders[r.numParams + r.numMotives + j]? = some A ∧ A.MinorFor ru.ctor
+  (`MinorFor` pins that head constant only; nothing pins a unique such minor), applied to
+  the `nfields` fields and to exactly as many further arguments as the minor has binders
+  after the fields (thesis `e_c b v`, `v::δ`): `nfields ≤ piArity(minor)` and the reduct's
+  recursive-argument count is `piArity(minor) - nfields` — zero for a non-recursive
+  constructor. A count only: the terms `v` are pinned by nothing here. -/
+  rule_shape : ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ∃ j < r.numMinors, ∃ A,
+    r.type.piBinders[r.numParams + r.numMotives + j]? = some A ∧ A.MinorFor ru.ctor ∧
+    ru.nfields ≤ A.piArity ∧
+    ru.rhs.RuleShape r.numParams r.numMotives r.numMinors ru.nfields (A.piArity - ru.nfields) j
   /-- §2.6.4 as a typing, the `VDefEq.WF` of an ι rule: as registered by `addRecRule`, in
   the stage-2 environment, the rule is typed (`VEnv.PatTyped`, the typing half of
   `VEnv.PatWF`; the other half, the template shape of the reduct, is `rule_shape`) — its

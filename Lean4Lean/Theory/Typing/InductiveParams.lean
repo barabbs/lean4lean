@@ -230,7 +230,9 @@ summed major index splits as `M = np + nm + nmin + nind` with at least one motiv
 minor, the constructor spine as `N = cnp + nf`, the reduct is `iotaRHS` at that split
 (componentwise: `HEq` on the `RHS`, `.true` check), the recursor and the constructor are
 registered with types of the matching `RecShape`/`CtorShape`, the template has the
-matching `RuleShape` at some minor, and `recSplit?` decodes the split exactly when
+matching `RuleShape` at some minor `j` — the minor `MinorFor cN`, with the reduct's
+recursive-argument count its binders beyond the fields — and `recSplit?` decodes the split
+exactly when
 `cnp = np`. From `WF'.pats_origin` and `VInductDecl.WF` (`rec_shape`, `rules_ctor`,
 `rule_shape`). -/
 theorem WF.pats_split {env : VEnv} (H : env.WF) {recN M cN N rr}
@@ -240,7 +242,8 @@ theorem WF.pats_split {env : VEnv} (H : env.WF) {recN M cN N rr}
       HEq rr.1 (SimplePattern.iotaRHS recN cN np nm nmin nind cnp nf rhs hc) ∧ rr.2 = .true ∧
       env.constants recN = some ci ∧ ci.type.RecShape np nm nmin nind ∧
       env.constants cN = some cci ∧ cci.type.CtorShape (cnp + nf) ∧
-      (∃ j < nmin, rhs.RuleShape np nm nmin nf j) ∧
+      (∃ j < nmin, ∃ A, ci.type.piBinders[np + nm + j]? = some A ∧ A.MinorFor cN ∧
+        nf ≤ A.piArity ∧ rhs.RuleShape np nm nmin nf (A.piArity - nf) j) ∧
       (cnp = np → recSplit? ci.type rr.1 = some (np, nm, nmin, nind)) := by
   obtain ⟨ds, H⟩ := H
   obtain ⟨decl, ds₀, env₀, env₁, -, -, hdecl, hind, hle, rec, hrec, ru, hru, hc, e, he⟩ :=
@@ -250,13 +253,14 @@ theorem WF.pats_split {env : VEnv} (H : env.WF) {recN M cN N rr}
     rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc, .true) := he
   obtain ⟨cci, hcci, hcs⟩ := addInduct_rule_ctor hdecl hind hrec hru
   have hrs := hdecl.rec_shape rec hrec
-  obtain ⟨j', hj', hru_s, -⟩ := hdecl.rule_shape rec hrec ru hru
+  obtain ⟨j', hj', A, hA, hAm, hle', hru_s⟩ := hdecl.rule_shape rec hrec ru hru
   obtain ⟨-, -, -, j, hj, -⟩ := id hrs
   have hR : HEq rr.1 (SimplePattern.iotaRHS rec.name ru.ctor rec.numParams rec.numMotives
     rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc) := by rw [he']; exact HEq.rfl
   exact ⟨rec.numParams, rec.numMotives, rec.numMinors, rec.numIndices, ru.ctorParams, ru.nfields,
     ru.rhs, hc, _, cci, rfl, rfl, by omega, by omega, hR, by rw [he'],
-    hle.constants (addInduct_rec_find hind hrec), hrs, hle.constants hcci, hcs, ⟨j', hj', hru_s⟩,
+    hle.constants (addInduct_rec_find hind hrec), hrs, hle.constants hcci, hcs,
+    ⟨j', hj', A, hA, hAm, hle', hru_s⟩,
     fun hown => recSplit?_eq rfl rfl hR hrs hown⟩
 
 /-! ### The population invariant -/
