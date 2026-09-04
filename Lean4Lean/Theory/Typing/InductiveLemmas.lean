@@ -245,7 +245,7 @@ theorem addRules_ordered {env envR env' : VEnv} {decl : VInductDecl}
   unfold addRecRule at h
   split at h
   · cases h
-    obtain ⟨j, hj, hshape, -⟩ := hdecl.rule_shape r hr ru hru
+    obtain ⟨j, hj, _, _, _, _, hshape⟩ := hdecl.rule_shape r hr ru hru
     exact ⟨.pat hord ⟨(hdecl.rules_wf envR hR r hr ru hru ‹_›).mono hle,
       SimplePattern.iotaRHS_templateHeaded (hshape.lam hj) _⟩, hle.trans addPat_le⟩
   · cases h

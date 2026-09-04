@@ -1046,6 +1046,23 @@ theorem eq_mkApps_append_iff {e f : VExpr} {pre : List VExpr} :
 instance {e f : VExpr} {pre : List VExpr} : Decidable (∃ rest, e = f.mkApps (pre ++ rest)) :=
   decidable_of_iff _ eq_mkApps_append_iff.symm
 
+/-- `eq_mkApps_append_iff` with the number of further arguments pinned. -/
+theorem eq_mkApps_append_length_iff {e f : VExpr} {pre : List VExpr} {n : Nat} :
+    (∃ rest, rest.length = n ∧ e = f.mkApps (pre ++ rest)) ↔
+      e.getAppFn = f.getAppFn ∧ (f.getAppArgs ++ pre) <+: e.getAppArgs ∧
+        e.getAppArgs.length = f.getAppArgs.length + pre.length + n := by
+  constructor
+  · rintro ⟨rest, rfl, rfl⟩
+    exact ⟨by simp, ⟨rest, by simp [List.append_assoc]⟩, by simp [Nat.add_assoc]⟩
+  · rintro ⟨h1, h2, h3⟩
+    obtain ⟨rest, rfl⟩ := eq_mkApps_append_iff.2 ⟨h1, h2⟩
+    refine ⟨rest, ?_, rfl⟩
+    simp at h3; omega
+
+instance {e f : VExpr} {pre : List VExpr} {n : Nat} :
+    Decidable (∃ rest, rest.length = n ∧ e = f.mkApps (pre ++ rest)) :=
+  decidable_of_iff _ eq_mkApps_append_length_iff.symm
+
 /-- Head-constructor tests, with their reflections into existentials. -/
 def isSort : VExpr → Bool
   | .sort _ => true
