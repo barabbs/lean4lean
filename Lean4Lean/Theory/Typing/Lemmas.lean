@@ -260,6 +260,9 @@ inductive Ordered : VEnv → Prop where
     Ordered env → ci.WF env →
     env.addConst n ci = some env' → Ordered env'
   | defeq : Ordered env → df.WF env → Ordered (env.addDefEq df)
+  /-- A reduction rule may be registered once it is well-formed (`VEnv.PatWF`): typed as a
+  schematic rule, with a computational (template-headed) reduct. -/
+  | pat : Ordered env → env.PatWF p r → Ordered (env.addPat p r)
 
 def OnTypes (env : VEnv) (P : Nat → VExpr → VExpr → Prop) : Prop :=
   (∀ {n ci}, env.constants n = some ci → ∃ u, P ci.uvars ci.type (.sort u)) ∧
@@ -293,6 +296,7 @@ theorem Ordered.induction (motive : VEnv → Nat → VExpr → VExpr → Prop)
     · let ⟨hl, hr⟩ := h2
       exact ⟨type h1 ih hl, type h1 ih hr⟩
     · exact ih.2 hdf
+  | pat _ _ ih => exact OnTypes.mono .rfl (mono addPat_le) ih
 
 variable (env : VEnv) (U : Nat) (Γ₀ : List VExpr) in
 inductive IsDefEqCtx : List VExpr → List VExpr → Prop
@@ -442,6 +446,7 @@ theorem Ordered.constWF (H : Ordered env) (h : env.constants n = some ci) : ci.W
     · cases h; exact h2
     · exact ih h
   | defeq _ _ ih => exact .mono addDefEq_le (ih h)
+  | pat _ _ ih => exact .mono addPat_le (ih h)
 
 theorem Ordered.defEqWF (H : Ordered env) (h : env.defeqs df) : df.WF env := by
   induction H with
@@ -454,6 +459,34 @@ theorem Ordered.defEqWF (H : Ordered env) (h : env.defeqs df) : df.WF env := by
     obtain rfl | h := h
     · assumption
     · exact ih h
+  | pat _ _ ih => exact .mono addPat_le (ih h)
+
+theorem PatTyped.mono {env env' : VEnv} (henv : env ≤ env') {p : Pattern} {r : p.RHS × p.Check} :
+    env.PatTyped p r → env'.PatTyped p r
+  | ⟨U, Γ, e, m2, B, h1, h2, h3, h4⟩ => ⟨U, Γ, e, m2, B, h1, h2, h3.mono henv, h4.mono henv⟩
+
+theorem PatWF.mono {env env' : VEnv} (henv : env ≤ env') {p : Pattern} {r : p.RHS × p.Check} :
+    env.PatWF p r → env'.PatWF p r
+  | ⟨h1, h2⟩ => ⟨h1.mono henv, h2⟩
+
+/-- Every registered rule of an `Ordered` environment is well-formed in it: the `pats`
+analogue of `Ordered.constWF`/`Ordered.defEqWF`. -/
+theorem Ordered.patWF (H : Ordered env) (h : env.pats p r) : env.PatWF p r := by
+  induction H with
+  | empty => cases h
+  | const _ _ h3 ih =>
+    refine .mono (addConst_le h3) (ih ?_)
+    unfold addConst at h3; split at h3 <;> cases h3; exact h
+  | defeq _ _ ih => exact .mono addDefEq_le (ih h)
+  | pat _ h2 ih =>
+    refine .mono addPat_le ?_
+    obtain ⟨rfl, h⟩ | h := h
+    · cases h; exact h2
+    · exact ih h
+
+/-- Every registered rule of an `Ordered` environment has a template-headed reduct. -/
+theorem Ordered.patHeaded (H : Ordered env) (h : env.pats p r) : r.1.TemplateHeaded :=
+  (H.patWF h).2
 
 variable! (henv : Ordered env) in
 theorem CtxWF.closed (h : OnCtx Γ (IsType env U)) : CtxClosed Γ :=
@@ -811,11 +844,10 @@ theorem IsDefEq.forallE_inv'
     have C2 := (A2.instL h2).closedN henv ⟨⟨⟩, C1⟩
     rw [C1.liftN_eq (Nat.zero_le _), C2.liftN_eq (by exact Nat.le_refl _)] at this
     simpa [liftN]
-  | pat _ _ _ _ _ ihe _ =>
+  | pat hp _ _ _ _ ihe _ =>
     obtain eq | eq := eq
     · exact ihe (.inl eq)
-    -- IOTA-TODO(soundness): forallE-inversion through a pat (ι-)reduction reduct.
-    · exact sorry
+    · exact absurd eq (henv.patHeaded hp).apply_ne_forallE
   | _ => nomatch eq
 
 theorem HasType.forallE_inv (henv : Ordered env) (H : env.HasType U Γ (A.forallE B) V) :
@@ -856,11 +888,10 @@ theorem IsDefEq.sort_inv'
     intro e eq IH
     cases e <;> cases eq; rename_i u
     exact VLevel.WF.inst h2
-  | pat _ _ _ _ _ ihe _ =>
+  | pat hp _ _ _ _ ihe _ =>
     obtain eq | eq := eq
     · exact ihe (.inl eq)
-    -- IOTA-TODO(soundness): sort-inversion through a pat (ι-)reduction reduct.
-    · exact sorry
+    · exact absurd eq (henv.patHeaded hp).apply_ne_sort
   | _ => nomatch eq
 
 theorem IsDefEq.sort_inv_l (henv : Ordered env) (H : env.IsDefEq U Γ (.sort u) e2 V) : u.WF U :=

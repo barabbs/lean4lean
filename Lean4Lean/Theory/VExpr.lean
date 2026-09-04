@@ -14,6 +14,9 @@ inductive VExpr where
 
 instance : Inhabited VExpr := ⟨.sort .zero⟩
 
+deriving instance DecidableEq for VLevel
+deriving instance DecidableEq for VExpr
+
 def liftVar (n i : Nat) (k := 0) : Nat := if i < k then i else n + i
 
 theorem liftVar_lt (h : i < k) : liftVar n i k = i := if_pos h
@@ -801,3 +804,173 @@ theorem lift_r_one (e : VExpr) (ρ : Lift) :
 theorem lift'_inst_hi (e1 e2 : VExpr) (ρ : Lift) :
     lift' (e1.inst e2) ρ = (lift' e1 ρ.cons).inst (lift' e2 ρ) := by
   simp [subst_lift', lift'_subst, lift_r_one, inst_eq]
+
+/-! ### Syntactic helpers for recursor and constructor shapes
+
+Total functions reading the Π/λ telescope and the application spine of a `VExpr`,
+with their decidability. They pin the shapes of recursor types, constructor types
+and ι-rule reducts (`RecShape`, `CtorShape`, `RuleShape` in `Theory/Inductive.lean`). -/
+
+/-- Left fold of applications: `f.mkApps [a₀, …, aₙ] = f a₀ … aₙ`. -/
+def mkApps (f : VExpr) : List VExpr → VExpr := List.foldl .app f
+
+@[simp] theorem mkApps_nil (f : VExpr) : f.mkApps [] = f := rfl
+@[simp] theorem mkApps_cons (f a : VExpr) (l : List VExpr) :
+    f.mkApps (a :: l) = (f.app a).mkApps l := rfl
+theorem mkApps_append (f : VExpr) (l₁ l₂ : List VExpr) :
+    f.mkApps (l₁ ++ l₂) = (f.mkApps l₁).mkApps l₂ := List.foldl_append ..
+
+/-- `[bvar (lo+n-1), …, bvar (lo+1), bvar lo]`: `n` consecutive de Bruijn variables,
+descending, as an argument list. -/
+def bvarsDesc (lo n : Nat) : List VExpr := (List.range n).reverse.map fun i => .bvar (lo + i)
+
+@[simp] theorem bvarsDesc_length (lo n : Nat) : (bvarsDesc lo n).length = n := by simp [bvarsDesc]
+
+/-- Number of leading Π-binders. -/
+def piArity : VExpr → Nat
+  | .forallE _ B => B.piArity + 1
+  | _ => 0
+
+/-- The expression under all leading Π-binders. -/
+def piBody : VExpr → VExpr
+  | .forallE _ B => B.piBody
+  | e => e
+
+/-- The leading Π-binder types, outermost first (each in its own binder context). -/
+def piBinders : VExpr → List VExpr
+  | .forallE A B => A :: B.piBinders
+  | _ => []
+
+@[simp] theorem piBinders_length : ∀ e : VExpr, e.piBinders.length = e.piArity
+  | .forallE _ B => by simp [piBinders, piArity, piBinders_length B]
+  | .bvar _ | .sort _ | .const .. | .app .. | .lam .. => rfl
+
+/-- Number of leading λ-binders. -/
+def lamArity : VExpr → Nat
+  | .lam _ b => b.lamArity + 1
+  | _ => 0
+
+/-- The expression under all leading λ-binders. -/
+def lamBody : VExpr → VExpr
+  | .lam _ b => b.lamBody
+  | e => e
+
+/-- The head of an application spine. -/
+def getAppFn : VExpr → VExpr
+  | .app f _ => f.getAppFn
+  | e => e
+
+/-- The arguments of an application spine, first argument first. -/
+def getAppArgs : VExpr → List VExpr
+  | .app f a => f.getAppArgs ++ [a]
+  | _ => []
+
+@[simp] theorem getAppFn_app (f a : VExpr) : (f.app a).getAppFn = f.getAppFn := rfl
+@[simp] theorem getAppArgs_app (f a : VExpr) : (f.app a).getAppArgs = f.getAppArgs ++ [a] := rfl
+
+@[simp] theorem getAppFn_mkApps (f : VExpr) : ∀ l : List VExpr, (f.mkApps l).getAppFn = f.getAppFn
+  | [] => rfl
+  | a :: l => by rw [mkApps_cons, getAppFn_mkApps (f.app a) l, getAppFn_app]
+
+@[simp] theorem getAppArgs_mkApps (f : VExpr) :
+    ∀ l : List VExpr, (f.mkApps l).getAppArgs = f.getAppArgs ++ l
+  | [] => by simp
+  | a :: l => by rw [mkApps_cons, getAppArgs_mkApps (f.app a) l, getAppArgs_app]; simp
+
+@[simp] theorem mkApps_getAppFn_getAppArgs : ∀ e : VExpr, e.getAppFn.mkApps e.getAppArgs = e
+  | .app f a => by
+    rw [getAppFn_app, getAppArgs_app, mkApps_append, mkApps_getAppFn_getAppArgs f]; rfl
+  | .bvar _ | .sort _ | .const .. | .lam .. | .forallE .. => rfl
+
+/-- `e` is `f` applied to `pre` and then further arguments iff `e`'s spine has `f`'s
+head and `f`'s arguments followed by `pre` as a prefix of its arguments. -/
+theorem eq_mkApps_append_iff {e f : VExpr} {pre : List VExpr} :
+    (∃ rest, e = f.mkApps (pre ++ rest)) ↔
+      e.getAppFn = f.getAppFn ∧ (f.getAppArgs ++ pre) <+: e.getAppArgs := by
+  constructor
+  · rintro ⟨rest, rfl⟩
+    exact ⟨by simp, ⟨rest, by simp [List.append_assoc]⟩⟩
+  · rintro ⟨h1, rest, h2⟩
+    refine ⟨rest, ?_⟩
+    have h3 := mkApps_getAppFn_getAppArgs e
+    rw [h1, ← h2, List.append_assoc, mkApps_append, mkApps_getAppFn_getAppArgs] at h3
+    exact h3.symm
+
+instance {e f : VExpr} {pre : List VExpr} : Decidable (∃ rest, e = f.mkApps (pre ++ rest)) :=
+  decidable_of_iff _ eq_mkApps_append_iff.symm
+
+/-- Head-constructor tests, with their reflections into existentials. -/
+def isSort : VExpr → Bool
+  | .sort _ => true
+  | _ => false
+def isBvar : VExpr → Bool
+  | .bvar _ => true
+  | _ => false
+def isConst : VExpr → Bool
+  | .const .. => true
+  | _ => false
+
+theorem isSort_iff {e : VExpr} : e.isSort = true ↔ ∃ u, e = .sort u := by cases e <;> simp [isSort]
+theorem isBvar_iff {e : VExpr} : e.isBvar = true ↔ ∃ k, e = .bvar k := by cases e <;> simp [isBvar]
+theorem isConst_iff {e : VExpr} : e.isConst = true ↔ ∃ I us, e = .const I us := by
+  cases e <;> simp [isConst]
+
+instance {e : VExpr} : Decidable (∃ u, e = .sort u) := decidable_of_iff _ isSort_iff
+instance {e : VExpr} : Decidable (∃ k, e = .bvar k) := decidable_of_iff _ isBvar_iff
+instance {e : VExpr} : Decidable (∃ I us, e = .const I us) := decidable_of_iff _ isConst_iff
+
+instance {o : Option VExpr} {P : VExpr → Prop} [DecidablePred P] :
+    Decidable (∃ A, o = some A ∧ P A) :=
+  match o with
+  | none => isFalse (by rintro ⟨_, h, _⟩; cases h)
+  | some a => decidable_of_iff (P a) ⟨fun h => ⟨a, rfl, h⟩, fun ⟨_, h, hp⟩ => Option.some.inj h ▸ hp⟩
+
+/-- The Π-body of `ty` is headed by a bound variable: the shape of a recursor's type and of
+a minor premise, whose targets are applications of a motive binder (for the recursor's own
+body `VExpr.RecShape` pins which motive; for a minor, `VExpr.MinorHeaded` pins only that the
+head is one of the motives). -/
+def RecHeaded (ty : VExpr) : Prop := ∃ k, ty.piBody.getAppFn = .bvar k
+
+/-- The Π-body of `ty` is headed by a constant: the shape of a constructor's type,
+whose target is a type-former application. -/
+def CtorHeaded (ty : VExpr) : Prop := ∃ I us, ty.piBody.getAppFn = .const I us
+
+instance {ty : VExpr} : Decidable ty.RecHeaded := decidable_of_iff _ isBvar_iff
+instance {ty : VExpr} : Decidable ty.CtorHeaded := decidable_of_iff _ isConst_iff
+
+/-- A bound variable is not a constant: recursors and constructors have distinct
+head shapes, so the same constant cannot be both. -/
+theorem RecHeaded.not_ctorHeaded {ty : VExpr} (h : ty.RecHeaded) : ¬ ty.CtorHeaded := by
+  rintro ⟨I, us, h'⟩; obtain ⟨k, h⟩ := h; rw [h] at h'; cases h'
+
+/-- The head constant of an application spine, if any. -/
+def headConst? (e : VExpr) : Option Name :=
+  match e.getAppFn with
+  | .const I _ => some I
+  | _ => none
+
+/-- The type former a motive `∀ a::α. P a → U` ranges over: the head constant of its last
+Π-binder. -/
+def motiveFormer? (A : VExpr) : Option Name := A.piBinders.getLast?.bind headConst?
+
+/-- A constant application whose last `nind` arguments are the `nind` innermost variables:
+the syntactic shape of a major premise `z : P a` under `nind` index binders (thesis §2.6.3);
+any constant passes, a bare `VEnv` having no notion of type former. -/
+def IndApp (A : VExpr) (nind : Nat) : Prop :=
+  ∃ I us args, A = (VExpr.const I us).mkApps (args ++ bvarsDesc 0 nind)
+
+theorem IndApp_iff {A : VExpr} {nind : Nat} :
+    A.IndApp nind ↔ (∃ I us, A.getAppFn = .const I us) ∧ bvarsDesc 0 nind <:+ A.getAppArgs := by
+  constructor
+  · rintro ⟨I, us, args, rfl⟩
+    exact ⟨⟨I, us, by rw [getAppFn_mkApps]; rfl⟩, ⟨args, by rw [getAppArgs_mkApps]; rfl⟩⟩
+  · rintro ⟨⟨I, us, h1⟩, args, h2⟩
+    refine ⟨I, us, args, ?_⟩
+    have h3 := mkApps_getAppFn_getAppArgs A
+    rw [h1, ← h2] at h3
+    exact h3.symm
+
+instance {A : VExpr} {nind : Nat} : Decidable (A.IndApp nind) :=
+  decidable_of_iff _ IndApp_iff.symm
+
+end VExpr

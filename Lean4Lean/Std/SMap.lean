@@ -32,6 +32,21 @@ theorem WF.find?_insert {s : SMap α β} (h : s.WF) :
   · exact Std.HashMap.getElem?_insert (α := α)
   · rw [h.map₂.find?_insert]; split <;> rfl
 
+/-- `WF.find?_insert` needs only the persistent stage's well-formedness: the `stage`
+and `disjoint` components play no role, so it holds along any chain of insertions
+(`insert_map₂` below), fresh or not. -/
+theorem find?_insert_of_map₂ [LawfulBEq α] [LawfulHashable α] {s : SMap α β} (h : s.map₂.WF) :
+    (s.insert k v).find? x = if k == x then some v else s.find? x := by
+  unfold insert; split <;> simp [find?]
+  · exact Std.HashMap.getElem?_insert (α := α)
+  · rw [h.find?_insert]; split <;> rfl
+
+/-- Any insertion preserves the persistent stage's well-formedness. -/
+theorem insert_map₂ {s : SMap α β} (h : s.map₂.WF) : (s.insert k v).map₂.WF := by
+  unfold insert; split
+  · exact h
+  · exact h.insert ..
+
 noncomputable def toList' [BEq α] [Hashable α] (m : SMap α β) :
     List (α × β) := m.map₂.toList' ++ m.map₁.toList
 

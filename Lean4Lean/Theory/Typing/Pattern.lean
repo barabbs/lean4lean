@@ -166,6 +166,24 @@ def Pattern.RHS.apply {p : Pattern} (m1 : List VLevel) (m2 : p.Path → VExpr) :
   | .var path => m2 path
   | .app f a => .app (f.apply m1 m2) (a.apply m1 m2)
 
+/-- The holes an `RHS` mentions. -/
+def Pattern.RHS.Uses {p : Pattern} : p.RHS → p.Path → Prop
+  | .fixed _ _, _ => False
+  | .var y, x => x = y
+  | .app f a, x => f.Uses x ∨ a.Uses x
+
+/-- `m2` instantiates the holes `r` uses generically over a context of length `n`: those
+holes are pairwise distinct variables below `n`, and every variable below `n` is one of
+them. The remaining holes are unconstrained (for an ι rule: the index arguments and the
+constructor's parameter arguments — arbitrary terms over the context, tied to the
+recursor's parameters by nothing here; identifying them from a well-typed redex would need
+injectivity of the type formers, open under `VEnv.WF` (`Injectivity.lean`) and false under
+`Ordered`, see `VEnv.PatWF`). -/
+def Pattern.RHS.Generic {p : Pattern} (r : p.RHS) (m2 : p.Path → VExpr) (n : Nat) : Prop :=
+  (∀ x, r.Uses x → ∃ i < n, m2 x = .bvar i) ∧
+  (∀ x y, r.Uses x → r.Uses y → m2 x = m2 y → x = y) ∧
+  (∀ i < n, ∃ x, r.Uses x ∧ m2 x = .bvar i)
+
 theorem Pattern.RHS.lift'_apply {p : Pattern} {m1 m2} (r : p.RHS) :
     (r.apply m1 m2).lift' ρ = (r.apply m1 fun x => (m2 x).lift' ρ) := by
   induction r <;> simp [*, apply, lift', ← instL_lift']
@@ -446,22 +464,166 @@ def Pattern.varN_pathOf {q : Pattern} : (k i : Nat) → i < k → (q.varN k).Pat
     if _hik : i = k then (none : Option (q.varN k).Path)
     else some (Pattern.varN_pathOf (q := q) k i (by omega))
 
+/-! ### The ι reduct and what it retains
+
+`SimplePattern.iotaRHS` builds the reduct of an ι rule as a pattern `RHS`: the closed
+rule template applied to the recursor's parameters, motives and minors and to the
+constructor's fields. `Pattern.RHS.spine`/`iotaCounts` read such a reduct back — the
+template and the numbers of recursor-side and constructor-side holes — which is all of
+the recursor's telescope the reduct retains: it depends on the motive/minor split only
+through `nm + nmin` (`iotaRHS_boundary_irrel`), exactly like `inductiveReduceRec` and
+the thesis's `rec_P C e p[b] (c b) ≡ e_c b v`. -/
+
+/-- Decompose an `RHS` of the form `fixed c` applied (left-nested) to `var` holes into
+the head `c` and its holes, first hole first; `none` for any other shape. -/
+def Pattern.RHS.spine {p : Pattern} : p.RHS → Option (VExpr × List p.Path)
+  | .fixed c _ => some (c, [])
+  | .app f (.var x) => do let (c, xs) ← f.spine; some (c, xs ++ [x])
+  | _ => none
+
+theorem Pattern.RHS.spine_foldl_var {p : Pattern} {c : VExpr} :
+    ∀ (l : List p.Path) (f : p.RHS) (xs : List p.Path), f.spine = some (c, xs) →
+      ((l.map Pattern.RHS.var).foldl Pattern.RHS.app f).spine = some (c, xs ++ l)
+  | [], f, xs, h => by simpa using h
+  | x :: l, f, xs, h => by
+    have := spine_foldl_var (c := c) l (f.app (.var x)) (xs ++ [x]) (by simp [spine, h])
+    rw [List.map_cons, List.foldl_cons, this]; simp
+
+/-- The data an ι reduct retains: its template and the numbers of holes into the
+recursor spine (`Sum.inl`) and into the constructor spine (`Sum.inr`). -/
+def Pattern.RHS.iotaCounts {r M c N} (R : (SimplePattern.iota r M c N).toPattern.RHS) :
+    Option (VExpr × Nat × Nat) := do
+  let (hd, xs) ← R.spine
+  some (hd, xs.countP Sum.isLeft, xs.countP Sum.isRight)
+
+/-- The holes of an ι reduct: the recursor spine's first `k` arguments (of `k + nind`:
+the parameters, motives and minors, `inductiveReduceRec`'s `[0, getFirstIndexIdx)`
+slice) followed by the constructor spine's last `nf` arguments (of `cnp + nf`: the
+fields). -/
+def SimplePattern.iotaPaths (r c : Name) (k nind cnp nf : Nat) :
+    List (SimplePattern.iota r (k+nind) c (cnp+nf)).toPattern.Path :=
+  (List.range k).pmap
+    (fun i (hi : i < k+nind) =>
+      (Sum.inl (Pattern.varN_pathOf (q := .const r) (k+nind) i hi) :
+        (SimplePattern.iota r (k+nind) c (cnp+nf)).toPattern.Path))
+    (fun _ hi => by have := List.mem_range.1 hi; omega) ++
+  (List.range nf).pmap
+    (fun j (hj : cnp+j < cnp+nf) =>
+      (Sum.inr (Pattern.varN_pathOf (q := .const c) (cnp+nf) (cnp+j) hj) :
+        (SimplePattern.iota r (k+nind) c (cnp+nf)).toPattern.Path))
+    (fun _ hj => by have := List.mem_range.1 hj; omega)
+
+theorem SimplePattern.iotaPaths_countP_isLeft (r c : Name) (k nind cnp nf : Nat) :
+    (iotaPaths r c k nind cnp nf).countP Sum.isLeft = k := by
+  unfold iotaPaths
+  rw [List.countP_append, List.countP_eq_length.2, List.countP_eq_zero.2, List.length_pmap,
+    List.length_range, Nat.add_zero]
+  · intro a ha; obtain ⟨_, _, rfl⟩ := List.mem_pmap.1 ha; exact Bool.false_ne_true
+  · intro a ha; obtain ⟨_, _, rfl⟩ := List.mem_pmap.1 ha; rfl
+
+theorem SimplePattern.iotaPaths_countP_isRight (r c : Name) (k nind cnp nf : Nat) :
+    (iotaPaths r c k nind cnp nf).countP Sum.isRight = nf := by
+  unfold iotaPaths
+  rw [List.countP_append, List.countP_eq_zero.2, List.countP_eq_length.2, List.length_pmap,
+    List.length_range, Nat.zero_add]
+  · intro a ha; obtain ⟨_, _, rfl⟩ := List.mem_pmap.1 ha; rfl
+  · intro a ha; obtain ⟨_, _, rfl⟩ := List.mem_pmap.1 ha; exact Bool.false_ne_true
+
+/-- The ι-reduction reduct at an undifferentiated parameters/motives/minors prefix `k`:
+the closed template `rhs` applied to the recursor spine's first `k` arguments and to
+the constructor spine's last `nf` arguments. This is the shape reduction sees; the
+split of `k` into parameters, motives and minors is typing information, recorded in
+the recursor's type (`VExpr.RecShape`). -/
+def SimplePattern.iotaRHS' (r c : Name) (k nind cnp nf : Nat) (rhs : VExpr) (hrhs : rhs.Closed) :
+    (SimplePattern.iota r (k+nind) c (cnp+nf)).toPattern.RHS :=
+  ((iotaPaths r c k nind cnp nf).map Pattern.RHS.var).foldl Pattern.RHS.app (.fixed rhs hrhs)
+
 /-- The ι-reduction reduct as a pattern `RHS`, for a recursor with `np` parameters,
-`nm` motives, `nmin` minors, `nind` indices, firing on a constructor with `nf`
-fields. Applies the closed rule template `rhs` to the recursor's
-parameters/motives/minors and the constructor's fields, matching the argument
-slicing of `inductiveReduceRec`. -/
-def SimplePattern.iotaRHS (r c : Name) (np nm nmin nind nf : Nat)
+`nm` motives, `nmin` minors, `nind` indices, firing on a constructor with `cnp`
+parameters and `nf` fields. Applies the closed rule template `rhs` to the recursor's
+parameters/motives/minors (spine positions `[0, np+nm+nmin)`) and the constructor's
+fields (spine positions `[cnp, cnp+nf)`), matching the argument slicing of
+`inductiveReduceRec` (which takes the *last* `nfields` constructor arguments). `cnp`
+is the constructor's own `numParams`: it differs from `np` for the auxiliary
+recursors of nested inductives. -/
+def SimplePattern.iotaRHS (r c : Name) (np nm nmin nind cnp nf : Nat)
     (rhs : VExpr) (hrhs : rhs.Closed) :
-    (SimplePattern.iota r (np+nm+nmin+nind) c (np+nf)).toPattern.RHS :=
-  let recHoles : List (SimplePattern.iota r (np+nm+nmin+nind) c (np+nf)).toPattern.RHS :=
-    (List.range (np+nm+nmin)).pmap
-      (fun i (hi : i < np+nm+nmin+nind) =>
-        Pattern.RHS.var (Sum.inl (Pattern.varN_pathOf (q := .const r) (np+nm+nmin+nind) i hi)))
-      (fun _ hi => by have := List.mem_range.1 hi; omega)
-  let ctorHoles : List (SimplePattern.iota r (np+nm+nmin+nind) c (np+nf)).toPattern.RHS :=
-    (List.range nf).pmap
-      (fun j (hj : np+j < np+nf) =>
-        Pattern.RHS.var (Sum.inr (Pattern.varN_pathOf (q := .const c) (np+nf) (np+j) hj)))
-      (fun _ hj => by have := List.mem_range.1 hj; omega)
-  (recHoles ++ ctorHoles).foldl Pattern.RHS.app (Pattern.RHS.fixed rhs hrhs)
+    (SimplePattern.iota r (np+nm+nmin+nind) c (cnp+nf)).toPattern.RHS :=
+  SimplePattern.iotaRHS' r c (np+nm+nmin) nind cnp nf rhs hrhs
+
+theorem SimplePattern.iotaRHS'_spine (r c : Name) (k nind cnp nf : Nat) (rhs : VExpr)
+    (hrhs : rhs.Closed) :
+    (iotaRHS' r c k nind cnp nf rhs hrhs).spine = some (rhs, iotaPaths r c k nind cnp nf) :=
+  Pattern.RHS.spine_foldl_var _ _ [] rfl
+
+theorem SimplePattern.iotaRHS'_iotaCounts (r c : Name) (k nind cnp nf : Nat) (rhs : VExpr)
+    (hrhs : rhs.Closed) :
+    (iotaRHS' r c k nind cnp nf rhs hrhs).iotaCounts = some (rhs, k, nf) := by
+  simp [Pattern.RHS.iotaCounts, iotaRHS'_spine, iotaPaths_countP_isLeft, iotaPaths_countP_isRight]
+
+/-- An ι reduct retains its template, the size `np + nm + nmin` of its recursor prefix
+and the field count `nf` — and nothing else of the telescope split. -/
+theorem SimplePattern.iotaRHS_iotaCounts (r c : Name) (np nm nmin nind cnp nf : Nat)
+    (rhs : VExpr) (hrhs : rhs.Closed) :
+    (iotaRHS r c np nm nmin nind cnp nf rhs hrhs).iotaCounts = some (rhs, np+nm+nmin, nf) :=
+  iotaRHS'_iotaCounts ..
+
+/-- An ι reduct depends on the motive/minor split only through `nm + nmin`: the
+boundary between motives and minors is not reduction data (it is recovered from the
+recursor's type instead). -/
+theorem SimplePattern.iotaRHS_boundary_irrel {r c : Name} {np nm nmin nm' nmin' nind cnp nf : Nat}
+    {rhs : VExpr} (h : nm + nmin = nm' + nmin') (h₁ h₂ : rhs.Closed) :
+    HEq (iotaRHS r c np nm nmin nind cnp nf rhs h₁)
+      (iotaRHS r c np nm' nmin' nind cnp nf rhs h₂) := by
+  have hk : np + nm + nmin = np + nm' + nmin' := by omega
+  unfold iotaRHS
+  generalize np + nm + nmin = k₁ at hk ⊢
+  generalize np + nm' + nmin' = k₂ at hk ⊢
+  subst hk; rfl
+
+/-! ### Template-headed reducts
+
+The reduct of an ι rule is a closed λ-template applied to holes (`SimplePattern.iotaRHS`).
+`Pattern.RHS.TemplateHeaded` pins its head shape — a fixed closed `lam` applied to any
+arguments, the arguments themselves unconstrained — the computational half of a well-formed
+reduction rule (`VEnv.PatWF`): under every instantiation such a reduct is an application or
+an abstraction, its head fixed by the rule (`apply_lam_or_app`) — in particular never a sort
+or a Π-type (`apply_ne_sort`, `apply_ne_forallE`). -/
+
+/-- An `RHS` that is a λ-abstraction template applied to (any number of) arguments. -/
+inductive Pattern.RHS.TemplateHeaded {p : Pattern} : p.RHS → Prop
+  | lam {A b h} : TemplateHeaded (.fixed (.lam A b) h)
+  | app {f a} : TemplateHeaded f → TemplateHeaded (.app f a)
+
+theorem Pattern.RHS.TemplateHeaded.foldl_app {p : Pattern} {f : p.RHS}
+    (h : f.TemplateHeaded) : ∀ l : List p.RHS, (l.foldl Pattern.RHS.app f).TemplateHeaded
+  | [] => h
+  | _ :: l => TemplateHeaded.foldl_app h.app l
+
+/-- Every instance of a template-headed reduct is an application or an abstraction. -/
+theorem Pattern.RHS.TemplateHeaded.apply_lam_or_app {p : Pattern} {r : p.RHS}
+    (h : r.TemplateHeaded) (m1 : List VLevel) (m2 : p.Path → VExpr) :
+    (∃ A b, r.apply m1 m2 = .lam A b) ∨ ∃ f a, r.apply m1 m2 = .app f a := by
+  induction h with
+  | lam => exact .inl ⟨_, _, rfl⟩
+  | app _ _ => exact .inr ⟨_, _, rfl⟩
+
+theorem Pattern.RHS.TemplateHeaded.apply_ne_forallE {p : Pattern} {r : p.RHS}
+    (h : r.TemplateHeaded) {m1 m2 A B} : r.apply m1 m2 ≠ .forallE A B := by
+  rcases h.apply_lam_or_app m1 m2 with ⟨_, _, e⟩ | ⟨_, _, e⟩ <;> rw [e] <;> nofun
+
+theorem Pattern.RHS.TemplateHeaded.apply_ne_sort {p : Pattern} {r : p.RHS}
+    (h : r.TemplateHeaded) {m1 m2 u} : r.apply m1 m2 ≠ .sort u := by
+  rcases h.apply_lam_or_app m1 m2 with ⟨_, _, e⟩ | ⟨_, _, e⟩ <;> rw [e] <;> nofun
+
+/-- An ι reduct over a λ-template is template-headed. -/
+theorem SimplePattern.iotaRHS'_templateHeaded {r c : Name} {k nind cnp nf : Nat} {A b : VExpr}
+    (h : (VExpr.lam A b).Closed) :
+    (iotaRHS' r c k nind cnp nf (.lam A b) h).TemplateHeaded :=
+  Pattern.RHS.TemplateHeaded.foldl_app .lam _
+
+theorem SimplePattern.iotaRHS_templateHeaded {r c : Name} {np nm nmin nind cnp nf : Nat}
+    {rhs : VExpr} (hl : ∃ A b, rhs = .lam A b) (h : rhs.Closed) :
+    (iotaRHS r c np nm nmin nind cnp nf rhs h).TemplateHeaded := by
+  obtain ⟨A, b, rfl⟩ := hl
+  exact iotaRHS'_templateHeaded h

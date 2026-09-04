@@ -83,8 +83,12 @@ inductive IsDefEqStrong : List VExpr → VExpr → VExpr → VExpr → Prop wher
     Γ ⊢ df.lhs.instL ls : df.type.instL ls →
     Γ ⊢ df.rhs.instL ls : df.type.instL ls →
     Γ ⊢ df.lhs.instL ls ≡ df.rhs.instL ls : df.type.instL ls
+  /-- As `IsDefEq.pat`, annotated with the typing of the reduct (as `beta` carries
+  `e.inst e'` and `extra` both sides of the axiom): the strong system records what
+  `IsDefEq.strong'` has to establish, subject reduction of the rule (`VEnv.PatStrong`). -/
   | pat {p : Pattern} {r : p.RHS × p.Check} {m1 m2 chk} :
     env.pats p r → p.Matches e m1 m2 → Γ ⊢ e : A →
+    Γ ⊢ r.1.apply m1 m2 : A →
     r.2.Realizes m1 m2 chk →
     (∀ t ∈ chk, Γ ⊢ t.1 ≡ t.2.1 : t.2.2) →
     Γ ⊢ e ≡ r.1.apply m1 m2 : A
@@ -186,9 +190,10 @@ theorem IsDefEqStrong.weakN (W : Ctx.LiftN n k Γ Γ') (H : env.IsDefEqStrong U 
       hA2.instL.liftN_eq (Nat.zero_le _),
       hA3.instL.liftN_eq (Nat.zero_le _)] at ih4 ih5 ⊢
     exact IsDefEqStrong.extra h1 h2 h3 h4 h5 h6 h7 (ih4 W) (ih5 W)
-  | pat hp hm _ hr _ ihe ihall =>
-    rw [Pattern.RHS.liftN_apply]
-    refine .pat hp (Pattern.matches_liftN.2 ⟨_, hm, fun _ => rfl⟩) (ihe W) hr.map_liftN ?_
+  | pat hp hm _ _ hr _ ihe ihred ihall =>
+    have ihred := ihred W
+    rw [Pattern.RHS.liftN_apply] at ihred ⊢
+    refine .pat hp (Pattern.matches_liftN.2 ⟨_, hm, fun _ => rfl⟩) (ihe W) ihred hr.map_liftN ?_
     intro t ht
     obtain ⟨t0, ht0, rfl⟩ := List.mem_map.1 ht
     exact ihall t0 ht0 W
@@ -208,7 +213,7 @@ theorem IsDefEqStrong.defeq (H : IsDefEqStrong env U Γ e1 e2 A) : env.IsDefEq U
   | eta _ _ _ _ _ _ _ _ _ _ _ ih => exact .eta ih
   | proofIrrel _ _ _ ih1 ih2 ih3 => exact .proofIrrel ih1 ih2 ih3
   | extra h1 h2 h3 => exact .extra h1 h2 h3
-  | pat hp hm _ hr _ ihe ihall => exact .pat hp hm ihe hr ihall
+  | pat hp hm _ _ hr _ ihe _ ihall => exact .pat hp hm ihe hr ihall
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem IsDefEqStrong.mono
@@ -229,7 +234,7 @@ theorem IsDefEqStrong.mono
   | proofIrrel _ _ _ ih1 ih2 ih3 => exact .proofIrrel ih1 ih2 ih3
   | extra h1 h2 h3 h4 _ _ _ _ _ ih1 ih2 ih3 ih4 ih5 =>
     exact .extra (henv.2 h1) h2 h3 h4 ih1 ih2 ih3 ih4 ih5
-  | pat hp hm _ hr _ ihe ihall => exact .pat (henv.3 hp) hm ihe hr ihall
+  | pat hp hm _ _ hr _ ihe ihred ihall => exact .pat (henv.3 hp) hm ihe ihred hr ihall
 
 variable! (henv : Ordered env) in
 theorem IsDefEqStrong.weak0 (H : env.IsDefEqStrong U [] e1 e2 A) :
@@ -270,9 +275,7 @@ theorem EqUpToLevels.instL (H : env.IsDefEqStrong U' Γ e1 e2 A) :
   | defeqDF _ _ _ _ ih => exact ih
   | beta _ _ _ _ _ _ _ _ ih1 _ ih3 ih4 _ ih6 => exact ⟨.app (.lam ih1.1 ih3.1) ih4.1, ih6.2⟩
   | eta _ _ _ _ _ _ _ _ ih1 _ _ ih4 ih5 => exact ⟨.lam ih1.1 (.app ih5.1 .bvar), ih4.1⟩
-  -- IOTA-TODO(soundness): EqUpToLevels of a pat-reduction reduct; needs an
-  -- EqUpToLevels congruence for `RHS.apply`.
-  | pat _ _ _ _ _ ihe _ => exact ⟨ihe.1, sorry⟩
+  | pat _ _ _ _ _ _ ihe ihred _ => exact ⟨ihe.1, ihred.1⟩
 
 
 variable! {env : VEnv} (W : OnCtx Γ fun _ A => A.LevelWF U) in
@@ -349,9 +352,9 @@ theorem IsDefEqStrong.instL (H : env.IsDefEqStrong U Γ e1 e2 A) :
     simp [VExpr.instL, VExpr.instL_instL] at ih1 ih2 ih3 ih4 ih5 ⊢
     exact .extra h1 (by simp [VLevel.WF.inst hls]) (by simp [h3])
       (.inst hls) ih1 ih2 ih3 ih4 ih5
-  | pat hp hm _ hr _ ihe ihall =>
-    rw [Pattern.RHS.instL_apply]
-    refine .pat hp (Pattern.matches_instL hm) ihe hr.map_instL ?_
+  | pat hp hm _ _ hr _ ihe ihred ihall =>
+    rw [Pattern.RHS.instL_apply] at ihred ⊢
+    refine .pat hp (Pattern.matches_instL hm) ihe ihred hr.map_instL ?_
     intro t ht
     obtain ⟨t0, ht0, rfl⟩ := List.mem_map.1 ht
     exact ihall t0 ht0
@@ -440,9 +443,10 @@ theorem IsDefEqStrong.instN (W : Ctx.InstN Γ₀ e₀ A₀ k Γ₁ Γ) (H : env.
       hA2.instL.instN_eq (Nat.zero_le _),
       hA3.instL.instN_eq (Nat.zero_le _)] at ih4 ih5 ⊢
     exact .extra h1 h2 h3 h4 h5 h6 h7 (ih4 W hΓ) (ih5 W hΓ)
-  | pat hp hm _ hr _ ihe ihall =>
-    rw [Pattern.RHS.instN_apply]
-    refine .pat hp (Pattern.matches_instN hm) (ihe W hΓ) hr.map_instN ?_
+  | pat hp hm _ _ hr _ ihe ihred ihall =>
+    have ihred := ihred W hΓ
+    rw [Pattern.RHS.instN_apply] at ihred ⊢
+    refine .pat hp (Pattern.matches_instN hm) (ihe W hΓ) ihred hr.map_instN ?_
     intro t ht
     obtain ⟨t0, ht0, rfl⟩ := List.mem_map.1 ht
     exact ihall t0 ht0 W hΓ
@@ -504,11 +508,10 @@ theorem IsDefEqStrong.forallE_inv' (hΓ : CtxStrong env U Γ)
     have C2 := (A2.instL h2).defeq.closedN henv ⟨⟨⟩, C1⟩
     rw [C1.liftN_eq (Nat.zero_le _), C2.liftN_eq (by exact Nat.le_refl _)] at this
     simpa [liftN]
-  | pat _ _ _ _ _ ihe _ =>
+  | pat _ _ _ _ _ _ ihe ihred _ =>
     obtain eq | eq := eq
     · exact ihe hΓ (.inl eq)
-    -- IOTA-TODO(soundness): forallE-inversion through a pat (ι-)reduction reduct
-    · exact sorry
+    · exact ihred hΓ (.inl eq)
   | _ => nomatch eq
 
 variable! (henv : Ordered env) (envIH : env.OnTypes (EnvStrong env)) in
@@ -535,7 +538,7 @@ theorem IsDefEqStrong.isType' (hΓ : CtxStrong env U Γ) (H : env.IsDefEqStrong 
   | extra h1 h2 =>
     have ⟨_, h⟩ := (envIH.2 h1).2.2.1
     exact ⟨_, (h.instL h2).weak0 henv⟩
-  | pat _ _ _ _ _ ihe _ => exact ihe hΓ
+  | pat _ _ _ _ _ _ ihe _ _ => exact ihe hΓ
 
 theorem IsDefEqStrong.instDF
     (henv : Ordered env) (hΓ : CtxStrong env U Γ) (hu : u.WF U) (hv : v.WF U)
@@ -641,11 +644,43 @@ theorem EqUpToLevels.defeq (H : env.IsDefEqStrong U Γ e1 e2 A)
     have c2 := ih2 trivial H2 (EqUpToLevels.refl (by trivial) h7).2
     refine .weak0 henv <| c1.trans <| .trans ?_ c2.symm
     exact .extra h1 h2 h3 h4 h5 h6 h7 h6 h7
-  -- IOTA-TODO(soundness): EqUpToLevels.defeq for a pat-reduction; reconstruct a
-  -- pat derivation for the level-variant endpoints of the reduct.
-  | pat _ _ _ _ _ _ _ => exact sorry
+  | pat hp hm he hred hr hall ihe ihred _ =>
+    refine (ihe W H1 (EqUpToLevels.refl W.levelWF he).1).trans <|
+      (IsDefEqStrong.pat hp hm he hred hr hall).trans <|
+      ihred W (EqUpToLevels.refl W.levelWF hred).1 H2
 
-variable! (henv : Ordered env) (envIH : env.OnTypes (EnvStrong env)) in
+/-- Subject reduction of a reduction rule in the strong system: every strongly typed
+instance of `(p, r)` — a redex matching `p` whose side conditions hold — has a strongly
+typed reduct at the same type. This is the annotation `IsDefEqStrong.pat` carries and that
+`IsDefEq.strong'` must supply. -/
+def PatStrong (env : VEnv) (p : Pattern) (r : p.RHS × p.Check) : Prop :=
+  ∀ {U Γ e A m1 m2 chk}, CtxStrong env U Γ → p.Matches e m1 m2 →
+    env.IsDefEqStrong U Γ e e A → r.2.Realizes m1 m2 chk →
+    (∀ t ∈ chk, env.IsDefEqStrong U Γ t.1 t.2.1 t.2.2) →
+    env.IsDefEqStrong U Γ (r.1.apply m1 m2) (r.1.apply m1 m2) A
+
+/-- Every reduction rule registered in `env`, or in any `Ordered` sub-environment of it,
+subject-reduces there (`PatStrong`). The sub-environments are those `Ordered.induction`
+passes through when it builds `OnTypes env (EnvStrong env)` constant by constant
+(`OrderedStrong.strong`), so the property must hold below `env` too — which makes it stronger
+than subject reduction for `env` alone, by construction. It is not a consequence of `Ordered`
+— `Ordered.defeq` admits definitional axioms that break subject reduction of ι rules (see
+`VEnv.PatWF`) — but holds for well-formed environments: `VEnv.WF.patsStrong`. -/
+def PatsStrong (env : VEnv) : Prop :=
+  ∀ ⦃env₀ : VEnv⦄, env₀ ≤ env → Ordered env₀ → ∀ {p : Pattern} {r : p.RHS × p.Check},
+    env₀.pats p r → PatStrong env₀ p r
+
+/-- The environment hypotheses of the strong system: `Ordered`, and subject reduction of the
+registered reduction rules (`PatsStrong`). Every `IsDefEq` derivation over such an environment
+strengthens (`IsDefEq.strong`). A well-formed environment is one (`VEnv.WF.orderedStrong`). -/
+structure OrderedStrong (env : VEnv) : Prop where
+  ordered : Ordered env
+  pats : PatsStrong env
+
+instance : CoeOut (OrderedStrong env) env.Ordered := ⟨(·.ordered)⟩
+
+variable! (henv : Ordered env) (envIH : env.OnTypes (EnvStrong env))
+  (hpats : ∀ {p : Pattern} {r : p.RHS × p.Check}, env.pats p r → PatStrong env p r) in
 theorem IsDefEq.strong' (hΓ : CtxStrong env U Γ)
     (H : env.IsDefEq U Γ e1 e2 A) : env.IsDefEqStrong U Γ e1 e2 A := by
   have hctx {Γ} (H : OnCtx Γ fun Γ A => ∃ u, env.IsDefEqStrong U Γ A A (.sort u)) :
@@ -703,41 +738,56 @@ theorem IsDefEq.strong' (hΓ : CtxStrong env U Γ)
     exact .extra h1 h2 h3 (.inst h2) (ht.instL h2)
       (hl.instL h2) (hr.instL h2) ((hl.instL h2).weak0 henv) ((hr.instL h2).weak0 henv)
   | pat hp hm _ hr _ ihe ihall =>
-    exact .pat hp hm (ihe hΓ) hr fun t ht => ihall t ht hΓ
+    have he := ihe hΓ
+    have hall := fun t ht => ihall t ht hΓ
+    exact .pat hp hm he (hpats hp hΓ hm he hr hall) hr hall
 
 theorem CtxStrong.strong' (henv : Ordered env) (envIH : env.OnTypes (EnvStrong env))
+    (hpats : ∀ {p : Pattern} {r : p.RHS × p.Check}, env.pats p r → PatStrong env p r)
     (hΓ : OnCtx Γ (env.IsType U)) : CtxStrong env U Γ := by
   induction Γ with
   | nil => trivial
-  | cons _ _ ih => let ⟨hΓ, _, hA⟩ := hΓ; exact ⟨ih hΓ, _, hA.strong' henv envIH (ih hΓ)⟩
+  | cons _ _ ih =>
+    let ⟨hΓ, _, hA⟩ := hΓ; exact ⟨ih hΓ, _, hA.strong' henv envIH hpats (ih hΓ)⟩
 
-theorem Ordered.strong (henv : Ordered env) : OnTypes env (EnvStrong env) := by
-  refine henv.induction _ (fun le ⟨h1, ⟨_, h2⟩, h3, h4⟩ => ?_) (fun henv IH H => ?_)
-  · refine ⟨h1.mono le, ⟨_, h2.mono le⟩, ?_, ?_⟩
+/-- Every constant and definitional axiom of an `OrderedStrong` environment is strongly
+typed. By `Ordered.induction`, with the motive asking for `EnvStrong` of each sub-environment
+the induction passes through (the `env₀ ≤ env` guard is what lets `PatsStrong env` supply
+subject reduction there). -/
+theorem OrderedStrong.strong (henv : OrderedStrong env) : OnTypes env (EnvStrong env) := by
+  have := henv.ordered.induction (fun env₀ U e A => env₀ ≤ env → EnvStrong env₀ U e A)
+    (fun le h hle => ?_) (fun {env₀ U e A} hord IH H hle => ?_)
+  · exact this.mono .rfl fun h => h .rfl
+  · obtain ⟨h1, ⟨_, h2⟩, h3, h4⟩ := h (le.trans hle)
+    refine ⟨h1.mono le, ⟨_, h2.mono le⟩, ?_, ?_⟩
     · exact fun _ _ _ h4 h5 h6 => (h3 _ _ _ h4 h5 h6).mono le
     · exact fun _ _ eq => let ⟨⟨_, h4⟩, ⟨_, h5⟩⟩ := h4 _ _ eq; ⟨⟨_, h4.mono le⟩, ⟨_, h5.mono le⟩⟩
-  · have H' := H.strong' henv IH (Γ := []) ⟨⟩
-    refine ⟨H', H'.isType' henv IH ⟨⟩, fun _ _ _ h1 h2 h3 => ?_, ?_⟩
-    · exact EqUpToLevels.defeq henv IH (by trivial) (.instL h1 H')
+  · have IH : OnTypes env₀ (EnvStrong env₀) := IH.mono .rfl fun h => h hle
+    have hpats : ∀ {p : Pattern} {r : p.RHS × p.Check}, env₀.pats p r → PatStrong env₀ p r :=
+      henv.pats hle hord
+    have H' := H.strong' hord IH hpats (Γ := []) ⟨⟩
+    refine ⟨H', H'.isType' hord IH ⟨⟩, fun _ _ _ h1 h2 h3 => ?_, ?_⟩
+    · exact EqUpToLevels.defeq hord IH (by trivial) (.instL h1 H')
         (EqUpToLevels.refl (by trivial) (.instL h1 H')).1 (EqUpToLevels.instL h1 h2 h3 H').1
-    · exact fun _ _ eq => H'.forallE_inv' henv IH ⟨⟩ (.inl eq)
+    · exact fun _ _ eq => H'.forallE_inv' hord IH ⟨⟩ (.inl eq)
 
-theorem CtxStrong.strong (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) : CtxStrong env U Γ :=
-  .strong' henv henv.strong hΓ
+theorem CtxStrong.strong (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) :
+    CtxStrong env U Γ :=
+  .strong' henv henv.strong (henv.pats .rfl henv) hΓ
 
-theorem IsDefEq.strong (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U))
+theorem IsDefEq.strong (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U))
     (H : env.IsDefEq U Γ e1 e2 A) : env.IsDefEqStrong U Γ e1 e2 A :=
-  H.strong' henv henv.strong (.strong henv hΓ)
+  H.strong' henv henv.strong (henv.pats .rfl henv) (.strong henv hΓ)
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem IsDefEq.eqUpToLevels (H : env.IsDefEq U Γ e1 e2 A)
     (H1 : EqUpToLevels U e2 e2') : env.IsDefEq U Γ e1 e2' A :=
-  have W := .strong' henv henv.strong hΓ
+  have W := .strong henv hΓ
   have := H.strong henv hΓ
   (EqUpToLevels.defeq henv henv.strong W (H.strong henv hΓ)
     (EqUpToLevels.refl W.levelWF this).1 H1).defeq
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U')) {ls ls' : List VLevel}
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U')) {ls ls' : List VLevel}
     (hls : ∀ l ∈ ls, l.WF U) (hls' : ∀ l ∈ ls', l.WF U) (heq : List.Forall₂ (· ≈ ·) ls ls') in
 theorem IsDefEq.instL_r (H : env.IsDefEq U' Γ e1 e2 A) :
     env.IsDefEq U (Γ.map (VExpr.instL ls)) (e1.instL ls) (e2.instL ls') (A.instL ls) :=
@@ -783,9 +833,7 @@ theorem IsDefEqStrong.hasType' {env : VEnv}
     refine ⟨.base <| .lam h1 h2 ih1.1 ih2.1 (.base this) ?_, ih4.1⟩
     exact .base <| .forallE h1 h2 ih1.1 ih2.1
   | extra h1 h2 h3 h4 h5 h6 h7 _ _ _ _ _ ih4 ih5 => exact ⟨ih4.1, ih5.1⟩
-  | pat _ _ _ _ _ ihe _ =>
-    -- IOTA-TODO(soundness): strong (HasTypeStrong) typing of a pat-reduction reduct
-    exact ⟨ihe.1, sorry⟩
+  | pat _ _ _ _ _ _ ihe ihred _ => exact ⟨ihe.1, ihred.1⟩
 
 theorem HasTypeStrong.refl {env : VEnv}
     (H : env.HasTypeStrong U Γ e A b) : env.IsDefEqStrong U Γ e e A := by
@@ -807,7 +855,7 @@ theorem HasTypeStrong.refl {env : VEnv}
 theorem HasTypeStrong.hasType {env : VEnv}
     (H : env.HasTypeStrong U Γ e A b) :  env.HasType U Γ e A := H.refl.defeq.hasType.1
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem HasType.app_inv (H : env.HasType U Γ (.app f a) V) :
     ∃ A B, env.HasType U Γ f (.forallE A B) ∧ env.HasType U Γ a A := by
   replace H := (H.strong henv hΓ).hasType'.1
@@ -817,12 +865,12 @@ theorem HasType.app_inv (H : env.HasType U Γ (.app f a) V) :
   | base H =>
     subst eq'; let .app _ _ _ _ _ h1 h2 _ := H; exact ⟨_, _, h1.hasType, h2.hasType⟩
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem _root_.Lean4Lean.VExpr.WF.app_inv (H : VExpr.WF env U Γ (.app f a)) :
     ∃ A B, env.HasType U Γ f (.forallE A B) ∧ env.HasType U Γ a A :=
   let ⟨_, H⟩ := H; HasType.app_inv henv hΓ H
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem HasType.lam_inv (H : env.HasType U Γ (.lam A body) V) :
     env.IsType U Γ A ∧ body.WF env U (A::Γ) := by
   replace H := (H.strong henv hΓ).hasType'.1
@@ -831,12 +879,12 @@ theorem HasType.lam_inv (H : env.HasType U Γ (.lam A body) V) :
   | defeq _ _ _ _ _ _ _ ih => exact ih hΓ rfl eq'
   | base H => subst eq'; let .lam _ _ h1 _ h2 _ := H; exact ⟨⟨_, h1.hasType⟩, _, h2.hasType⟩
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem _root_.Lean4Lean.VExpr.WF.lam_inv (H : VExpr.WF env U Γ (.lam A body)) :
     env.IsType U Γ A ∧ body.WF env U (A::Γ) :=
   let ⟨_, H⟩ := H; HasType.lam_inv henv hΓ H
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem HasType.const_inv (H : env.HasType U Γ (.const c ls) V) :
     ∃ ci, env.constants c = some ci ∧ (∀ l ∈ ls, l.WF U) ∧ ls.length = ci.uvars := by
   replace H := (H.strong henv hΓ).hasType'.1
@@ -845,12 +893,12 @@ theorem HasType.const_inv (H : env.HasType U Γ (.const c ls) V) :
   | defeq _ _ _ _ _ _ _ ih => exact ih hΓ rfl eq'
   | base H => subst eq'; let .const h1 h2 h3 .. := H; exact ⟨_, h1, h2, h3⟩
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem _root_.Lean4Lean.VExpr.WF.const_inv (H : VExpr.WF env U Γ (.const c ls)) :
     ∃ ci, env.constants c = some ci ∧ (∀ l ∈ ls, l.WF U) ∧ ls.length = ci.uvars :=
   let ⟨_, H⟩ := H; HasType.const_inv henv hΓ H
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem HasType.bvar_inv (H : env.HasType U Γ (.bvar i) V) : ∃ A, Lookup Γ i A := by
   replace H := (H.strong henv hΓ).hasType'.1
   generalize eq : true = b, eq' : VExpr.bvar i = e' at H

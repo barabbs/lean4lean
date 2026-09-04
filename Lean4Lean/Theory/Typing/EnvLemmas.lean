@@ -104,3 +104,9 @@ theorem VEnv.WF.ordered : WF env → Ordered env
     | induct h1 h2 => exact addInduct_WF ih h1 h2
 
 instance : CoeOut (VEnv.WF env) env.Ordered := ⟨(·.ordered)⟩
+
+/-- A well-formed environment satisfies the hypotheses of the strong system: `Ordered`, and
+subject reduction of its ι rules (`VEnv.WF.patsStrong`, the deferred ι obligation). -/
+theorem VEnv.WF.orderedStrong (H : WF env) : OrderedStrong env := ⟨H.ordered, H.patsStrong⟩
+
+instance : CoeOut (VEnv.WF env) env.OrderedStrong := ⟨(·.orderedStrong)⟩
