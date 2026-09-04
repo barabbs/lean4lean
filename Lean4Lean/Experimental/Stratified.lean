@@ -71,7 +71,7 @@ inductive IsDefEq1 : List VExpr → VExpr → VExpr → VExpr → Prop where
 
 end
 
-variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U)) in
+variable! (henv : OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
 theorem IsDefEq.induction1
     (defEq : List VExpr → VExpr → VExpr → VExpr → Prop)
     (hasType : List VExpr → VExpr → VExpr → Prop)
@@ -113,7 +113,8 @@ theorem IsDefEq.induction1
     exact ⟨ih2.1, ih3.1, .proofIrrel (hty ih1.1) (hty ih2.1) (hty ih3.1)⟩
   | extra h1 h2 h3 _ _ _ _ _ _ _ _ _ ihl' ihr' =>
     exact ⟨ihl'.1, ihr'.1, .extra h1 h2 h3⟩
-  | pat => sorry -- `pat` (ι) case; deferred as in the `Theory` copies
+  | pat => sorry -- `pat` (ι) case: open, pre-existing at eddf009; the `Theory` analogues
+    -- (`Strong.lean`, `ChurchRosser.lean`) are closed, see `Theory/Typing/InductiveLemmas.lean`
 
 variable! {env : VEnv}
   {defEq : List VExpr → VExpr → VExpr → VExpr → Prop}

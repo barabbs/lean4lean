@@ -64,9 +64,6 @@ theorem VLCtx.WF.fvwf : ∀ {Δ}, VLCtx.WF env U Δ → Δ.FVWF
   | [], h => h
   | _ :: _, ⟨h1, h2, _⟩ => ⟨h1.fvwf, h2⟩
 
-/-- Left fold of applications: `f.mkApps [a₀, …, aₙ] = f a₀ … aₙ`. -/
-def VExpr.mkApps (f : VExpr) : List VExpr → VExpr := List.foldl .app f
-
 /-- The λ-telescope over field types `Fs` that selects its `i`-th binder:
 `fun (f₀ : Fs[0]) … (f_{n-1} : Fs[n-1]) => fᵢ`. In de Bruijn form the `i`-th
 field (numbered from the outside) sits at index `Fs.length - 1 - i`. This is the

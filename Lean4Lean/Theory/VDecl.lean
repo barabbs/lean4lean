@@ -15,16 +15,22 @@ structure VInductiveType extends VConstVal where
   ctors : List VConstVal
 
 /-- One recursor computation (ι) rule, mirroring `Lean.RecursorRule`: firing on
-constructor `ctor` (with `nfields` non-parameter arguments) rewrites to the
-closed reduct template `rhs`. -/
+constructor `ctor` (with `ctorParams` parameters and `nfields` non-parameter
+arguments) rewrites to the closed reduct template `rhs`. -/
 structure VRecRule where
   ctor : Name
+  /-- `ConstructorVal.numParams` of `ctor`. Equals the recursor's `numParams` except
+  for the auxiliary recursors of nested inductives (`Tree.rec_1` fires on `List.cons`,
+  whose one parameter is not a parameter of `Tree`). The ι key's constructor spine
+  has `ctorParams + nfields` arguments. -/
+  ctorParams : Nat
   nfields : Nat
   rhs : VExpr
 
 /-- A recursor, mirroring `Lean.RecursorVal`: the `num*` fields record the
-telescope segmentation, `k` flags K-like reduction, and `rules` holds one ι rule
-per constructor. -/
+telescope segmentation, `k` flags K-like reduction (recorded, unused by the theory), and
+`rules` holds its ι rules — one per constructor of the eliminated type former when that
+type former is in the block (`VInductDecl.WF.rules_total`, `rules_nodup`). -/
 structure VRecursor extends VConstVal where
   all : List Name
   numParams : Nat

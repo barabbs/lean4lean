@@ -1868,7 +1868,7 @@ theorem TrExprS.boolLit (henv : env.HasPrimitives) (H : env.contains ``Bool) (b 
 
 theorem FVarsIn.boolLit {b : Bool} : FVarsIn P (toExpr b) := by cases b <;> exact nofun
 
-theorem VExpr.WF.boolLit_has_type (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem VExpr.WF.boolLit_has_type (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (hΓ : OnCtx Γ (env.IsType U)) (H : VExpr.WF env U Γ (.boolLit b)) : env.contains ``Bool := by
   suffices env.HasType U Γ (.boolLit b) .bool by
     have ⟨_, H⟩ := this.isType wf hΓ
@@ -1881,10 +1881,10 @@ theorem VExpr.WF.boolLit_has_type (wf : env.Ordered) (henv : env.HasPrimitives)
 theorem TrExprS.lit_has_type (H : TrExprS env Us Δ (.lit l) e') : env.ContainsLits l :=
   let .lit H _ := H; H
 
-theorem TrExprS.nat_of_natZero (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem TrExprS.nat_of_natZero (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (H : TrExprS env Us Δ .natZero e') : env.contains ``Nat := by
   let .const H .. := H
-  have ⟨_, H⟩ := henv.natZero H ▸ wf.constWF H
+  have ⟨_, H⟩ := henv.natZero H ▸ wf.ordered.constWF H
   have ⟨_, H, _⟩ := H.const_inv wf (by trivial)
   exact ⟨_, H⟩
 
@@ -1931,15 +1931,15 @@ theorem TrExprS.charOfNat (henv : env.HasPrimitives) (H : env.contains ``Char.of
   cases henv.charOfNat H
   exact ⟨.const H rfl rfl, .const H nofun rfl⟩
 
-theorem VEnv.HasPrimitives.nat_of_charOfNat (wf : Ordered env) (henv : env.HasPrimitives)
+theorem VEnv.HasPrimitives.nat_of_charOfNat (wf : OrderedStrong env) (henv : env.HasPrimitives)
     (H : env.contains ``Char.ofNat) : env.contains ``Nat := by
   let ⟨_, H⟩ := H
-  have ⟨_, H⟩ := wf.constWF (henv.charOfNat H ▸ H)
+  have ⟨_, H⟩ := wf.ordered.constWF (henv.charOfNat H ▸ H)
   let ⟨⟨_, H⟩, _⟩ := H.forallE_inv wf
   let ⟨_, H, _⟩ := H.const_inv wf trivial
   exact ⟨_, H⟩
 
-theorem TrExprS.listChar (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem TrExprS.listChar (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (H : env.contains ``String.ofList) :
     TrExprS env Us Δ (.app (.const ``List [.zero]) (.const ``Char [])) .listChar ∧
     env.IsType Us.length Δ.toCtx .listChar := by
@@ -1953,7 +1953,7 @@ theorem TrExprS.listChar (wf : env.Ordered) (henv : env.HasPrimitives)
   exact .app ((A.instL (ls := []) nofun).weak0 wf) ((B.instL (ls := []) nofun).weak0 wf)
     (.const A1 rfl A3) (.const B1 rfl B3)
 
-theorem TrExprS.listCharNil (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem TrExprS.listCharNil (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (H : env.contains ``String.ofList) :
     TrExprS env Us Δ (.app (.const ``List.nil [.zero]) (.const ``Char [])) .listCharNil ∧
     env.HasType Us.length Δ.toCtx .listCharNil .listChar := by
@@ -1966,7 +1966,7 @@ theorem TrExprS.listCharNil (wf : env.Ordered) (henv : env.HasPrimitives)
   exact .app ((A.instL (ls := []) nofun).weak0 wf) ((B.instL (ls := []) nofun).weak0 wf)
     (.const A1 rfl A3) (.const B1 rfl B3)
 
-theorem TrExprS.listCharCons (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem TrExprS.listCharCons (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (H : env.contains ``String.ofList) :
     TrExprS env Us Δ (.app (.const ``List.cons [.zero]) (.const ``Char [])) .listCharCons ∧
     env.HasType Us.length Δ.toCtx .listCharCons
@@ -1980,7 +1980,7 @@ theorem TrExprS.listCharCons (wf : env.Ordered) (henv : env.HasPrimitives)
   exact .app ((A.instL (ls := []) nofun).weak0 wf) ((B.instL (ls := []) nofun).weak0 wf)
     (.const A1 rfl A3) (.const B1 rfl B3)
 
-theorem TrExprS.listCharLit (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem TrExprS.listCharLit (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (H : env.ContainsLits (.strVal l)) (s : List Char) :
     TrExprS env Us Δ (s.foldr
       (init := .app (.const ``List.nil [.zero]) (.const ``Char []))
@@ -1998,7 +1998,7 @@ theorem TrExprS.listCharLit (wf : env.Ordered) (henv : env.HasPrimitives)
     have e1 := a.1.app a.2 d2 d1; have e2 := a.2.app d2
     exact ⟨e1.app e2 ih.2 ih.1, e2.app ih.2⟩
 
-theorem TrExprS.trLiteral (wf : env.Ordered) (henv : env.HasPrimitives)
+theorem TrExprS.trLiteral (wf : env.OrderedStrong) (henv : env.HasPrimitives)
     (l) (H : env.ContainsLits l) :
     TrExprS env Us Δ (.lit l) (.trLiteral l) ∧
     env.HasType Us.length Δ.toCtx (.trLiteral l) (.const l.typeName []) := by

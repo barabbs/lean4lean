@@ -14,38 +14,6 @@ theorem TrEnv.exists_addConst (H : TrEnv safety env venv) (hn : env.find? name =
   | none => simp
   | some ci => obtain ⟨ci, hci, _⟩ := H.find?_iff.2 ⟨ci, hfind⟩; cases hn ▸ hci
 
-theorem TrEnv'.no_inductInfo (H : TrEnv' .unsafe C Q venv) :
-    C.find? name ≠ some (.inductInfo info) := by
-  induction H with
-  | empty => simp [SMap.find?]
-  | ignore hn hhidden H ih =>
-    rename_i C' Q' env' ci
-    exact False.elim <| hhidden (by cases ci.safety <;> rfl)
-  | «axiom» _ _ _ _ H ih => rw [H.map_wf.find?_insert]; split <;> [simp; exact ih]
-  | defn _ _ _ _ H ih => rw [H.map_wf.find?_insert]; split <;> [simp; exact ih]
-  | thm _ _ _ _ _ H ih => rw [H.map_wf.find?_insert]; split <;> [simp; exact ih]
-  | «opaque» _ _ _ _ H ih => rw [H.map_wf.find?_insert]; split <;> [simp; exact ih]
-  | mutualDef _ hnd hfr _ _ _ H ih =>
-    intro h
-    obtain h | ⟨_, _, _, h2⟩ := insertDefs_find? H.map_wf hfr hnd h <;> [exact ih h; cases h2]
-  | quot hready hadd H ih =>
-    obtain ⟨lp₁, ty₁, env₁, _, hn₁, _,
-      lp₂, ty₂, env₂, _, hn₂, _,
-      lp₃, ty₃, env₃, _, hn₃, _,
-      lp₄, ty₄, env₄, _, hn₄, _, rfl, _⟩ := hadd
-    have wf₀ := H.map_wf
-    have wf₁ := wf₀.insert ``Quot
-      (.quotInfo { name := ``Quot, kind := .type, levelParams := lp₁, type := ty₁ }) hn₁
-    have wf₂ := wf₁.insert ``Quot.mk
-      (.quotInfo { name := ``Quot.mk, kind := .ctor, levelParams := lp₂, type := ty₂ }) hn₂
-    have wf₃ := wf₂.insert ``Quot.lift
-      (.quotInfo { name := ``Quot.lift, kind := .lift, levelParams := lp₃, type := ty₃ }) hn₃
-    rw [wf₃.find?_insert]; split <;> [simp; skip]
-    rw [wf₂.find?_insert]; split <;> [simp; skip]
-    rw [wf₁.find?_insert]; split <;> [simp; skip]
-    rw [wf₀.find?_insert]; split <;> [simp; exact ih]
-  | induct hs _ _ => exact absurd hs (by decide)
-
 theorem VEnv.addConst_mono {env₁ env₂ env₁' env₂' : VEnv} (H : env₁ ≤ env₂)
     (h₁ : env₁.addConst name ci = some env₁') (h₂ : env₂.addConst name ci = some env₂') :
     env₁' ≤ env₂' := by

@@ -79,3 +79,37 @@ def VConstant.WF (env : VEnv) (ci : VConstant) : Prop := env.IsType ci.uvars [] 
 
 def VDefEq.WF (env : VEnv) (df : VDefEq) : Prop :=
   env.HasType df.uvars [] df.lhs df.type ∧ env.HasType df.uvars [] df.rhs df.type
+
+/-- The typing of a reduction rule `(p, r)`: the `VDefEq.WF` of a schematic rule (thesis
+§2.6.4, `Γ, C:κ, e::ε, b::β ⊢ rec_P C e p[b] (c b) ≡ e_c b v` read as the typing of its two
+sides). A *generic* instance of the redex — at the identity level instantiation
+`VLevel.params U`, with the holes the reduct uses being exactly the variables of a context
+`Γ` (`Pattern.RHS.Generic`) and the remaining holes arbitrary terms over `Γ` — and the
+corresponding reduct are typed at a common type `B` in `Γ`. The side conditions `r.2` are not
+assumed: a rule must be typed without them. -/
+def VEnv.PatTyped (env : VEnv) (p : Pattern) (r : p.RHS × p.Check) : Prop :=
+  ∃ U Γ e m2 B, p.Matches e (VLevel.params U) m2 ∧ r.1.Generic m2 Γ.length ∧
+    env.HasType U Γ e B ∧ env.HasType U Γ (r.1.apply (VLevel.params U) m2) B
+
+/-- Well-formedness of a reduction rule `(p, r)`: it is typed (`VEnv.PatTyped`), and it
+computes — its reduct's head shape is a closed λ-template applied to arguments
+(`Pattern.RHS.TemplateHeaded`, which pins the head, not the arguments), the head shape of
+every ι reduct (`SimplePattern.iotaRHS`: the kernel's
+`λ params motives minors fields, minor fields v` of `inductiveReduceRec`, applied to the
+retained arguments; thesis `e_c b v` under its binders). The shape is what makes a `pats`
+entry a *reduction* rule as opposed to a definitional axiom (`VEnv.defeqs`, whose sides are
+arbitrary closed terms): a rule rewrites its redex to a β-redex over the matched arguments,
+so the head of a reduct is fixed by the rule — no instance of it is a sort or a Π-type — and a
+reduct is never a bare hole. This is the checked, monotone (`PatWF.mono`) admissibility
+condition under which a rule may be registered (`Ordered.pat`, projected back out by
+`Ordered.patWF`).
+
+What it does **not** give: type preservation of the rule's other well-typed instances
+(subject reduction). Under `Ordered`, whose `defeq` step admits arbitrary well-typed
+definitional axioms, that is false for ι rules (an axiom `List Nat ≡ List Bool` makes
+`List.rec Nat m n c (List.cons Bool true tl)` well-typed and its reduct ill-typed), so it is
+not part of `Ordered`; it is the strong-system property `VEnv.PatsStrong`, which holds for
+well-formed environments (`VEnv.WF.patsStrong`). Named `VEnv.PatWF` because
+`Lean4Lean.Pattern.WF` is taken (`Experimental/SExpr.lean`). -/
+def VEnv.PatWF (env : VEnv) (p : Pattern) (r : p.RHS × p.Check) : Prop :=
+  env.PatTyped p r ∧ r.1.TemplateHeaded
