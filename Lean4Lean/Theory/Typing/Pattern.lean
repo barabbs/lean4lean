@@ -551,6 +551,82 @@ def SimplePattern.iotaRHS (r c : Name) (np nm nmin nind cnp nf : Nat)
     (SimplePattern.iota r (np+nm+nmin+nind) c (cnp+nf)).toPattern.RHS :=
   SimplePattern.iotaRHS' r c (np+nm+nmin) nind cnp nf rhs hrhs
 
+/-- The instance of a template applied to holes: the instance of the template applied to
+the holes' values. -/
+theorem Pattern.RHS.apply_foldl_var {p : Pattern} {m1 : List VLevel} {m2 : p.Path → VExpr} :
+    ∀ (l : List p.Path) (f : p.RHS),
+      ((l.map Pattern.RHS.var).foldl Pattern.RHS.app f).apply m1 m2 =
+        (f.apply m1 m2).mkApps (l.map m2)
+  | [], _ => rfl
+  | x :: l, f => by
+    rw [List.map_cons, List.foldl_cons, apply_foldl_var l, List.map_cons, VExpr.mkApps_cons]; rfl
+
+/-- A constant applied to `n` arguments matches the spine pattern `(.const c).varN n`, the
+hole of argument `i` (`Pattern.varN_pathOf`) holding that argument. -/
+theorem Pattern.matches_varN_const {c : Name} {ls : List VLevel} :
+    ∀ (n : Nat) (args : List VExpr) (h : args.length = n),
+      ∃ g, ((Pattern.const c).varN n).Matches ((VExpr.const c ls).mkApps args) ls g ∧
+        ∀ i (hi : i < n), g (Pattern.varN_pathOf n i hi) = args[i]'(by omega)
+  | 0, [], _ => ⟨nofun, .const, fun _ hi => absurd hi (Nat.not_lt_zero _)⟩
+  | 0, _ :: _, h => nomatch h
+  | n+1, args, h => by
+    obtain ⟨as, a, rfl⟩ : ∃ as a, args = as ++ [a] := by
+      rcases List.eq_nil_or_concat args with rfl | ⟨as, a, rfl⟩
+      · cases h
+      · exact ⟨as, a, List.concat_eq_append ..⟩
+    have hlen : as.length = n := by simpa using h
+    obtain ⟨g, hm, hg⟩ := matches_varN_const n as hlen
+    refine ⟨fun x => x.elim a g, ?_, fun i hi => ?_⟩
+    · rw [VExpr.mkApps_append, VExpr.mkApps_cons, VExpr.mkApps_nil]; exact .var hm
+    · have key : (Pattern.varN_pathOf (q := Pattern.const c) (n+1) i hi :
+          Option ((Pattern.const c).varN n).Path) =
+          if hik : i = n then none else some (Pattern.varN_pathOf n i (by omega)) := rfl
+      show Option.elim (Pattern.varN_pathOf (q := Pattern.const c) (n+1) i hi :
+          Option ((Pattern.const c).varN n).Path) a g = _
+      rw [key]
+      by_cases hik : i = n
+      · subst hik; rw [dif_pos rfl]; simp [List.getElem_append, hlen]
+      · rw [dif_neg hik, Option.elim, hg i (by omega), List.getElem_append_left (by omega)]
+
+/-- The ι reduct on a match: the template, level-instantiated, applied to the recursor
+spine's first `k` arguments and the constructor spine's last `nf` arguments. -/
+theorem SimplePattern.iotaRHS'_apply (r c : Name) (k nind cnp nf : Nat) (rhs : VExpr)
+    (hc : rhs.Closed) (m1 : List VLevel)
+    (m2 : (SimplePattern.iota r (k+nind) c (cnp+nf)).toPattern.Path → VExpr)
+    {recArgs ctorArgs : List VExpr} (h1 : recArgs.length = k + nind)
+    (h2 : ctorArgs.length = cnp + nf)
+    (hg1 : ∀ i (hi : i < k + nind),
+      m2 (Sum.inl (Pattern.varN_pathOf (k+nind) i hi)) = recArgs[i]'(h1 ▸ hi))
+    (hg2 : ∀ i (hi : i < cnp + nf),
+      m2 (Sum.inr (Pattern.varN_pathOf (cnp+nf) i hi)) = ctorArgs[i]'(h2 ▸ hi)) :
+    (iotaRHS' r c k nind cnp nf rhs hc).apply m1 m2 =
+      (rhs.instL m1).mkApps (recArgs.take k ++ ctorArgs.drop cnp) := by
+  unfold iotaRHS'
+  rw [Pattern.RHS.apply_foldl_var]
+  show (rhs.instL m1).mkApps _ = _
+  congr 1
+  have e1 : (iotaPaths r c k nind cnp nf).map m2 =
+      (List.range k).pmap
+        (fun i (hi : i < k+nind) => m2 (Sum.inl (Pattern.varN_pathOf (k+nind) i hi)))
+        (fun _ hi => by have := List.mem_range.1 hi; omega) ++
+      (List.range nf).pmap
+        (fun j (hj : cnp+j < cnp+nf) => m2 (Sum.inr (Pattern.varN_pathOf (cnp+nf) (cnp+j) hj)))
+        (fun _ hj => by have := List.mem_range.1 hj; omega) := by
+    unfold iotaPaths
+    exact (List.map_append ..).trans (congr (congrArg (· ++ ·) (List.map_pmap ..)) (List.map_pmap ..))
+  rw [e1]
+  congr 1
+  · apply List.ext_getElem
+    · simp [List.length_take]; omega
+    · intro t ht1 ht2
+      simp only [List.getElem_pmap, List.getElem_range, List.getElem_take]
+      exact hg1 t _
+  · apply List.ext_getElem
+    · simp [List.length_drop]; omega
+    · intro t ht1 ht2
+      simp only [List.getElem_pmap, List.getElem_range, List.getElem_drop]
+      exact hg2 (cnp + t) _
+
 theorem SimplePattern.iotaRHS'_spine (r c : Name) (k nind cnp nf : Nat) (rhs : VExpr)
     (hrhs : rhs.Closed) :
     (iotaRHS' r c k nind cnp nf rhs hrhs).spine = some (rhs, iotaPaths r c k nind cnp nf) :=

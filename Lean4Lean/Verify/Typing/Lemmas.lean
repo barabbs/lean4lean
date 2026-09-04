@@ -557,16 +557,17 @@ end VLCtx
 
 theorem TrProj.weak' (henv : Ordered env) (W : Ctx.Lift' n Γ Γ')
     (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.lift' n) (e'.lift' n) := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, rfl, hi, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
+    hpat, hnp, hci, hch, hcty, rfl, hi, hrci, harity, hE, hPF, rfl⟩ := H
   have hlen : (cty.piBinders.mapIdx fun j F => F.lift' (n.consN j)).length =
       cty.piBinders.length := List.length_mapIdx
   obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota (mkRecName s) (np+1+1+0) ctorName
       (np + (cty.piBinders.mapIdx fun j F => F.lift' (n.consN j)).length)).toPattern r' := by
     rw [hlen]; exact ⟨r, hpat⟩
-  refine ⟨ctorName, usS, uss, params.map (·.lift' n), np, ci, cty.lift' n,
+  refine ⟨ctorName, usS, uss, params.map (·.lift' n), np, ci, rci, cty.lift' n,
     cty.piBinders.mapIdx fun j F => F.lift' (n.consN j), r', hpat', by simpa using hnp, hci, hch,
-    ?_, (VExpr.piBinders_lift' ..).symm, by rw [hlen]; exact hi, ?_, ?_, ?_⟩
+    ?_, (VExpr.piBinders_lift' ..).symm, by rw [hlen]; exact hi, hrci, by rw [hlen]; exact harity,
+    ?_, ?_, ?_⟩
   · have := VExpr.instPis_lift' _ _ n hcty
     rwa [(henv.closedC hci).instL.lift'_eq Lift.Fixes.zero] at this
   · simpa only [VExpr.mkApps_lift', VExpr.lift'] using hE.weak' henv W
@@ -663,12 +664,12 @@ theorem TrProj.defeqDFC (henv : VEnv.WF env) (hΓ : env.IsDefEqCtx U [] Γ₁ Γ
   -- whose typing does not mention it: transport the two pinned `HasType`s to `Γ₂`, swap `e₁`
   -- for the defeq `e₂` on the major (`HasType.defeqU_l`, hence the pre-existing unique-typing
   -- `sorryAx`; no new trust), and rebuild `P_i e₂`.
-  obtain ⟨ctorName, usS, uss, params, np, ci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, hF, hi, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
+    hpat, hnp, hci, hch, hcty, hF, hi, hrci, harity, hE, hPF, rfl⟩ := H
   have hΓ₂ := (hΓ.symm henv).isType
   have hE₂ := HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) (hE.defeqDFC henv hΓ)
-  exact ⟨_, ctorName, usS, uss, params, np, ci, cty, fieldTys, r, hpat, hnp, hci, hch, hcty, hF,
-    hi, hE₂, hPF.defeqDFC henv hΓ, rfl⟩
+  exact ⟨_, ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r, hpat, hnp, hci, hch, hcty,
+    hF, hi, hrci, harity, hE₂, hPF.defeqDFC henv hΓ, rfl⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.ContainsLits l
@@ -677,10 +678,11 @@ nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.Con
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrProj.mono (H : TrProj env U Γ s i e e') : TrProj env' U Γ s i e e' := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, hF, hi, hE, hPF, he'⟩ := H
-  exact ⟨ctorName, usS, uss, params, np, ci, cty, fieldTys, r, henv.pats hpat, hnp,
-    henv.constants hci, hch, hcty, hF, hi, hE.mono henv, hPF.mono henv, he'⟩
+  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
+    hpat, hnp, hci, hch, hcty, hF, hi, hrci, harity, hE, hPF, he'⟩ := H
+  exact ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r, henv.pats hpat, hnp,
+    henv.constants hci, hch, hcty, hF, hi, henv.constants hrci, harity, hE.mono henv,
+    hPF.mono henv, he'⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrExprS.mono (H : TrExprS env Us Δ e e') : TrExprS env' Us Δ e e' := by
@@ -843,7 +845,7 @@ theorem TrExpr.fvarsList (H : TrExpr env Us Δ e e') : e.fvarsList ⊆ Δ.fvars 
 
 theorem TrProj.wf (H1 : TrProj env U Γ s i e e') (H2 : VExpr.WF env U Γ e) :
     VExpr.WF env U Γ e' := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hE, hPF, rfl⟩ := H1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hE, hPF, rfl⟩ := H1
   exact ⟨_, hPF.app hE⟩
 
 theorem TrExpr.wf (H : TrExpr env Us Δ e e') : VExpr.WF env Us.length Δ.toCtx e' :=
@@ -1203,17 +1205,18 @@ theorem TrExprS.instN_var (W : VLCtx.InstN Δ₀ e₀' A₀ dk k Δ₁ Δ) (H : 
 theorem TrProj.instN (henv : Ordered env) (W : Ctx.InstN Γ₀ e₀ A₀ k Γ₁ Γ)
     (H : TrProj env U Γ₁ s i e e') (h₀ : env.HasType U Γ₀ e₀ A₀) :
     TrProj env U Γ s i (e.inst e₀ k) (e'.inst e₀ k) := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, rfl, hi, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
+    hpat, hnp, hci, hch, hcty, rfl, hi, hrci, harity, hE, hPF, rfl⟩ := H
   have hcty' : cty.CtorHeaded := VExpr.instPis_ctorHeaded _ _ (hch.instL usS) hcty
   have hlen : (cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j)).length =
       cty.piBinders.length := List.length_mapIdx
   obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota (mkRecName s) (np+1+1+0) ctorName
       (np + (cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j)).length)).toPattern r' := by
     rw [hlen]; exact ⟨r, hpat⟩
-  refine ⟨ctorName, usS, uss, params.map (·.inst e₀ k), np, ci, cty.inst e₀ k,
+  refine ⟨ctorName, usS, uss, params.map (·.inst e₀ k), np, ci, rci, cty.inst e₀ k,
     cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j), r', hpat', by simpa using hnp, hci, hch,
-    ?_, (VExpr.piBinders_inst_of_ctorHeaded hcty' e₀ k).symm, by rw [hlen]; exact hi, ?_, ?_, ?_⟩
+    ?_, (VExpr.piBinders_inst_of_ctorHeaded hcty' e₀ k).symm, by rw [hlen]; exact hi, hrci,
+    by rw [hlen]; exact harity, ?_, ?_, ?_⟩
   · have := VExpr.instPis_inst _ _ e₀ k hcty
     rwa [(henv.closedC hci).instL.instN_eq (Nat.zero_le _)] at this
   · simpa only [VExpr.mkApps_inst, VExpr.inst] using hE.instN henv W h₀
@@ -1489,16 +1492,16 @@ theorem ofLevel_mkLevelIMax'
 variable! {ls : List VLevel} (hls : ∀ l ∈ ls, l.WF U') in
 theorem TrProj.instL (H : TrProj env U Γ s i e e') :
     TrProj env U' (Γ.map (VExpr.instL ls)) s i (e.instL ls) (e'.instL ls) := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, rfl, hi, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
+    hpat, hnp, hci, hch, hcty, rfl, hi, hrci, harity, hE, hPF, rfl⟩ := H
   have hlen : (cty.piBinders.map (·.instL ls)).length = cty.piBinders.length := List.length_map _
   obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota (mkRecName s) (np+1+1+0) ctorName
       (np + (cty.piBinders.map (·.instL ls)).length)).toPattern r' := by
     rw [hlen]; exact ⟨r, hpat⟩
   refine ⟨ctorName, usS.map (VLevel.inst ls), fun j => (uss j).map (VLevel.inst ls),
-    params.map (·.instL ls), np, ci, cty.instL ls, cty.piBinders.map (·.instL ls), r', hpat',
+    params.map (·.instL ls), np, ci, rci, cty.instL ls, cty.piBinders.map (·.instL ls), r', hpat',
     by simpa using hnp, hci, hch, ?_, (VExpr.piBinders_instL ..).symm, by rw [hlen]; exact hi,
-    ?_, ?_, ?_⟩
+    hrci, by rw [hlen]; exact harity, ?_, ?_, ?_⟩
   · have := VExpr.instPis_instL _ _ ls hcty; rwa [VExpr.instL_instL] at this
   · simpa only [VExpr.mkApps_instL, VExpr.instL] using hE.instL hls
   · simpa only [VExpr.instL, VExpr.mkApps_instL, VExpr.projFn_instL ls,

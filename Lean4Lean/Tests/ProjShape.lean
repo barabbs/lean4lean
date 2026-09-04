@@ -11,7 +11,9 @@ function `projFn` over the parameter variables, translate it back to an `Expr` a
 **kernel** accept `fun ps (x : S ps) => projFn x : ∀ ps (x : S ps), projMotiveBody` as a
 definition (`Environment.addDeclCore`, synchronous); then we check that `projTy` is
 `isDefEq` to the kernel's own `inferType (.proj S i x)`, and that `projFn (mk ps fs)`
-ι+β-reduces (`Meta.whnf`) to the field `fs[i]`. The cases cover the constant motive
+ι+β-reduces (`Meta.whnf`) to the field `fs[i]`; and that the recursor's minor premise has
+exactly the fields as binders (`VExpr.binderArity?`, the pin of `TrProjCtor`), which a
+reflexive structure fails. The cases cover the constant motive
 (`Prod`), the dependent motives of `Sigma`/`PSigma` at two distinct universes (a single
 level list is rejected by the kernel there), `Subtype`/`Fin`/`And` (small elimination in
 the second field), and a three-field chain `V3` whose last motive mentions two earlier
@@ -29,6 +31,10 @@ structure V3 where
   n : Nat
   v : Fin n
   h : v.val < n
+
+/-- Reflexive: the key `np+1+1+0` holds, the minor has an inductive-hypothesis binder. -/
+structure Refl where
+  next : Nat → Refl
 
 /-- `VLevel` back to `Level` over the universe names `ls` (`VLevel.param i` is `ls[i]`,
 inverting `VLevel.ofLevel`). -/
@@ -71,10 +77,15 @@ def checkProj (S : Name) (i : Nat) (lvls : Nat → Level) : MetaM Unit := do
   -- the parameters as variables: under `p₀ … p_{np-1}`, parameter `j` is `bvar (np-1-j)`
   let ps := (List.range np).map fun j => VExpr.bvar (np - 1 - j)
   let cty0 ← Meta.ofExpr lps {} cinfo.type
+  unless cty0.CtorHeaded do throwError "CtorHeaded fails for {c}"
   let some cty := (cty0.instL usS).instPis ps | throwError "instPis fails for {c}"
   let Fs := cty.piBinders
   unless Fs.length = cinfo.numFields do throwError "field count mismatch for {c}"
   unless i < Fs.length do throwError "no field {i} in {S}"
+  -- the minor premise of the structure's recursor has exactly the fields as binders
+  let rty ← Meta.ofExpr rinfo.levelParams {} rinfo.type
+  unless rty.binderArity? (np + 1) = some cinfo.numFields do
+    throwError "binderArity? of the minor of {S}.rec is not the field count"
   let structTy := (VExpr.const S usS).mkApps ps
   let pf := VExpr.projFn S usS uss ps Fs i
   let body := VExpr.projMotiveBody S usS uss ps Fs i
@@ -121,6 +132,13 @@ run_meta do
   -- `Sigma.snd` (`Sigma.rec.{u+1,u,v}` for a motive into `Type v`).
   let ok ← try checkProj ``Sigma 1 (fun _ => .succ u); pure true catch _ => pure false
   if ok then throwError "the kernel accepts Sigma.snd with the level list of Sigma.fst"
+  -- Negative control: the minor premise of a reflexive structure's recursor has an
+  -- inductive-hypothesis binder after its field (`binderArity?` is `2`, not `1`).
+  let rinfo ← getConstInfoRec ``Refl.rec
+  let rty ← Meta.ofExpr rinfo.levelParams {} rinfo.type
+  if rty.binderArity? 1 = some 1 then
+    throwError "binderArity? accepts the reflexive Refl.rec minor as field-only"
+  unless rty.binderArity? 1 = some 2 do throwError "binderArity? of Refl.rec's minor is not 2"
 
 /-! The hand-written expansion of `Sigma.snd` (thesis `π₂ : Σ x:α. β → β[π₁ p/x]`), over
 `Γ ⊢ A : Type u, B : A → Type v` as `bvar 1`, `bvar 0`: field telescope

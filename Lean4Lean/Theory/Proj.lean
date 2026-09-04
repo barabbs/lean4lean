@@ -115,6 +115,13 @@ def projTy (S : Name) (usS : List VLevel) (uss : Nat → List VLevel) (ps Fs : L
     (i : Nat) (e : VExpr) : VExpr :=
   instFields (Fs.getD i default) ((projFns S usS uss ps Fs i).map fun P => .app P e)
 
+/-- The Π-arity of the `k`-th binder of the Π-telescope `ty`, `none` if there is no such
+binder. `ty.binderArity? (np+1) = some nf` says that the minor premise of a structure's
+recursor (binder `np+1`, after the parameters and the motive) has exactly the `nf` fields
+as binders — no inductive-hypothesis binder: the constructor is non-recursive, and the
+ι reduct applies the minor to the fields alone (`VInductDecl.WF.rule_shape`'s count). -/
+def binderArity? (ty : VExpr) (k : Nat) : Option Nat := ty.piBinders[k]?.map piArity
+
 /-! ### Unfolding facts -/
 
 theorem projFns_zero : projFns S usS uss ps Fs 0 = [] := rfl
@@ -576,6 +583,85 @@ theorem projMotiveBody_inst {S usS uss ps Fs i} (e : VExpr) :
   rw [instFields_inst, List.map_map, List.length_map, projFns_length, Nat.zero_add, inst_liftN]
   congr 1
   simp only [Function.comp_def, inst, inst_lift, instVar_zero]
+
+/-! ### λ-telescopes and `instFields` on variable spines
+
+The ι reduct of a structure's rule is the template `λ params motive minor fields, minor
+fields` applied to the redex's arguments; `betaN`-style reduction of a λ-telescope
+saturated by its arguments substitutes them outermost first (`instFields`), and on the
+variable spine `minor fields` this selects the minor and the fields
+(`instFields_minor_spine`). -/
+
+/-- The leading λ-binder types, outermost first. -/
+def lamBinders : VExpr → List VExpr
+  | .lam A b => A :: b.lamBinders
+  | _ => []
+
+@[simp] theorem lamBinders_length : ∀ e : VExpr, e.lamBinders.length = e.lamArity
+  | .lam _ b => by simp [lamBinders, lamArity, lamBinders_length b]
+  | .bvar _ | .sort _ | .const .. | .app .. | .forallE .. => rfl
+
+theorem foldr_lam_lamBinders : ∀ e : VExpr, e.lamBinders.foldr lam e.lamBody = e
+  | .lam _ b => by simp [lamBinders, lamBody, foldr_lam_lamBinders b]
+  | .bvar _ | .sort _ | .const .. | .app .. | .forallE .. => rfl
+
+theorem instFields_app : ∀ (Ps : List VExpr) (f a : VExpr),
+    instFields (.app f a) Ps = .app (instFields f Ps) (instFields a Ps)
+  | [], _, _ => rfl
+  | _ :: Ps, f, a => by simp only [instFields_cons, inst]; exact instFields_app Ps _ _
+
+theorem instFields_mkApps (Ps : List VExpr) (f : VExpr) : ∀ l : List VExpr,
+    instFields (f.mkApps l) Ps = (instFields f Ps).mkApps (l.map (instFields · Ps))
+  | [] => rfl
+  | a :: l => by
+    rw [mkApps_cons, instFields_mkApps Ps _ l, instFields_app, List.map_cons, mkApps_cons]
+
+theorem instFields_liftN : ∀ (Ps : List VExpr) (e : VExpr), instFields (e.liftN Ps.length) Ps = e
+  | [], e => by simp
+  | _ :: Ps, e => by
+    simp only [instFields_cons, List.length_cons]
+    rw [Nat.add_comm, ← liftN'_liftN_lo, inst_liftN, instFields_liftN Ps]
+
+/-- Substituting the variable spine's binders: variable `j` (of `Ps.length`, innermost
+first) becomes `Ps[Ps.length - 1 - j]`. -/
+theorem instFields_bvar : ∀ (Ps : List VExpr) (j : Nat), j < Ps.length →
+    instFields (.bvar j) Ps = Ps.getD (Ps.length - 1 - j) default
+  | P :: Ps, j, h => by
+    simp only [instFields_cons, inst, instVar, List.length_cons]
+    split
+    · rename_i hj
+      rw [instFields_bvar Ps j hj, show Ps.length + 1 - 1 - j = (Ps.length - 1 - j) + 1 by omega,
+        List.getD_cons_succ]
+    · split
+      · rename_i hj; subst hj
+        rw [instFields_liftN, Nat.add_sub_cancel, Nat.sub_self, List.getD_cons_zero]
+      · simp only [List.length_cons] at h; omega
+
+theorem getElem_bvarsDesc (lo n t : Nat) (h : t < n) :
+    (bvarsDesc lo n)[t]'(by simp [h]) = .bvar (lo + (n - 1 - t)) := by
+  simp [bvarsDesc, List.getElem_reverse]
+
+/-- The reduct of a structure's ι rule, `λ params motive minor fields, minor fields`, on the
+arguments `pre ++ s :: fs` (with `s` the minor's argument): `s fs`. -/
+theorem instFields_minor_spine (pre : List VExpr) (s : VExpr) (fs : List VExpr) :
+    instFields ((bvar fs.length).mkApps (bvarsDesc 0 fs.length)) (pre ++ s :: fs) =
+      s.mkApps fs := by
+  rw [instFields_mkApps, instFields_bvar _ _ (by simp; omega)]
+  have hlen : (pre ++ s :: fs).length - 1 - fs.length = pre.length := by simp
+  rw [hlen, List.getD_eq_getElem?_getD, List.getElem?_append_right (Nat.le_refl _), Nat.sub_self,
+    List.getElem?_cons_zero, Option.getD_some]
+  congr 1
+  apply List.ext_getElem
+  · simp
+  · intro t h1 h2
+    simp only [List.getElem_map, bvarsDesc_length] at h1 ⊢
+    rw [getElem_bvarsDesc _ _ _ (by simpa using h1),
+      instFields_bvar _ _ (by simp <;> omega),
+      show (pre ++ s :: fs).length - 1 - (0 + (fs.length - 1 - t)) = pre.length + (t + 1) by
+        simp <;> omega,
+      List.getD_eq_getElem?_getD, List.getElem?_append_right (Nat.le_add_right _ _),
+      Nat.add_sub_cancel_left, List.getElem?_cons_succ, List.getElem?_eq_getElem h2,
+      Option.getD_some]
 
 end VExpr
 end Lean4Lean

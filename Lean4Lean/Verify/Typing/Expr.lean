@@ -92,6 +92,11 @@ What is pinned and why:
   constructor's type is `CtorHeaded` — its Π-telescope ends in a constant application, as every
   constructor type does — so that instantiating a variable cannot create binders and the
   telescope is stable under `TrProj.instN` (`VExpr.piBinders_inst_of_ctorHeaded`);
+* `S.rec`'s binder `np+1` — its minor premise, by the key — has exactly `n` Π-binders
+  (`VExpr.binderArity?`): the fields, and no inductive-hypothesis binder. The constructor is
+  non-recursive, so the registered reduct applies the minor to the fields alone
+  (`VInductDecl.WF.rule_shape`'s count), which is what `TrEnv.proj_defeq` β-reduces through
+  `fieldSelector`;
 * `e : S usS params` and `P_i : ∀ x : S usS params, F_i[f_j := P_j x]`: the typing of the
   projection function. It is inhabited, for every kernel-accepted projection of a
   non-recursive structure, by β at the major, ι (`IsDefEq.pat`) on the generic constructor
@@ -106,16 +111,16 @@ than nested-recursive ones such as `Lean.Language.SnapshotTree`; all of `Init`/`
 Nested structures (extra motives and minors) and indexed single-constructor families are
 excluded by the `np+1+1+0` key. Reflexive structures (`structure Refl where next : Nat → Refl`)
 have the key too — one motive, one minor, no indices — but their minor premise carries an
-inductive-hypothesis binder after the fields, so `fieldSelector` (fields only) is not typed at
-it and the typing premise fails: excluded by the typing, not by the key. Both are a
-completeness boundary, not a soundness one. The model is slightly more permissive than
+inductive-hypothesis binder after the fields: excluded by the minor's arity pin (and, were
+it dropped, by the typing premise — `fieldSelector` has only the fields as binders), not by
+the key. Both are a completeness boundary, not a soundness one. The model is slightly more permissive than
 `inferProj`'s Prop gate: an *unused* non-Prop earlier field of a `Prop` structure does not
 block a projection here (its `P_j` vanishes), while the kernel rejects it; harmless for a
 refinement. -/
 def TrProjCtor (env : VEnv) (U : Nat) (Γ : List VExpr)
     (S : Name) (i : Nat) (e e' : VExpr) (ctorName : Name) : Prop :=
   ∃ (usS : List VLevel) (uss : Nat → List VLevel) (params : List VExpr) (np : Nat)
-    (ci : VConstant) (cty : VExpr) (fieldTys : List VExpr)
+    (ci rci : VConstant) (cty : VExpr) (fieldTys : List VExpr)
     (r : (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.RHS ×
          (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.Check),
     env.pats (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np+fieldTys.length)).toPattern r ∧
@@ -125,6 +130,8 @@ def TrProjCtor (env : VEnv) (U : Nat) (Γ : List VExpr)
     (ci.type.instL usS).instPis params = some cty ∧
     fieldTys = cty.piBinders ∧
     i < fieldTys.length ∧
+    env.constants (mkRecName S) = some rci ∧
+    rci.type.binderArity? (np+1) = some fieldTys.length ∧
     env.HasType U Γ e ((VExpr.const S usS).mkApps params) ∧
     env.HasType U Γ (VExpr.projFn S usS uss params fieldTys i)
       (.forallE ((VExpr.const S usS).mkApps params)
