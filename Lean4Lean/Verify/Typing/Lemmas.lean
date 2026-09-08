@@ -2246,3 +2246,15 @@ theorem AppStack.append {e : Expr} (H : AppStack env Us Δ (e.mkAppList as) e' b
 
 theorem AppStack.build {e : Expr} (H : TrExprS env Us Δ (e.mkAppList as) e') :
     ∃ e', AppStack env Us Δ e e' as := by simpa using AppStack.append (.head H)
+
+/-- Inversion for an application spine: the translation of `f` applied to `as` is the
+translation of `f` applied to translations of `as`. -/
+theorem TrExprS.mkAppList_inv : ∀ {as : List Expr} {f : Expr} {e'},
+    TrExprS env Us Δ (f.mkAppList as) e' →
+    ∃ f' as', TrExprS env Us Δ f f' ∧ List.Forall₂ (TrExprS env Us Δ) as as' ∧
+      e' = f'.mkApps as'
+  | [], _, _, H => ⟨_, [], H, .nil, rfl⟩
+  | _ :: as, f, _, H => by
+    obtain ⟨_, as', hg, has, rfl⟩ := mkAppList_inv (as := as) (f := .app f _) H
+    let .app _ _ hf ha := hg
+    exact ⟨_, _ :: as', hf, .cons ha has, rfl⟩

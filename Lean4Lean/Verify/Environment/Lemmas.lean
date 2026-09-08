@@ -690,3 +690,34 @@ theorem TrEnv.iota_rec {safety : DefinitionSafety} {env : Environment} {venv : V
   obtain ⟨cval', rhs, hc, hct, htr, hp⟩ := H.pats_iota' hrec hrule hsafe
   rw [hctor] at hct; cases hct
   exact ⟨rhs, hc, htr, TrEnv.iota_defeq hp hm hty (chk := []) trivial nofun⟩
+
+/-- The head of a well-typed application spine is well-typed. -/
+theorem VEnv.HasType.mkApps_inv_head {env : VEnv} {U : Nat} {Γ : List VExpr}
+    (henv : VEnv.WF env) (hΓ : OnCtx Γ (env.IsType U)) :
+    ∀ {as : List VExpr} {f V : VExpr}, env.HasType U Γ (f.mkApps as) V → ∃ W, env.HasType U Γ f W
+  | [], _, V, H => ⟨V, H⟩
+  | a :: as, f, _, H => by
+    rw [VExpr.mkApps_cons] at H
+    obtain ⟨_, H'⟩ := mkApps_inv_head henv hΓ (as := as) (f := f.app a) H
+    obtain ⟨_, _, hf, -⟩ := H'.app_inv henv hΓ
+    exact ⟨_, hf⟩
+
+/-! ### Rebuilding an application spine in the translation
+
+A head and arguments that translate assemble into a translation of the spine, provided the
+model spine is well-typed: each application node needs the typing of its function and
+argument, which `HasType.mkApps_inv_head` and `HasType.app_inv` read off the whole spine. -/
+
+theorem TrExpr.mkAppList {env : VEnv} {Us : List Name} {Δ : VLCtx}
+    (henv : env.WF) (hΔ : OnCtx Δ.toCtx (env.IsType Us.length))
+    {as : List Expr} {as' : List VExpr} (has : List.Forall₂ (TrExpr env Us Δ) as as') :
+    ∀ {f f' V}, TrExpr env Us Δ f f' → env.HasType Us.length Δ.toCtx (f'.mkApps as') V →
+      TrExpr env Us Δ (f.mkAppList as) (f'.mkApps as') := by
+  induction has with
+  | nil => exact fun hf _ => hf
+  | cons ha _ ih =>
+    intro f f' V hf hty
+    rw [VExpr.mkApps_cons] at hty ⊢
+    obtain ⟨_, hty'⟩ := hty.mkApps_inv_head henv hΔ
+    obtain ⟨_, _, h1, h2⟩ := hty'.app_inv henv hΔ
+    exact ih (.app henv hΔ h1 h2 hf ha) hty
