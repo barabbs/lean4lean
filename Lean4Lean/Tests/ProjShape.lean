@@ -4,7 +4,9 @@ import Lean4Lean.Theory.Meta
 
 /-!
 Validation of the projection builders of `Theory/Proj.lean` (`VExpr.instPis`, `VExpr.projFn`,
-`VExpr.projMotiveBody`, `VExpr.projTy`) against the kernel.
+`VExpr.projMotiveBody`, `VExpr.projTy`) against the kernel: this is the kernel side of the
+expansion, and `Tests/ProjInhabit.lean` is the model side, where the same shape is typed in
+`IsDefEq` and inhabits `TrProjCtor`.
 
 For each structure `S` and field `i` we read the constructor's telescope off the kernel's
 constructor type with `instPis`/`piBinders` (as `inferProj` does), build the projection
@@ -13,8 +15,8 @@ function `projFn` over the parameter variables, translate it back to an `Expr` a
 definition (`Environment.addDeclCore`, synchronous); then we check that `projTy` is
 `isDefEq` to the kernel's own `inferType (.proj S i x)`, and that `projFn (mk ps fs)`
 ι+β-reduces (`Meta.whnf`) to the field `fs[i]`; and that the recursor's minor premise has
-exactly the fields as binders (`VExpr.binderArity?`, the pin of `TrProjCtor`), which a
-reflexive structure fails. The cases cover the constant motive
+exactly the fields as binders (`VExpr.binderArity?`, the `minor_arity` pin of `TrProjCtor`),
+which a reflexive structure fails. The cases cover the constant motive
 (`Prod`), the dependent motives of `Sigma`/`PSigma` at two distinct universes (a single
 level list is rejected by the kernel there), `Subtype`/`Fin`/`And` (small elimination in
 the second field), and a three-field chain `V3` whose last motive mentions two earlier
