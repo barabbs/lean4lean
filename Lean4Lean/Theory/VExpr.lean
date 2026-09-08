@@ -1212,10 +1212,6 @@ theorem isBvar_iff {e : VExpr} : e.isBvar = true ↔ ∃ k, e = .bvar k := by ca
 theorem isConst_iff {e : VExpr} : e.isConst = true ↔ ∃ I us, e = .const I us := by
   cases e <;> simp [isConst]
 
-instance {e : VExpr} : Decidable (∃ u, e = .sort u) := decidable_of_iff _ isSort_iff
-instance {e : VExpr} : Decidable (∃ k, e = .bvar k) := decidable_of_iff _ isBvar_iff
-instance {e : VExpr} : Decidable (∃ I us, e = .const I us) := decidable_of_iff _ isConst_iff
-
 /-- The Π-body of `ty` is headed by a bound variable: the shape of a recursor's type and of
 a minor premise, whose targets are applications of a motive binder (for the recursor's own
 body `VExpr.RecShape` pins which motive; for a minor, `VExpr.MinorHeaded` pins only that the
@@ -1225,9 +1221,6 @@ def RecHeaded (ty : VExpr) : Prop := ∃ k, ty.piBody.getAppFn = .bvar k
 /-- The Π-body of `ty` is headed by a constant: the shape of a constructor's type,
 whose target is a type-former application. -/
 def CtorHeaded (ty : VExpr) : Prop := ∃ I us, ty.piBody.getAppFn = .const I us
-
-instance {ty : VExpr} : Decidable ty.RecHeaded := decidable_of_iff _ isBvar_iff
-instance {ty : VExpr} : Decidable ty.CtorHeaded := decidable_of_iff _ isConst_iff
 
 /-- A bound variable is not a constant: recursors and constructors have distinct
 head shapes, so the same constant cannot be both. -/

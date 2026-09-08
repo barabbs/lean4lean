@@ -6,7 +6,8 @@ Executable decision procedures for the syntactic predicates of `VInductDecl.WF`.
 The shape, positivity and result-type predicates of `Lean4Lean.Theory.Inductive` are stated
 as propositions and used as such in the theory; only the tests run them, on the translation
 of the kernel's own recursor, constructor and ι-rule data. The `Decidable` instances that
-make them executable therefore live here rather than beside the definitions.
+make them executable therefore live here rather than beside the definitions, as do the ones
+for the head-constructor tests of `Theory/VExpr.lean` that they are built out of.
 -/
 
 namespace Lean4Lean
@@ -29,6 +30,13 @@ instance {α : Type _} {o : Option α} {P : α → Prop} [DecidablePred P] :
   | none => isFalse (by rintro ⟨_, h, _⟩; cases h)
   | some a =>
     decidable_of_iff (P a) ⟨fun h => ⟨a, rfl, h⟩, fun ⟨_, h, hp⟩ => Option.some.inj h ▸ hp⟩
+
+instance {e : VExpr} : Decidable (∃ u, e = .sort u) := decidable_of_iff _ isSort_iff
+instance {e : VExpr} : Decidable (∃ k, e = .bvar k) := decidable_of_iff _ isBvar_iff
+instance {e : VExpr} : Decidable (∃ I us, e = .const I us) := decidable_of_iff _ isConst_iff
+
+instance {ty : VExpr} : Decidable ty.RecHeaded := decidable_of_iff _ isBvar_iff
+instance {ty : VExpr} : Decidable ty.CtorHeaded := decidable_of_iff _ isConst_iff
 
 instance {cs : List Name} {e : VExpr} : Decidable (e.MentionsConst cs) :=
   decidable_of_iff _ mentionsConst_iff
