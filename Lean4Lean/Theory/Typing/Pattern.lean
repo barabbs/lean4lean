@@ -449,6 +449,39 @@ theorem Pattern.Check.Realizes.map_instL {p : Pattern} {m1 m2} {ck : p.Check} {c
     | t :: ts, ⟨h1, h2, hr⟩ =>
       exact ⟨by simp [h1, RHS.instL_apply], by simp [h2, RHS.instL_apply], ih hr⟩
 
+/-- `RHS.apply` commutes with substitution: the `fixed` parts are closed, so a
+substitution only touches the holes. -/
+theorem Pattern.RHS.subst_apply {p : Pattern} {m1 m2} {σ : Subst} (r : p.RHS) :
+    (r.apply m1 m2).subst σ = r.apply m1 fun x => (m2 x).subst σ := by
+  induction r <;> simp [*, apply]
+  rw [(ClosedN.instL ‹_›).subst_eq .zero]
+
+/-- A match survives an arbitrary substitution: patterns are `const`/`app` trees,
+which `subst` maps homomorphically. -/
+theorem Pattern.matches_subst {p : Pattern} {e : VExpr} {m1 m2} {σ : Subst}
+    (H : p.Matches e m1 m2) :
+    p.Matches (e.subst σ) m1 fun x => (m2 x).subst σ := by
+  induction H with
+  | const => erw [show (fun _ : Empty => _) = _ by ext ⟨⟩]; exact .const
+  | var _ ih =>
+    rw [(_ : (fun _ => _) = _)]; exact ih.var
+    ext (_|_) <;> rfl
+  | app _ _ ih1 ih2 =>
+    rw [(_ : (fun _ => _) = _)]; exact ih1.app ih2
+    ext (_|_) <;> rfl
+
+/-- `Realizes` transports under substitution. -/
+theorem Pattern.Check.Realizes.map_subst {p : Pattern} {m1 m2} {ck : p.Check} {chk}
+    {σ : Subst} (hr : ck.Realizes m1 m2 chk) :
+    ck.Realizes m1 (fun x => (m2 x).subst σ)
+      (chk.map fun t => (t.1.subst σ, t.2.1.subst σ, t.2.2.subst σ)) := by
+  induction ck generalizing chk with
+  | true => cases chk <;> simp_all [Realizes]
+  | defeq a b rest ih =>
+    match chk, hr with
+    | t :: ts, ⟨h1, h2, hr⟩ =>
+      exact ⟨by simp [h1, RHS.subst_apply], by simp [h2, RHS.subst_apply], ih hr⟩
+
 inductive SimplePattern where
   | iota (recursor : Name) (major : Nat) (constr : Name) (args : Nat)
   | defn (head : Name)

@@ -558,7 +558,7 @@ theorem addQuot.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env)
     | ok x => cases x; rfl
   have hn : ∀ n, env.checkName n = .ok () →
       env.find? n = none ∧ Environment.primitives.contains n = false :=
-    fun n h => let ⟨a, b⟩ := checkName.WF mapWF n false _ h; ⟨a, b rfl⟩
+    fun n h => let ⟨a, b⟩ := checkName.WF mapWF n false _ h; ⟨a, by simpa using b⟩
   have hn1 : env.checkName ``Quot = .ok () := by
     rw [Environment.addQuot, if_neg (by simp [hq]), hce] at henv'
     generalize hc : env.checkName ``Quot = c at henv'
