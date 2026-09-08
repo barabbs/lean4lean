@@ -352,18 +352,26 @@ theorem WF.pat_app_uniq {env : VEnv} (H : env.WF) {p r p' r' p₁ p₂ p₁' p�
 content of `Params.extra_pat`, stated verbatim for `env.pats` (in particular the level
 bound `uvars` of the instantiating levels is arbitrary there, as in the class field).
 
-This is a **design hypothesis** of `toParams`, inherited from `Params`, not a deferred proof.
+This is a hypothesis of `toParams`, inherited from `Params`, not a deferred proof.
 `ChurchRosser`'s `Params` reads every `defeqs` entry as realised by a `Pat` rule, while in
 this model the δ rules of definitions (`VDecl.WF.def`/`mutualDef`) and the quotient rule
 (`VDecl.WF.quot`) are definitional axioms in `defeqs` and are not registered as `pats`:
 `pats` holds the ι rules, whose reducts have the computational shape `VEnv.PatWF` asks of a
 reduction rule, whereas a δ reduct is the definition's closed body, of arbitrary shape, and
 the quotient rule's redex `Quot.lift f h (Quot.mk r a)` is written under binders that no
-`SimplePattern` matches (`SimplePattern.defn` is unused). `DefEqsAsPats` therefore holds of
-an environment built from axioms and inductives only and fails for any environment containing
-a `def` or `quot`; `toParams` is a `Params` instance exactly for the environments that satisfy
-it; discharging `extra_pat` for the δ and quotient rules is the remaining gap between
-`Params` and `VDecl.WF`. -/
+`SimplePattern` matches. So `toParams` is a `Params` instance exactly for the environments
+whose definitional axioms are all realised by registered patterns: today, the ones built from
+axioms and inductives alone, since `DefEqsAsPats` fails as soon as a `def` or a `quot` is
+added.
+
+Discharging `extra_pat` is open for both halves. For δ, `SimplePattern.defn c` is the pattern
+shape a δ rule wants — the bare constant, `.fixed` reduct, `.true` check — but registering
+those would put δ and ι rules in one family, and the coherence conditions (`pat_uniq`,
+`pat_app_l_uniq`, `pat_app_uniq`) then need a definition's constant to be distinct from every
+registered recursor and constructor name. `env.constants` does not record which of the three
+a name is, and a definition's type can be `CtorHeaded` as easily as a constructor's, so that
+separation is a further environment invariant rather than a consequence of the present ones.
+For the quotient rule the redex is not a `SimplePattern` at all. -/
 def DefEqsAsPats (env : VEnv) (U : Nat) : Prop :=
   ∀ {df : VDefEq} {ls : List VLevel} {uvars : Nat} {Γ : List VExpr},
     env.defeqs df → (∀ l ∈ ls, l.WF uvars) → ls.length = df.uvars →
@@ -374,8 +382,9 @@ def DefEqsAsPats (env : VEnv) (U : Nat) : Prop :=
 /-- The `Params` structure induced by a well-formed environment `env`, taking the
 abstract reduction relation `Pat` to be `env.pats`. Five side conditions are
 discharged from `VEnv.PatsIota`; `pat_wf` is `IsDefEq.pat` (recovering a `Realizes`
-witness from `Check.OK`); `pat_env` is the identity; `extra_pat` is the design hypothesis
-`hδ : env.DefEqsAsPats U` (see `DefEqsAsPats`). -/
+witness from `Check.OK`); `pat_env` is the identity; `extra_pat` is the hypothesis
+`hδ : env.DefEqsAsPats U`, which restricts the instance to the environments whose
+definitional axioms are all realised by registered patterns (see `DefEqsAsPats`). -/
 @[reducible] def toParams (env : VEnv) (henv : env.WF) (U : Nat) (hδ : env.DefEqsAsPats U) :
     Params where
   env := env

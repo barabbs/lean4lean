@@ -751,8 +751,7 @@ theorem TrProj.defeqDFC (henv : VEnv.WF env) (hΓ : env.IsDefEqCtx U [] Γ₁ Γ
     ∃ e', TrProj env U Γ₂ s i e₂ e' := by
   -- The projection source `e₁` occurs once, as the argument of the projection function `P_i`,
   -- whose typing does not mention it: transport the two pinned `HasType`s to `Γ₂`, swap `e₁`
-  -- for the defeq `e₂` on the major (`HasType.defeqU_l`, hence the pre-existing unique-typing
-  -- `sorryAx`; no new trust), and rebuild `P_i e₂`.
+  -- for the defeq `e₂` on the major (`HasType.defeqU_l`), and rebuild `P_i e₂`.
   obtain ⟨ctorName, usS, uss, params, np, fieldTys, H⟩ := H
   have hΓ₂ := (hΓ.symm henv).isType
   have hE₂ := HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) (H.major_ty.defeqDFC henv hΓ)
