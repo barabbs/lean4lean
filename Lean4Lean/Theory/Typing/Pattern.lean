@@ -645,7 +645,8 @@ theorem SimplePattern.iotaRHS'_apply (r c : Name) (k nind cnp nf : Nat) (rhs : V
         (fun j (hj : cnp+j < cnp+nf) => m2 (Sum.inr (Pattern.varN_pathOf (cnp+nf) (cnp+j) hj)))
         (fun _ hj => by have := List.mem_range.1 hj; omega) := by
     unfold iotaPaths
-    exact (List.map_append ..).trans (congr (congrArg (· ++ ·) (List.map_pmap ..)) (List.map_pmap ..))
+    exact (List.map_append ..).trans
+      (congr (congrArg (· ++ ·) (List.map_pmap ..)) (List.map_pmap ..))
   rw [e1]
   congr 1
   · apply List.ext_getElem

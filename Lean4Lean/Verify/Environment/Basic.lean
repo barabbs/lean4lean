@@ -159,7 +159,8 @@ the same value, afterwards. -/
 theorem insertConsts_find?_mono_of_fresh {cis : List ConstantInfo} {C : ConstMap} {x v}
     (wf : C.map₂.WF) (hfr : ∀ ci ∈ cis, C.find? ci.name = none) (h : C.find? x = some v) :
     (insertConsts C cis).find? x = some v :=
-  insertConsts_find?_mono wf (fun ci hci e => by have := hfr ci hci; rw [e, h] at this; cases this) h
+  insertConsts_find?_mono wf
+    (fun ci hci e => by have := hfr ci hci; rw [e, h] at this; cases this) h
 
 theorem insertConsts_find?_none : ∀ {cis : List ConstantInfo} {C : ConstMap} {x}, C.map₂.WF →
     (∀ ci ∈ cis, ci.name ≠ x) → C.find? x = none → (insertConsts C cis).find? x = none

@@ -394,7 +394,8 @@ structure VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop where
       ru.ctor = c.name ∧ ru.ctorParams = decl.nparams ∧
       c.type.CtorResult t.name decl.nparams ru.nfields (t.type.piArity - decl.nparams)
   /-- Every type former of the block is eliminated by a recursor of the block. -/
-  types_have_rec : ∀ t ∈ decl.types, ∃ r ∈ decl.recs, r.type.majorFormer? r.getMajorIdx = some t.name
+  types_have_rec : ∀ t ∈ decl.types,
+    ∃ r ∈ decl.recs, r.type.majorFormer? r.getMajorIdx = some t.name
   /-- §2.6.3/§2.6.4, `ε` has the length of `K`: a recursor has a rule for each constructor
   of the type former it eliminates (exactly one, by `rules_nodup`). -/
   rules_total : ∀ r ∈ decl.recs, ∀ t ∈ decl.types, r.type.majorFormer? r.getMajorIdx = some t.name →

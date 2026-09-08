@@ -158,13 +158,15 @@ def ps : List VExpr := [.bvar 1, .bvar 0]
 def Fs : List VExpr := [.bvar 1, .app (.bvar 1) (.bvar 0)]
 def structTy : VExpr := (VExpr.const ``Sigma [u, v]).mkApps [.bvar 1, .bvar 0]
 def P₀ : VExpr := (VExpr.const ``Sigma.rec [.succ u, u, v]).mkApps
-  [.bvar 1, .bvar 0, .lam structTy (.bvar 2), .lam (.bvar 1) (.lam (.app (.bvar 1) (.bvar 0)) (.bvar 1))]
+  [.bvar 1, .bvar 0, .lam structTy (.bvar 2),
+    .lam (.bvar 1) (.lam (.app (.bvar 1) (.bvar 0)) (.bvar 1))]
 
 example : ((VExpr.const ``Sigma.mk [u, v]).mkApps ps).instPis ps = none := by decide
 
 example : VExpr.projFn ``Sigma usS uss ps Fs 0 = P₀ := by decide
 
-example : VExpr.projMotiveBody ``Sigma usS uss ps Fs 1 = .app (.bvar 1) (.app P₀.lift (.bvar 0)) := by
+example : VExpr.projMotiveBody ``Sigma usS uss ps Fs 1
+    = .app (.bvar 1) (.app P₀.lift (.bvar 0)) := by
   decide
 
 example : VExpr.projFn ``Sigma usS uss ps Fs 1 = (VExpr.const ``Sigma.rec [.succ v, u, v]).mkApps
@@ -172,10 +174,11 @@ example : VExpr.projFn ``Sigma usS uss ps Fs 1 = (VExpr.const ``Sigma.rec [.succ
       .lam (.bvar 1) (.lam (.app (.bvar 1) (.bvar 0)) (.bvar 0))] := by decide
 
 /-- `P₁ e : B (P₀ e)`, the kernel's `β x.1`. -/
-example (e : VExpr) : VExpr.projTy ``Sigma usS uss ps Fs 1 e = .app (.bvar 0) (.app P₀ e) := by
-  simp [VExpr.projTy, VExpr.projFns, VExpr.projFnOf, VExpr.instFields, Fs, VExpr.inst, VExpr.instVar,
-    VExpr.projMotiveBodyOf, VExpr.fieldSelector, ps, P₀, structTy, usS, uss, VExpr.mkApps,
-    mkRecName, VExpr.liftN, liftVar]
+example (e : VExpr) :
+    VExpr.projTy ``Sigma usS uss ps Fs 1 e = .app (.bvar 0) (.app P₀ e) := by
+  simp [VExpr.projTy, VExpr.projFns, VExpr.projFnOf, VExpr.instFields, Fs, VExpr.inst,
+    VExpr.instVar, VExpr.projMotiveBodyOf, VExpr.fieldSelector, ps, P₀, structTy, usS, uss,
+    VExpr.mkApps, mkRecName, VExpr.liftN, liftVar]
 
 end SigmaSnd
 

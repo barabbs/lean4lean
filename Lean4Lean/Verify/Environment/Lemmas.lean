@@ -468,7 +468,8 @@ theorem TrEnv'.ctor_arity {safety : DefinitionSafety} {C : ConstMap} {Q : Bool} 
   | defn _ _ _ h4 Hprev ih =>
     rw [Hprev.map_wf.find?_insert] at hk; split at hk
     · cases hk
-    · exact ih hk (Hprev.aligned.constants_pull ((VEnv.addConst_le h4).trans VEnv.addDefEq_le) hk hs hv)
+    · exact ih hk (Hprev.aligned.constants_pull
+        ((VEnv.addConst_le h4).trans VEnv.addDefEq_le) hk hs hv)
   | mutualDef _ hnd hfr _ hadd _ Hprev ih =>
     rcases insertDefs_find? Hprev.map_wf hfr hnd hk with hk' | ⟨_, _, _, hd⟩
     · exact ih hk' (Hprev.aligned.constants_pull
@@ -1127,7 +1128,8 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
   -- (F) β through the template, then through `fieldSelector`
   have hβ1 := VEnv.IsDefEqU.betaN henv hΓ (As := rhs.lamBinders.map (VExpr.instL (uss i)))
     (as := params' ++ [.lam ((VExpr.const S usS).mkApps params')
-      (VExpr.projMotiveBody S usS uss params' fieldTys i), VExpr.fieldSelector fieldTys i] ++ fields)
+      (VExpr.projMotiveBody S usS uss params' fieldTys i),
+      VExpr.fieldSelector fieldTys i] ++ fields)
     (b := rhs.lamBody.instL (uss i)) (by simp [hla]; omega)
     (by rw [← VExpr.foldr_lam_instL, VExpr.foldr_lam_lamBinders]; exact hι.hasType.2)
   rw [← VExpr.foldr_lam_instL, VExpr.foldr_lam_lamBinders] at hβ1
@@ -1140,7 +1142,8 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
         (VExpr.projMotiveBody S usS uss params' fieldTys i), VExpr.fieldSelector fieldTys i] ++
         fields) = (VExpr.fieldSelector fieldTys i).mkApps fields := by
     rw [show params' ++ [VExpr.lam ((VExpr.const S usS).mkApps params')
-        (VExpr.projMotiveBody S usS uss params' fieldTys i), VExpr.fieldSelector fieldTys i] ++ fields
+        (VExpr.projMotiveBody S usS uss params' fieldTys i),
+        VExpr.fieldSelector fieldTys i] ++ fields
       = (params' ++ [VExpr.lam ((VExpr.const S usS).mkApps params')
         (VExpr.projMotiveBody S usS uss params' fieldTys i)]) ++
         VExpr.fieldSelector fieldTys i :: fields by simp]
@@ -1149,6 +1152,8 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
   obtain ⟨_, Hβ1⟩ := hβ1
   have hβ2 := VEnv.IsDefEqU.betaN henv hΓ (As := fieldTys) (as := fields)
     (b := .bvar (fieldTys.length - 1 - i)) hfl Hβ1.hasType.2
-  rw [VExpr.instFields_bvar _ _ (by omega), show fields.length - 1 - (fieldTys.length - 1 - i) = i by
-    omega, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (hflen ▸ hi), Option.getD_some] at hβ2
+  rw [VExpr.instFields_bvar _ _ (by omega),
+    show fields.length - 1 - (fieldTys.length - 1 - i) = i by omega,
+    List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (hflen ▸ hi),
+    Option.getD_some] at hβ2
   exact (h1.trans henv hΓ ⟨_, hι⟩).trans henv hΓ (VEnv.IsDefEqU.trans henv hΓ ⟨_, Hβ1⟩ hβ2)

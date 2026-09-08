@@ -303,7 +303,8 @@ def checkIotaAuto (recName ctorName : Name) : MetaM Unit := do
   let .ctorInfo c ← getConstInfo ctorName | throwError "{ctorName} is not a constructor"
   let (cus, absParams) ← forallBoundedTelescope r.type (some r.getMajorIdx) fun xs body => do
     let .forallE _ majorTy _ _ := body | throwError "{recName} has no major premise"
-    let .const _ us := majorTy.getAppFn | throwError "the major premise of {recName} is not a constant application"
+    let .const _ us := majorTy.getAppFn
+      | throwError "the major premise of {recName} is not a constant application"
     let args := (majorTy.getAppArgs.toList.take c.numParams).toArray
     pure (us, args.map (·.abstract xs))
   checkIota recName ctorName cus (fun xs => absParams.map (·.instantiateRev xs))
@@ -534,7 +535,8 @@ run_meta do
     throwError "RecShape rejects the hand-built Nat.rec type"
   if (natRecTy (.const ``Bool []) zeroTarget).RecShape 0 1 2 0 then
     throwError "RecShape accepts a major premise over the wrong type former"
-  let swappedZero : VExpr := (VExpr.bvar 0).app ((VExpr.const ``Nat.succ []).app (.const ``Nat.zero []))
+  let swappedZero : VExpr :=
+    (VExpr.bvar 0).app ((VExpr.const ``Nat.succ []).app (.const ``Nat.zero []))
   if swappedZero.MinorFor ``Nat.zero then
     throwError "MinorFor accepts `motive (Nat.succ Nat.zero)` as the minor for Nat.zero"
   -- The head of a minor premise is one of the motives (`MinorHeaded`): a succ minor

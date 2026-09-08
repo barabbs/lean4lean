@@ -200,7 +200,8 @@ theorem checkNatBitwise.WF {ves : VEnvs} (wf : ves.WF env)
           TrExprS ctx.venv ctx.lparams ((none, .vlam Y) :: m'.vlctx) a a' ∧
           TrExprS ctx.venv ctx.lparams ((none, .vlam Y) :: m'.vlctx) b b' ∧
           r = wb.prop'.app ((f'.app a').app b') := by
-      obtain ⟨_, hab, rfl⟩ := TrExprS.app1_nil_inv hE.ordered (by simp [Condition.bool, noProj]) wb.hprop0 h
+      obtain ⟨_, hab, rfl⟩ :=
+        TrExprS.app1_nil_inv hE.ordered (by simp [Condition.bool, noProj]) wb.hprop0 h
       obtain ⟨_, _, _, _, ha, hb, rfl⟩ := hab.app2_inv
       exact ⟨_, _, _, ha, hb, rfl⟩
     -- `natEq.decide #[mod v two, one]` at a closing: the `Nat.mod` evaluates and the reflected

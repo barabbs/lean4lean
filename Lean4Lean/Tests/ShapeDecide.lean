@@ -27,7 +27,8 @@ instance {α : Type _} {o : Option α} {P : α → Prop} [DecidablePred P] :
     Decidable (∃ a, o = some a ∧ P a) :=
   match o with
   | none => isFalse (by rintro ⟨_, h, _⟩; cases h)
-  | some a => decidable_of_iff (P a) ⟨fun h => ⟨a, rfl, h⟩, fun ⟨_, h, hp⟩ => Option.some.inj h ▸ hp⟩
+  | some a =>
+    decidable_of_iff (P a) ⟨fun h => ⟨a, rfl, h⟩, fun ⟨_, h, hp⟩ => Option.some.inj h ▸ hp⟩
 
 instance {cs : List Name} {e : VExpr} : Decidable (e.MentionsConst cs) :=
   decidable_of_iff _ mentionsConst_iff

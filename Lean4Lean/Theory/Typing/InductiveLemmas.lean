@@ -593,8 +593,8 @@ theorem addInduct_pats_origin' {env env' : VEnv} {decl : VInductDecl} {p rr}
     env.pats p rr ∨ ∃ rec ∈ decl.recs, ∃ ru ∈ rec.rules, ∃ (hc : ru.rhs.Closed)
       (e : p = (SimplePattern.iota rec.name rec.getMajorIdx ru.ctor
         (ru.ctorParams + ru.nfields)).toPattern),
-      e ▸ rr = (SimplePattern.iotaRHS rec.name ru.ctor
-        rec.numParams rec.numMotives rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc,
+      e ▸ rr = (SimplePattern.iotaRHS rec.name ru.ctor rec.numParams rec.numMotives
+        rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc,
         .true) := by
   obtain ⟨env1, env2, env3, s1, s2, s3, s4⟩ := addInduct_stages h
   unfold VInductDecl.addRules at s4

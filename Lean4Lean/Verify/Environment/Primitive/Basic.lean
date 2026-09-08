@@ -428,8 +428,9 @@ theorem OnCtx.of_append : ∀ {l Γ : List VExpr}, OnCtx (l ++ Γ) P → OnCtx �
 
 /-- Both halves of an application are well formed. `app_inv` gives the typings, which is more
 than a caller peeling a spine apart wants to name: this is the form that chains. -/
-theorem VExpr.WF.app_inv₂ (henv : VEnv.OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) {f a : VExpr}
-    (H : VExpr.WF env U Γ (f.app a)) : VExpr.WF env U Γ f ∧ VExpr.WF env U Γ a :=
+theorem VExpr.WF.app_inv₂ (henv : VEnv.OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U))
+    {f a : VExpr} (H : VExpr.WF env U Γ (f.app a)) :
+    VExpr.WF env U Γ f ∧ VExpr.WF env U Γ a :=
   let ⟨_, _, hf, ha⟩ := H.app_inv henv hΓ; ⟨⟨_, hf⟩, ⟨_, ha⟩⟩
 
 variable! (henv : VEnv.OrderedStrong env) (hΓ : OnCtx Γ (env.IsType U)) in
@@ -451,7 +452,8 @@ theorem VEnv.IsDefEqU.appN {env : VEnv} (henv : VEnv.WF env) (hΓ : OnCtx Γ (en
   | cons v vs ih =>
     intro f g h hwf
     obtain ⟨A, B, hf, hv⟩ :=
-      (VExpr.WF.appN_inv henv.orderedStrong hΓ (vs := vs) (e := f.app v) hwf).app_inv henv.orderedStrong hΓ
+      (VExpr.WF.appN_inv henv.orderedStrong hΓ (vs := vs) (e := f.app v) hwf).app_inv
+        henv.orderedStrong hΓ
     exact ih ⟨_, (h.of_l henv hΓ hf).appDF hv⟩ hwf
 
 /-- The arguments a lambda telescope is closed at, each typed at its own binder's domain under
