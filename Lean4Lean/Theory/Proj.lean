@@ -4,9 +4,12 @@ import Lean4Lean.Theory.VExpr
 # Structure projections as recursor expansions
 
 `VExpr` has no projection node. A projection `.proj S i e` of a structure value `e : S ps` is
-modelled by a recursor expansion in the style of Carneiro's thesis's `inv_x` (typesys.tex
-§"Undecidability of definitional equality"), which projects the argument of `intro` out of a
-proof of `acc x` through `rec_acc`:
+modelled by an application of the recursor the kernel generates for `S`. That is the kernel's
+own reading of `Expr.proj`: `inferProj`'s Prop gate and `toCtorWhenStruct`'s elimination test
+keep a projection no more powerful than that recursor (`divergences.md`), so nothing is lost by
+spelling one out. The shape is Carneiro's thesis's `inv_x` (typesys.tex §"Undecidability of
+definitional equality"), which projects the argument of `intro` out of a proof of `acc x`
+through `rec_acc`:
 
     P_i e,   P_i = S.rec (uss i) ps (λ x : S ps. F_i[f_j := P_j x]) (λ f₀ … f_{n-1}. f_i)
 
@@ -32,10 +35,11 @@ bvar (m-1)` is hit first by `inst _ (m-1)`, which lifts `Ps[0]` under the `m-1` 
 binders. `projMotiveBodyOf` first moves `F_i` under the motive's binder `x` (`liftN 1 i`
 shifts the `Γ`-variables past `x`), then substitutes `f_j := P_j x` with `P_j` lifted past `x`.
 
-Typing of the expansion (derivation, thesis §2.6.3–4; not a theorem here): for a
-non-recursive structure with the kernel's recursor `∀ ps (C : S ps → Sort ℓ)
-(m : ∀ f::Fs, C (mk ps f)) (t : S ps), C t`, ι rule `rec ps C m (mk ps f) ≡ m f`, and
-`ℓ_i` the sort of `F_i`, by strong induction on `i` with `uss i = ℓ_i :: usS`:
+Typing of the expansion (derivation, thesis §2.6.3–4, mechanized on instances in
+`Tests/ProjInhabit.lean`): for a non-recursive structure with the kernel's recursor
+`∀ ps (C : S ps → Sort ℓ) (m : ∀ f::Fs, C (mk ps f)) (t : S ps), C t`, ι rule
+`rec ps C m (mk ps f) ≡ m f`, and `ℓ_i` the sort of `F_i`, by strong induction on `i` with
+`uss i = ℓ_i :: usS`:
 (a) `Γ, x ⊢ projMotiveBody i : sort ℓ_i` — substitute the fields of `F_i` by the typed
 `P_j x` (`IsDefEq.instN`, using (c) for `j < i` weakened past `x`);
 (b) `Γ ⊢ ∀ f::Fs, F_i⁺ ≡ ∀ f::Fs, projMotive i (mk ps f)` — `beta` under the field
@@ -46,6 +50,11 @@ and `fieldSelector Fs j` to `f_j`, then `IsDefEq.instDF`;
 the parameters, the motive (a) and the selector (b, `defeqDF`), then `forallEDF`/`beta` with
 `instN_bvar0`.
 Only forward rules of `IsDefEq` are used: no structure-η, no K-like reduction, no injectivity.
+
+Structure η is the one thing the representation does not carry: the checker's `tryEtaStruct`
+and `toCtorWhenStruct` equate a value with its expansion `S.mk ps (p₁ t) … (pₙ t)`, and
+`IsDefEq` has no such rule (`tryEtaStructCore.WF` is the open obligation). Nothing here blocks
+adding a per-structure η rule; the expansion simply does not provide one.
 -/
 
 namespace Lean4Lean

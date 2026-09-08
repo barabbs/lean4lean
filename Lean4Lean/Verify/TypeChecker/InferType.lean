@@ -385,11 +385,25 @@ theorem inferLet.WF
   refine (c.withMLC_self ▸ inferLet.loop.WF (Nat.zero_le _) [] rfl rfl rfl rfl rfl ?_ hr) hinf
   exact fun P hP he => ⟨(AllAbove.wf wf.trctx.wf.fvwf).2 hP, he.mono fun _ h _ => h, fun _ => id⟩
 
-/-- PROJ-TODO(boundary): restated against the dependent-motive `TrProj` (the typing premise
-on the projection function, conclusion `∃ e'' ty'`). Its proof is the inductive-translation
-boundary: it needs the `AddInduct` witness in the `inductDecl` case of `addDecl.WF`
-(`Verify/Environment.lean`). With the dependent motive it is provable in principle — the
-constant motive made it unprovable for dependent fields. -/
+/-- `inferProj.WF` for the structures the model covers (`TrProjCtor`): non-mutual,
+single-constructor, non-indexed and non-recursive, as the kernel records them. Open — it needs
+`TrProjCtor` inhabited from a kernel-accepted projection (the derivation is in the module
+docstring of `Theory/Proj.lean`, instances in `Tests/ProjInhabit.lean`). -/
+theorem inferProj.WF_struct {ival : InductiveVal} {ctorName : Name}
+    (hS : c.env.find? st = some (.inductInfo ival))
+    (hall : ival.all = [st]) (hctors : ival.ctors = [ctorName])
+    (hnind : ival.numIndices = 0) (hnrec : ival.isRec = false)
+    (he : c.TrExprS e e') (hty : c.TrExprS ety ety') (hasty : c.HasType e' ety') :
+    (inferProj st i e ety).WF c s fun ty _ =>
+      ∃ e'' ty', c.TrTyping (.proj st i e) ty e'' ty' := sorry
+
+/-- Open, and not provable as stated: the model has no projection node, and `TrProj` is the
+recursor expansion of one, which exists only for the structures of `inferProj.WF_struct`, while
+`inferProj` also accepts projections of reflexive, indexed and nested single-constructor types
+(core's `Lean.Language.SnapshotTree.element` is one) — those have no `TrExprS` derivation at
+all. Closing it means extending the model: a selector binding the inductive-hypothesis binders,
+a motive abstracting the indices, extra motives and minors for a nested block, or a projection
+node with its own ι and η rules. -/
 theorem inferProj.WF
     (he : c.TrExprS e e') (hty : c.TrExprS ety ety') (hasty : c.HasType e' ety') :
     (inferProj st i e ety).WF c s fun ty _ =>

@@ -69,19 +69,17 @@ theorem VLCtx.WF.fvwf : ∀ {Δ}, VLCtx.WF env U Δ → Δ.FVWF
 /-- `TrProjCtor env U Γ S i e e' c usS uss params np fieldTys` relates the translated structure
 value `e : S usS params` to the translation `e'` of its `i`-th projection `.proj S i e`, with the
 constructor `c` and the data of the expansion exposed (`TrProj` hides them). `VExpr` has no
-projection node; a projection is a recursor expansion in the style of Carneiro's thesis's `inv_x`
-(typesys.tex §"Undecidability of definitional equality") applied to `e`:
+projection node; a projection is an application of the recursor the kernel generates for `S`, in
+the shape of Carneiro's thesis's `inv_x` (`Theory/Proj.lean`):
 
     e' = P_i e,   P_i = S.rec (uss i) params (λ x : S usS params. F_i[f_j := P_j x]) (λ f. f_i)
 
-(`VExpr.projFn`, `Theory/Proj.lean`), where `F₀ … F_{n-1}` is the field telescope `fieldTys` and
-the earlier projections `P_j`, `j < i`, are the same expansions (`VExpr.projFns`, well-founded on
-`i`). The motive of field `i` is the field's type with the earlier fields replaced by their
-projections of the bound major, so that `P_i e : F_i[f_j := P_j e]` — the kernel's `inferProj`
-result with `.proj S j e ↦ P_j e`, and the dependent typing shape of the thesis's *primitive*
-projections `π₂ p : β[π₁ p/x]` (Wtypes.tex). The level list `uss j` is per field: the elimination
-level of `P_j` is the sort of `F_j`, which differs between fields (`Sigma.fst` at `u+1`,
-`Sigma.snd` at `v+1`); an unused `P_j` vanishes under substitution, so its `uss j` is irrelevant.
+where `F₀ … F_{n-1}` is the field telescope `fieldTys` and the earlier projections `P_j`, `j < i`,
+are the same expansions (`VExpr.projFns`, well-founded on `i`). The motive of field `i` is the
+field's type with the earlier fields replaced by their projections of the bound major, so that
+`P_i e : F_i[f_j := P_j e]` — the kernel's `inferProj` result with `.proj S j e ↦ P_j e`. The
+level list `uss j` is per field, since the elimination level of `P_j` is the sort of `F_j`
+(`Sigma.fst` at `u+1`, `Sigma.snd` at `v+1`); an unused `P_j` vanishes under substitution.
 
 Scope: single-constructor types that are non-recursive, non-indexed and non-mutual. Projections
 of reflexive, indexed and nested single-constructor types are accepted by `inferProj` but are
