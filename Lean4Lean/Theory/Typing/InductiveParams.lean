@@ -96,17 +96,6 @@ theorem _root_.Lean4Lean.VDecl.WF.pats_eq_or_induct {env d env'} (h : VDecl.WF e
   · exact .inl heq
   · exact .inr ⟨decl, hdecl, hind⟩
 
-/-- Every `VDecl.WF` step only grows the environment. -/
-theorem _root_.Lean4Lean.VDecl.WF.le {env d env'} (h : VDecl.WF env d env') : env ≤ env' := by
-  cases h with
-  | «axiom» _ h2 => exact addConst_le h2
-  | «def» _ h2 => exact (addConst_le h2).trans addDefEq_le
-  | mutualDef _ h2 _ => exact (VEnv.addConsts_le h2).trans addDefEqs_le
-  | «opaque» _ h2 => exact addConst_le h2
-  | «example» _ => exact .rfl
-  | quot _ h2 => exact addQuot_le h2
-  | induct _ h2 => exact addInduct_le h2
-
 /-! ### Recoverability of the recursor data
 
 `env.pats` retains of an ι rule only its key `SimplePattern.iota recN M cN N` and its

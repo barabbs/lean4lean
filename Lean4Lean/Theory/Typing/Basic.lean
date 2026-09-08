@@ -54,6 +54,9 @@ inductive IsDefEq : List VExpr → VExpr → VExpr → VExpr → Prop where
   | extra :
     env.defeqs df → (∀ l ∈ ls, l.WF uvars) → ls.length = df.uvars →
     Γ ⊢ df.lhs.instL ls ≡ df.rhs.instL ls : df.type.instL ls
+  /-- ι reduction: the reduct is asserted at the redex's type, with no typing premise on
+  the reduct — the thesis's regularity theorem for ι taken as a rule, as `Params.pat_wf`
+  states it. `VEnv.WF.patsStrong` is where the strong system repays that. -/
   | pat {p : Pattern} {r : p.RHS × p.Check} {m1 m2 chk} :
     env.pats p r → p.Matches e m1 m2 → Γ ⊢ e : A →
     r.2.Realizes m1 m2 chk →
@@ -108,7 +111,7 @@ What it does **not** give: type preservation of the rule's other well-typed inst
 (subject reduction). Under `Ordered`, whose `defeq` step admits arbitrary well-typed
 definitional axioms, that is false for ι rules (an axiom `List Nat ≡ List Bool` makes
 `List.rec Nat m n c (List.cons Bool true tl)` well-typed and its reduct ill-typed), so it is
-not part of `Ordered`; it is the strong-system property `VEnv.PatsStrong`, which holds for
+not part of `Ordered`; it is the strong-system property `VEnv.PatsStrongOn`, which holds for
 well-formed environments (`VEnv.WF.patsStrong`). Named `VEnv.PatWF` because
 `Lean4Lean.Pattern.WF` is taken (`Experimental/SExpr.lean`). -/
 def VEnv.PatWF (env : VEnv) (p : Pattern) (r : p.RHS × p.Check) : Prop :=

@@ -174,11 +174,10 @@ def Pattern.RHS.Uses {p : Pattern} : p.RHS → p.Path → Prop
 
 /-- `m2` instantiates the holes `r` uses generically over a context of length `n`: those
 holes are pairwise distinct variables below `n`, and every variable below `n` is one of
-them. The remaining holes are unconstrained (for an ι rule: the index arguments and the
-constructor's parameter arguments — arbitrary terms over the context, tied to the
-recursor's parameters by nothing here; identifying them from a well-typed redex would need
-injectivity of the type formers, open under `VEnv.WF` (`Injectivity.lean`) and false under
-`Ordered`, see `VEnv.PatWF`). -/
+them. The holes `r` does not use are unconstrained here — for an ι rule the index arguments
+and the constructor's parameter arguments, arbitrary terms over the context. What ties them
+to the recursor's arguments is not this predicate but the well-formedness of the block
+(`VInductDecl.WF.rules_ctor`, `rec_shape`) together with the typing of an instance. -/
 def Pattern.RHS.Generic {p : Pattern} (r : p.RHS) (m2 : p.Path → VExpr) (n : Nat) : Prop :=
   (∀ x, r.Uses x → ∃ i < n, m2 x = .bvar i) ∧
   (∀ x y, r.Uses x → r.Uses y → m2 x = m2 y → x = y) ∧
