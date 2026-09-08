@@ -266,7 +266,7 @@ theorem checkEqType_ok (env : Environment) (h : checkEqType env = .ok ()) :
       | true => rw [hu] at h; cases h
       | false =>
       rw [hu] at h
-      simp only [Bool.false_eq_true, ite_false, bind, Except.bind] at h
+      simp only [Bool.false_eq_true, ite_false] at h
       cases hlp : info.levelParams with
       | nil => rw [hlp] at h; cases h
       | cons u rest =>

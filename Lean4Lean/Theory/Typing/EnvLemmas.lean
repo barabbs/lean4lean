@@ -339,5 +339,5 @@ strong typing of its constants and definitional axioms, and subject reduction of
 theorem VEnv.WF.orderedStrong (H : WF env) : OrderedStrong env :=
   ⟨H.ordered, H.strong H.patsStrong, H.patsStrong _ _ .rfl .rfl .rfl rfl rfl H.ordered⟩
 
--- Every consumer of the strong system is conditional on `VEnv.WF.patsStrong`.
+-- Every use of the strong system is therefore conditional on `VEnv.WF.patsStrong`.
 instance : CoeOut (VEnv.WF env) env.OrderedStrong := ⟨(·.orderedStrong)⟩

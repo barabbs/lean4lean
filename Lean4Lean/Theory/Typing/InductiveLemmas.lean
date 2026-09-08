@@ -9,20 +9,12 @@ namespace VEnv
 /-!
 # Environment-extension lemmas for `VEnv.addInduct`
 
-`addInduct_le` (adding an inductive only grows the environment) and `addInduct_pat`
-(every recursor rule's ι-reduction rule ends up in the resulting `pats`), threaded
-through the four named stages `VInductDecl.addTypes`/`addCtors`/`addRecs`/`addRules`
-(`addInduct_stages`); and `addInduct_WF` (adding a well-formed inductive keeps the
-environment `Ordered`), proved stage by stage from `VInductDecl.WF` — the constant
-stages by `foldlM_addConst_ordered`, the ι-rule stage by `Ordered.pat` from `rules_wf`
-(the typing of the rule) and `rule_shape` (its reduct is headed by a λ-template).
-
-`Ordered` is all `addInduct_WF` establishes. Subject reduction of the registered ι rules —
-that the reduct of a well-typed redex is typed at the redex's type — is not part of it: it
-is `VEnv.WF.patsStrong` (`EnvLemmas.lean`), stated over the well-formed prefixes of an
-environment and open. The second half of this file collects the population lemmas: what each
-stage binds in `constants` and registers in `pats`, and where a registered pattern entry
-comes from.
+`addInduct_le` (adding an inductive only grows the environment) and `addInduct_pat` (every
+recursor rule's ι rule ends up in `pats`), threaded through the stages `addTypes`/`addCtors`/
+`addRecs`/`addRules` (`addInduct_stages`); `addInduct_WF` (adding a well-formed inductive
+keeps the environment `Ordered`), proved stage by stage from `VInductDecl.WF`; and the
+population lemmas saying what each stage binds in `constants` and registers in `pats`.
+Subject reduction of the registered ι rules is the open `VEnv.WF.patsStrong` (`EnvLemmas.lean`).
 -/
 
 /-- Monotonicity of a monadic left fold in the `Option` monad: if each successful

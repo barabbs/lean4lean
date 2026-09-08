@@ -362,8 +362,8 @@ the quotient rule's redex `Quot.lift f h (Quot.mk r a)` is written under binders
 `SimplePattern` matches (`SimplePattern.defn` is unused). `DefEqsAsPats` therefore holds of
 an environment built from axioms and inductives only and fails for any environment containing
 a `def` or `quot`; `toParams` is a `Params` instance exactly for the environments that satisfy
-it, and discharging `extra_pat` for the δ/quot rules is the pre-existing gap between `Params`
-and `VDecl.WF`, left to the maintainers. -/
+it; discharging `extra_pat` for the δ and quotient rules is the remaining gap between
+`Params` and `VDecl.WF`. -/
 def DefEqsAsPats (env : VEnv) (U : Nat) : Prop :=
   ∀ {df : VDefEq} {ls : List VLevel} {uvars : Nat} {Γ : List VExpr},
     env.defeqs df → (∀ l ∈ ls, l.WF uvars) → ls.length = df.uvars →

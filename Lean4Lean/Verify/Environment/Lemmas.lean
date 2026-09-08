@@ -444,8 +444,8 @@ translating the kernel rule's reduct; the check is trivial (so `iota_defeq` runs
 theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
     {venv : VEnv} {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
     (H : TrEnv' safety C Q venv)
-    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
     (hrec : C.find? recName = some (.recInfo rval))
+    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
     (hsafe : safety ≤ (Lean.ConstantInfo.recInfo rval).safety) :
     ∃ (cval : ConstructorVal) (rhs : VExpr) (hc : rhs.Closed),
       C.find? cName = some (.ctorInfo cval) ∧
@@ -514,22 +514,8 @@ theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
       rw [← hname, ← hpar, ← hmot, ← hmin, ← hind, ← hrunf, ← hctor, ← hructor, ← hcnp]
       exact VEnv.addInduct_pat hr hru hclosed hadd.env_eq
 
-/-- `TrEnv'`-level ι-rule lookup, stated against the constant map's own `find?`.
-The recursor is registered by one `induct` step (where `VEnv.addInduct_pat` supplies
-the `pat`) and carried forward by `.pats`-monotonicity. -/
-theorem TrEnv'.pats_iota {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
-    {venv : VEnv} {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
-    (H : TrEnv' safety C Q venv)
-    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
-    (hrec : C.find? recName = some (.recInfo rval))
-    (hsafe : safety ≤ (Lean.ConstantInfo.recInfo rval).safety) :
-    ∃ cval r, C.find? cName = some (.ctorInfo cval) ∧
-      venv.pats (SimplePattern.iota recName rval.getMajorIdx cName
-        (cval.numParams + rule.nfields)).toPattern r := by
-  obtain ⟨cval, _, _, hct, _, hp⟩ := H.pats_iota' hrule hrec hsafe
-  exact ⟨cval, _, hct, hp⟩
-
-/-- `TrEnv.pats_iota` with the registered witness named; see `TrEnv'.pats_iota'`. -/
+/-- `TrEnv'.pats_iota'` against the environment's own `find?`: the ι rule of a recursor
+rule resolvable in `env` is registered in the translated environment's `pats`. -/
 theorem TrEnv.pats_iota' {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
     {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
     (H : TrEnv safety env venv)
@@ -547,26 +533,10 @@ theorem TrEnv.pats_iota' {safety : DefinitionSafety} {env : Environment} {venv :
           rval.numIndices cval.numParams rule.nfields rhs hc, .true) := by
   have h : env.constants.find?' recName = some (.recInfo rval) := hrec
   rw [(TrEnv'.map_wf H).find?'_eq_find?] at h
-  obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := TrEnv'.pats_iota' H hrule h hsafe
+  obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := TrEnv'.pats_iota' H h hrule hsafe
   refine ⟨cval, rhs, hc, ?_, htr, hp⟩
   show env.constants.find?' cName = _
   rw [(TrEnv'.map_wf H).find?'_eq_find?]; exact hct
-
-/-- The ι-reduction rule of a recursor rule resolvable in `env` is registered in the
-translated environment's `pats`, with pattern counts mirroring `VEnv.addInduct_pat`:
-the constructor spine has `cval.numParams + rule.nfields` arguments, `cval` being the
-constructor's own `ctorInfo`. -/
-theorem TrEnv.pats_iota {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
-    {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
-    (H : TrEnv safety env venv)
-    (hrec : env.find? recName = some (.recInfo rval))
-    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
-    (hsafe : safety ≤ (Lean.ConstantInfo.recInfo rval).safety) :
-    ∃ cval r, env.find? cName = some (.ctorInfo cval) ∧
-      venv.pats (SimplePattern.iota recName rval.getMajorIdx cName
-        (cval.numParams + rule.nfields)).toPattern r := by
-  obtain ⟨cval, _, _, hct, _, hp⟩ := H.pats_iota' hrec hrule hsafe
-  exact ⟨cval, _, hct, hp⟩
 
 /-- Inverse of `pats_iota'`, at the `TrEnv'` level: every registered ι pattern
 `SimplePattern.iota recName M cName N` comes from a kernel recursor `rval` (resolvable in
@@ -696,10 +666,10 @@ theorem TrEnv.iota_defeq {venv : VEnv} {U : Nat} {Γ : List VExpr}
     venv.IsDefEqU U Γ e (r.1.apply m1 m2) :=
   ⟨A, VEnv.IsDefEq.pat hpat hm hty hR hall⟩
 
-/-- A well-typed redex matching a recursor's ι pattern (over the constructor `cval`
-resolved in `env`) is definitionally equal to the `iotaRHS` reduct, over a template
-`rhs` translating the kernel rule's reduct. Composes `pats_iota'` with `iota_defeq` at
-the trivial check. -/
+/-- The ι reduction step of a translated environment, as `reduceRecursor.WF` needs it: a
+well-typed redex matching a recursor's ι pattern (over the constructor `cval` resolved in
+`env`) is definitionally equal to the `iotaRHS` reduct, over a template `rhs` translating
+the kernel rule's reduct. Composes `pats_iota'` with `iota_defeq` at the trivial check. -/
 theorem TrEnv.iota_rec {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
     {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule} {cval : ConstructorVal}
     {U : Nat} {Γ : List VExpr} {e A : VExpr} {m1 m2}
