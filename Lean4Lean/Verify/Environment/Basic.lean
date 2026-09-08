@@ -501,7 +501,7 @@ theorem rec_reg {r : VRecursor} (H : AddInduct safety m₁ env₁ decl m₂ env�
 /-- A kernel constructor resolvable after the block was resolvable before, or is one of
 the block's constructors: then it has a rule in one of the block's recursors, with the
 constructor's parameter count (`rules_own_params`) and field count (its type's Π-arity is
-`ctorParams + nfields` by `rules_ctor`, and `numParams + numFields` by `TrIndType`). -/
+`ctorParams + nfields` by `rules_ctor_shape`, and `numParams + numFields` by `TrIndType`). -/
 theorem ctor_find {ctorName : Name} {cval : ConstructorVal}
     (H : AddInduct safety m₁ env₁ decl m₂ env₂) (wf : m₁.WF) (hwf : decl.WF env₁)
     (h : m₂.find? ctorName = some (.ctorInfo cval)) :
@@ -518,13 +518,11 @@ theorem ctor_find {ctorName : Name} {cval : ConstructorVal}
     obtain ⟨c, hc, hctr, harity⟩ := htr.ctors.forall_exists_l _ hcval
     have hcn : c.name = ctorName := hctr.2.symm.trans hname
     obtain ⟨r, hr, ru, hru, hruc⟩ := hwf.ctors_have_rules t ht c hc
-    have hown : ru.ctorParams = r.numParams :=
-      hwf.rules_own_params r hr ru hru
-        (List.mem_flatMap.2 ⟨t, ht, hruc ▸ List.mem_map_of_mem hc⟩)
+    have hown : ru.ctorParams = r.numParams := hwf.rules_own_params r hr ru hru
     obtain ⟨rval, -, hrtr⟩ := H.recs.forall_exists_r r hr
     obtain ⟨rule, -, h1, -, ⟨cval'', hcf, hcp⟩, -⟩ := hrtr.rules.forall_exists_r ru hru
     rw [← h1, hruc, hcn, h] at hcf; cases hcf
-    obtain ⟨ci, hci', hcs⟩ := hwf.rules_ctor H.envC H.addTypesCtors r hr ru hru
+    obtain ⟨ci, hci', hcs⟩ := hwf.rules_ctor_shape H.envC H.addTypesCtors r hr ru hru
     rw [hruc, VEnv.addCtors_find H.stC t ht c hc] at hci'; cases hci'
     refine ⟨t, ht, c, hc, hcn, r, hr, ru, hru, hruc.trans hcn, hcp, ?_, hown.symm.trans hcp⟩
     have := hcs.1; omega

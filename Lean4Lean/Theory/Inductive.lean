@@ -8,8 +8,10 @@ namespace Lean4Lean
 
 The shapes of recursor types, constructor types and ι-rule reducts (`VExpr.RecShape`,
 `VExpr.CtorShape`, `VExpr.RuleShape`, with `VExpr.MotiveShape`/`VExpr.MinorFor` for the
-motive and minor premises), the staged environment extension `VEnv.addInduct` (type
-formers, constructors, recursors, ι rules), and the declaration well-formedness predicate
+motive and minor premises), the strict-positivity and result-type conditions on
+constructors (`VExpr.CtorPositive`, `VExpr.CtorResult`), the large-elimination judgment
+(`VInductDecl.LargeElim`), the staged environment extension `VEnv.addInduct` (type formers,
+constructors, recursors, ι rules), and the declaration well-formedness predicate
 `VInductDecl.WF` it is checked against.
 -/
 
@@ -18,49 +20,171 @@ it for bounded existentials `∃ m < n, p m`. -/
 instance decidableExistsLT' {n : Nat} {p : Nat → Prop} [DecidablePred p] :
     Decidable (∃ m, m < n ∧ p m) := Nat.decidableExistsLT n
 
+namespace VExpr
+
+/-! ### Positivity and the result type of a constructor (thesis §2.6.1) -/
+
+/-- One of the constants `cs` occurs in the expression. Mirrors the kernel's `hasIndOcc`
+(`Inductive/Add.lean`), used there over the type formers of the block being declared. -/
+def MentionsConst (cs : List Name) : VExpr → Prop
+  | .bvar _ | .sort _ => False
+  | .const c _ => c ∈ cs
+  | .app e₁ e₂ | .lam e₁ e₂ | .forallE e₁ e₂ => MentionsConst cs e₁ ∨ MentionsConst cs e₂
+
+/-- The boolean decision procedure behind `VExpr.MentionsConst`. -/
+def mentionsConst (cs : List Name) : VExpr → Bool
+  | .bvar _ | .sort _ => false
+  | .const c _ => decide (c ∈ cs)
+  | .app e₁ e₂ | .lam e₁ e₂ | .forallE e₁ e₂ => mentionsConst cs e₁ || mentionsConst cs e₂
+
+theorem mentionsConst_iff {cs : List Name} :
+    ∀ {e : VExpr}, e.mentionsConst cs = true ↔ e.MentionsConst cs
+  | .bvar _ | .sort _ | .const .. => by simp [mentionsConst, MentionsConst]
+  | .app .. | .lam .. | .forallE .. => by
+    simp [mentionsConst, MentionsConst, mentionsConst_iff]
+
+instance {cs : List Name} {e : VExpr} : Decidable (e.MentionsConst cs) :=
+  decidable_of_iff _ mentionsConst_iff
+
+/-- Thesis §2.6.1, the result type of a constructor of `T`: a Π-telescope of `np` parameters
+and `nf` fields ending in `T` applied to the parameter variables in order and then `nind`
+index terms. -/
+def CtorResult (ty : VExpr) (T : Name) (np nf nind : Nat) : Prop :=
+  ty.piArity = np + nf ∧
+  ∃ us idx, idx.length = nind ∧ ty.piBody = (VExpr.const T us).mkApps (bvarsDesc nf np ++ idx)
+
+theorem CtorResult_iff {ty : VExpr} {T : Name} {np nf nind : Nat} :
+    ty.CtorResult T np nf nind ↔
+      ty.piArity = np + nf ∧ ty.piBody.headConst? = some T ∧
+        bvarsDesc nf np <+: ty.piBody.getAppArgs ∧
+        (ty.piBody.getAppArgs.drop np).length = nind := by
+  refine and_congr_right fun _ => ?_
+  have : (∃ us idx, idx.length = nind ∧
+      ty.piBody = (VExpr.const T us).mkApps (bvarsDesc nf np ++ idx)) ↔
+      ∃ us idx, ty.piBody = (VExpr.const T us).mkApps (bvarsDesc nf np ++ idx) ∧
+        idx.length = nind :=
+    ⟨fun ⟨us, idx, h1, h2⟩ => ⟨us, idx, h2, h1⟩, fun ⟨us, idx, h1, h2⟩ => ⟨us, idx, h2, h1⟩⟩
+  rw [this, eq_const_mkApps_append_iff (P := fun idx => idx.length = nind), bvarsDesc_length]
+
+instance {ty : VExpr} {T : Name} {np nf nind : Nat} : Decidable (ty.CtorResult T np nf nind) :=
+  decidable_of_iff _ CtorResult_iff.symm
+
+/-- Thesis §2.6.3, the major premise `z : P p x` of a recursor over `T`: `T` applied to the
+recursor's own parameter variables and to its index variables. -/
+def MajorApp (A : VExpr) (T : Name) (np nm nmin nind : Nat) : Prop :=
+  ∃ us, A = (VExpr.const T us).mkApps (bvarsDesc (nm + nmin + nind) np ++ bvarsDesc 0 nind)
+
+theorem MajorApp_iff {A : VExpr} {T : Name} {np nm nmin nind : Nat} :
+    A.MajorApp T np nm nmin nind ↔
+      A.headConst? = some T ∧
+        A.getAppArgs = bvarsDesc (nm + nmin + nind) np ++ bvarsDesc 0 nind :=
+  eq_const_mkApps_iff
+
+instance {A : VExpr} {T : Name} {np nm nmin nind : Nat} :
+    Decidable (A.MajorApp T np nm nmin nind) := decidable_of_iff _ MajorApp_iff.symm
+
+/-- Thesis §2.6.1, the kernel's `isValidIndApp?`: an application of one of the block's type
+formers `fs` to the block's parameter variables — seen from `d` binders below the field
+level — and to index terms in which no former occurs. -/
+def ValidIndApp (fs : List Name) (np d : Nat) (e : VExpr) : Prop :=
+  ∃ T ∈ fs, ∃ us idx, e = (VExpr.const T us).mkApps (bvarsDesc d np ++ idx) ∧
+    ∀ a ∈ idx, ¬ a.MentionsConst fs
+
+theorem ValidIndApp_iff {fs : List Name} {np d : Nat} {e : VExpr} :
+    e.ValidIndApp fs np d ↔
+      (∃ T, e.headConst? = some T ∧ T ∈ fs) ∧ bvarsDesc d np <+: e.getAppArgs ∧
+        ∀ a ∈ e.getAppArgs.drop np, ¬ a.MentionsConst fs := by
+  simp only [ValidIndApp, eq_const_mkApps_append_iff, bvarsDesc_length]
+  constructor
+  · rintro ⟨T, hT, hc, hpre, hidx⟩; exact ⟨⟨T, hc, hT⟩, hpre, hidx⟩
+  · rintro ⟨⟨T, hc, hT⟩, hpre, hidx⟩; exact ⟨T, hT, hc, hpre, hidx⟩
+
+instance {fs : List Name} {np d : Nat} {e : VExpr} : Decidable (e.ValidIndApp fs np d) :=
+  decidable_of_iff _ ValidIndApp_iff.symm
+
+/-- Thesis §2.6.1, strict positivity of one constructor field, mirroring the kernel's
+`checkPositivity`: either no former of `fs` occurs in the field type, or it is
+`∀ x₁ … x_k, B` with no `xᵢ`'s type mentioning a former and `B` a `ValidIndApp`. The kernel
+reduces the field type (and each `xᵢ`'s) to weak head normal form first; the model reads the
+manifest binders only. -/
+def FieldPositive (fs : List Name) (np d : Nat) (ty : VExpr) : Prop :=
+  ¬ ty.MentionsConst fs ∨
+    ((∀ A ∈ ty.piBinders, ¬ A.MentionsConst fs) ∧
+      ty.piBody.ValidIndApp fs np (d + ty.piArity))
+
+instance {fs : List Name} {np d : Nat} {ty : VExpr} : Decidable (ty.FieldPositive fs np d) := by
+  unfold FieldPositive; infer_instance
+
+/-- Thesis §2.6.1, strict positivity of a constructor with `np` parameters: no former of
+`fs` occurs in a parameter binder, and every later binder — field `i`, sitting under `np + i`
+binders — is `FieldPositive`. The result type is pinned separately, by `CtorResult`. -/
+def CtorPositive (fs : List Name) (np : Nat) (ty : VExpr) : Prop :=
+  (∀ A ∈ ty.piBinders.take np, ¬ A.MentionsConst fs) ∧
+  ∀ i < ty.piArity - np, ∃ A, ty.piBinders[np + i]? = some A ∧ A.FieldPositive fs np i
+
+instance {fs : List Name} {np : Nat} {ty : VExpr} : Decidable (ty.CtorPositive fs np) := by
+  unfold CtorPositive; infer_instance
+
+/-- Field `i` of a constructor with `np` parameters occurs among the index arguments of its
+result type: the syntactic clause of the kernel's `isLargeEliminator`. -/
+def FieldInIndices (ty : VExpr) (np i : Nat) : Prop :=
+  VExpr.bvar (ty.piArity - np - 1 - i) ∈ ty.piBody.getAppArgs.drop np
+
+instance {ty : VExpr} {np i : Nat} : Decidable (ty.FieldInIndices np i) := by
+  unfold FieldInIndices; infer_instance
+
+/-- The de Bruijn context of field `i` of a constructor with `np` parameters: the parameter
+and earlier-field binder types, innermost first. -/
+def fieldCtx (ty : VExpr) (np i : Nat) : List VExpr := (ty.piBinders.take (np + i)).reverse
+
+/-! ### Recursor, constructor and ι-reduct shapes (thesis §2.6.3–2.6.4) -/
+
 /-- Thesis §2.6.3, the motive `C : ∀ a::α. P a → U`: a Π-telescope ending in a sort whose
 last binder is headed by a constant (`VExpr.motiveFormer?`, that head). *Which* constant is
 not pinned here — a bare `VEnv` has no notion of type former — and `RecShape` ties only the
 eliminated motive's head to the major premise's; the heads of the other motives of a
-mutual/nested recursor are unconstrained. -/
-def VExpr.MotiveShape (A : VExpr) : Prop :=
+mutual recursor are unconstrained. -/
+def MotiveShape (A : VExpr) : Prop :=
   (∃ u, A.piBody = .sort u) ∧ A.motiveFormer?.isSome = true
 
 /-- Thesis §2.6.3, the head `C` of the minor premise `ε_c = ∀ b::β. ∀ v::δ. C p[b] (c b)`:
 the Π-body of minor `i` (counted from the outermost minor binder) is headed by one of the
 `nm` motives. Under the minor's own `piArity` binders, the motive binders — which precede
 minor `i` by `i` minors — are `bvar (piArity + i + k)` for `k < nm` (motive `nm - 1 - k`). -/
-def VExpr.MinorHeaded (A : VExpr) (i nm : Nat) : Prop :=
+def MinorHeaded (A : VExpr) (i nm : Nat) : Prop :=
   ∃ k < nm, A.piBody.getAppFn = .bvar (A.piArity + i + k)
 
 /-- Thesis §2.6.3, the minor premise `ε_c = ∀ b::β. ∀ v::δ. C p[b] (c b)` of constructor
 `c`: a Π-telescope ending in an application of a bound variable (the motive, which
 `RecShape` pins on the same binder) whose last argument is headed by `c`. -/
-def VExpr.MinorFor (A : VExpr) (c : Name) : Prop :=
+def MinorFor (A : VExpr) (c : Name) : Prop :=
   A.RecHeaded ∧ ∃ x, A.piBody.getAppArgs.getLast? = some x ∧ x.headConst? = some c
 
 /-- Thesis §2.6.3: the recursor telescope is `∀ params motives minors indices major,
 motive_j indices major`, with motive `j` counted from the outermost motive binder. Motive
 binders have the shape `MotiveShape`, minor binders end in an application of one of the
-motives (`MinorHeaded`), the major premise is a constant application ending in the index
-variables (`IndApp`), and `motive_j`'s last binder has the major premise's head constant.
+motives (`MinorHeaded`), the major premise is the type former `T` applied to the parameter
+and index variables (`MajorApp`), and `motive_j`'s last binder is headed by `T` too.
 Parameter and index binders are unconstrained. -/
-def VExpr.RecShape (ty : VExpr) (np nm nmin nind : Nat) : Prop :=
+def RecShape (ty : VExpr) (np nm nmin nind : Nat) : Prop :=
   ty.piArity = np + nm + nmin + nind + 1 ∧
   (∀ i < nm, ∃ A, ty.piBinders[np + i]? = some A ∧ A.MotiveShape) ∧
   (∀ i < nmin, ∃ A, ty.piBinders[np + nm + i]? = some A ∧ A.MinorHeaded i nm) ∧
-  ∃ j < nm, ∃ M, ty.piBinders[np + nm + nmin + nind]? = some M ∧ M.IndApp nind ∧
-    (∃ A, ty.piBinders[np + j]? = some A ∧ A.motiveFormer? = M.headConst?) ∧
-    ty.piBody = (VExpr.bvar (nind + nmin + 1 + (nm - 1 - j))).mkApps (VExpr.bvarsDesc 0 (nind + 1))
+  ∃ j < nm,
+    (∃ M, ty.piBinders[np + nm + nmin + nind]? = some M ∧
+      ∃ T, M.headConst? = some T ∧ M.MajorApp T np nm nmin nind ∧
+        ∃ A, ty.piBinders[np + j]? = some A ∧ A.motiveFormer? = some T) ∧
+    ty.piBody =
+      (VExpr.bvar (nind + nmin + 1 + (nm - 1 - j))).mkApps (VExpr.bvarsDesc 0 (nind + 1))
 
 /-- The syntactic shape of a constructor type: exactly `arity` Π-binders ending in a constant
 application (`CtorHeaded`). Which binders are parameters and whether the constant is a type
 former, a bare `VEnv` cannot say. -/
-def VExpr.CtorShape (ty : VExpr) (arity : Nat) : Prop := ty.piArity = arity ∧ ty.CtorHeaded
+def CtorShape (ty : VExpr) (arity : Nat) : Prop := ty.piArity = arity ∧ ty.CtorHeaded
 
 /-- The type former a recursor type with major index `idx` eliminates: the head constant of
 its major premise (the `idx`-th Π-binder). -/
-def VExpr.majorFormer? (ty : VExpr) (idx : Nat) : Option Name :=
+def majorFormer? (ty : VExpr) (idx : Nat) : Option Name :=
   ty.piBinders[idx]?.bind VExpr.headConst?
 
 /-- Thesis §2.6.4: the reduct of the ι rule using minor `j` (counted from the outermost
@@ -73,10 +197,12 @@ recursive calls `rec … (u_i x)`. Their *number* is pinned: `VInductDecl.WF.rul
 `nrec` to the number of the minor's binders after the fields (`v::δ` has the length of `δ`),
 so the reduct applies the minor to exactly its binders — none beyond the fields for a
 non-recursive constructor. -/
-def VExpr.RuleShape (rhs : VExpr) (np nm nmin nf nrec j : Nat) : Prop :=
+def RuleShape (rhs : VExpr) (np nm nmin nf nrec j : Nat) : Prop :=
   rhs.lamArity = np + nm + nmin + nf ∧
   ∃ recArgs : List VExpr, recArgs.length = nrec ∧
     rhs.lamBody = (VExpr.bvar (nf + (nmin - 1 - j))).mkApps (VExpr.bvarsDesc 0 nf ++ recArgs)
+
+end VExpr
 
 instance {A : VExpr} : Decidable A.MotiveShape := by unfold VExpr.MotiveShape; infer_instance
 instance {A : VExpr} {i nm : Nat} : Decidable (A.MinorHeaded i nm) := by
@@ -107,16 +233,74 @@ theorem VExpr.MinorHeaded.recHeaded {A : VExpr} {i nm : Nat} (h : A.MinorHeaded 
 
 /-- A recursor type is `RecHeaded`: its Π-body is a motive application. -/
 theorem VExpr.RecShape.recHeaded {ty : VExpr} {np nm nmin nind : Nat}
-    (h : ty.RecShape np nm nmin nind) : ty.RecHeaded := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, hj⟩ := h
-  exact ⟨_, by rw [hj, VExpr.getAppFn_mkApps]; rfl⟩
+    (h : ty.RecShape np nm nmin nind) : ty.RecHeaded :=
+  h.2.2.2.elim fun _ hj => ⟨_, by rw [hj.2.2, VExpr.getAppFn_mkApps]; rfl⟩
+
+/-- A recursor type has at least one motive. -/
+theorem VExpr.RecShape.one_le_numMotives {ty : VExpr} {np nm nmin nind : Nat}
+    (h : ty.RecShape np nm nmin nind) : 1 ≤ nm :=
+  h.2.2.2.elim fun _ hj => Nat.lt_of_le_of_lt (Nat.zero_le _) hj.1
+
+/-- The type former a `RecShape` recursor eliminates: the head constant of its major
+premise, which `MajorApp` pins to an application of the parameter and index variables. -/
+theorem VExpr.RecShape.majorFormer?_eq {ty : VExpr} {np nm nmin nind : Nat}
+    (h : ty.RecShape np nm nmin nind) :
+    ∃ T M, ty.piBinders[np + nm + nmin + nind]? = some M ∧
+      ty.majorFormer? (np + nm + nmin + nind) = some T ∧ M.MajorApp T np nm nmin nind :=
+  h.2.2.2.elim fun _ hj => hj.2.1.elim fun M hM => hM.2.elim fun T hT =>
+    ⟨T, M, hM.1, by rw [VExpr.majorFormer?, hM.1]; exact hT.1, hT.2.1⟩
+
+/-- A constructor returning its own type former has that constant as its Π-body's head. -/
+theorem VExpr.CtorResult.ctorHeaded {ty : VExpr} {T : Name} {np nf nind : Nat}
+    (h : ty.CtorResult T np nf nind) : ty.CtorHeaded := by
+  obtain ⟨-, us, idx, -, hb⟩ := h
+  exact ⟨T, us, by rw [hb, VExpr.getAppFn_mkApps]; rfl⟩
+
+/-- A constructor returning its own type former has `CtorShape` of arity `np + nf`. -/
+theorem VExpr.CtorResult.ctorShape {ty : VExpr} {T : Name} {np nf nind : Nat}
+    (h : ty.CtorResult T np nf nind) : ty.CtorShape (np + nf) := ⟨h.1, h.ctorHeaded⟩
+
+/-! ### Large elimination (thesis §2.6.2) -/
+
+/-- Thesis §2.6.2, the kernel's `isLargeEliminator`: the block may eliminate into an
+arbitrary sort. Either its result sort `ℓ` is never `Prop`, or the block is a single type
+former with no constructor, or a single type former with one constructor each of whose
+fields is a proposition or occurs among the indices of the constructor's result type. `env`
+is the environment in which the fields are typed, the one with the type formers declared. -/
+def VInductDecl.LargeElim (env : VEnv) (decl : VInductDecl) (ℓ : VLevel) : Prop :=
+  ℓ.IsNeverZero ∨
+  (∃ t, decl.types = [t] ∧ t.ctors = []) ∨
+  (∃ t c, decl.types = [t] ∧ t.ctors = [c] ∧
+    ∀ i < c.type.piArity - decl.nparams, ∃ F, c.type.piBinders[decl.nparams + i]? = some F ∧
+      (env.HasType decl.uvars (c.type.fieldCtx decl.nparams i) F (.sort .zero) ∨
+        c.type.FieldInIndices decl.nparams i))
+
+/-- The syntactic half of `VInductDecl.LargeElim`, decidable: a block outside the never-`Prop`
+case is a single type former with at most one constructor. Whether a field of that
+constructor is a proposition is a typing judgment, not decided here. -/
+def VInductDecl.LargeElimShape (decl : VInductDecl) : Prop :=
+  decl.types.length = 1 ∧ ∀ t ∈ decl.types, t.ctors.length ≤ 1
+
+instance {decl : VInductDecl} : Decidable decl.LargeElimShape := by
+  unfold VInductDecl.LargeElimShape; infer_instance
+
+/-- A block whose result sort can be `Prop` eliminates largely only in the shape
+`LargeElimShape` allows. -/
+theorem VInductDecl.LargeElim.shape {env : VEnv} {decl : VInductDecl} {ℓ : VLevel}
+    (h : decl.LargeElim env ℓ) (hz : ¬ ℓ.IsNeverZero) : decl.LargeElimShape := by
+  rcases h with h | ⟨t, ht, hc⟩ | ⟨t, c, ht, hc, -⟩
+  · exact absurd h hz
+  · refine ⟨by rw [ht]; rfl, fun t' ht' => ?_⟩
+    rw [ht, List.mem_singleton] at ht'; subst ht'; simp [hc]
+  · refine ⟨by rw [ht]; rfl, fun t' ht' => ?_⟩
+    rw [ht, List.mem_singleton] at ht'; subst ht'; simp [hc]
 
 /-- Register recursor rule `ru` (of recursor `r`) as an ι rule: redex `r`'s spine (major
 at `getMajorIdx`) applied to `ru.ctor`'s spine (`ctorParams + nfields` arguments),
 reduct `SimplePattern.iotaRHS`. Fails if `ru.rhs` is not closed. Only the constructor
 rule of thesis §2.6.4 is registered: K-like reduction (its second rule, on a
-non-constructor major of a subsingleton eliminator) is not registered — a completeness
-boundary, see `VInductDecl.WF`. -/
+non-constructor major of a subsingleton eliminator) is not registered — see
+`VInductDecl.WF`. -/
 def VEnv.addRecRule (env : VEnv) (r : VRecursor) (ru : VRecRule) : Option VEnv :=
   if h : ru.rhs.Closed then
     some <| env.addPat
@@ -179,81 +363,22 @@ non-closed rule reduct. The chain of `VInductDecl.addTypes`, `addCtors`, `addRec
 def VEnv.addInduct (env : VEnv) (decl : VInductDecl) : Option VEnv :=
   decl.addTypesCtorsRecs env >>= decl.addRules
 
-/-- Well-formedness of an inductive declaration, staged like the kernel's checks: the type
-formers are typed in `env`, the constructors after the type formers are declared, the
-recursors after the constructors, and the ι rules after the recursors (`rules_wf`, the
-`VDefEq.WF` of a rule: its generic redex and reduct are typed at a common type); universe
-parameters line up and the elimination level is pinned (`recs_elim`); the recursor
-telescopes have the §2.6.3 shape (`rec_shape`: motives ending in a sort, their last binder
-headed by a constant, minors ending in an application of one of the motives, the major
-premise a constant application ending in the index variables, the eliminated motive's head
-constant that of the major premise);
-every type former has a recursor and every recursor over one of the block's type formers has
-one rule per constructor (`types_have_rec`, `rules_total`, `rules_nodup`); the rule reducts
-have the §2.6.4 shape tied to their minor premise (`rule_shape`: the rule for `c` reduces to
-a minor whose last argument is headed by `c`, applied to the fields and to as many further
-arguments as the minor has remaining binders); every rule's `ctor` is a declared constant of
-`CtorShape` arity `ctorParams + nfields` (`rules_ctor` — a constants lookup and an arity,
-not "is a constructor", which a bare `VEnv` cannot express), with `ctorParams` equal in
-count to the recursor's when it is one of the block's own constructors
-(`rules_own_params`); and every recursor records the declaration's parameter count
-(`rec_params`) — all nested-safe.
+/-- Well-formedness of a **direct** mutual inductive block (thesis §2.6.1–2.6.4), staged
+like the kernel's checks: type formers typed in `env`, constructors after the type formers
+are declared, recursors after the constructors, ι rules after the recursors. Direct means
+every recursor eliminates one of the block's own type formers (`recs_over_block`) and every
+rule fires on one of that former's constructors (`rules_ctor`); a nested inductive — whose
+constructors mention the block inside another type former (`Tree.node : List Tree → Tree`)
+and whose auxiliary recursors eliminate that former — is therefore not well-formed here.
+The kernel compiles such a block to a direct one (`ElimNestedInductive`, `Inductive/Add.lean`)
+before checking it, and modelling that pass is future work. Typing checks the constants'
+types (`types_wf`, `ctors_wf`, `recs_wf`), the universe of every constructor field and the
+propositionality clause of large elimination (`universes`), and the ι rules (`rules_wf`);
+every other clause is syntactic.
 
-**What is assumed rather than derived.** The thesis postulates the ι rule as an inference
-rule of its *untyped* ideal definitional equality `Γ ⊢ e ≡ e'` (§2.6.4, over the
-specification of §2.6.3); that both sides of every well-typed instance are typed is its
-regularity lemmas (`typesys.tex`, "Regularity continued": `Γ ⊢ e : α` and `e ⇝ e'` give
-`Γ ⊢ e ≡ e' : α`, i.e. subject reduction for `⇝`; `unique.tex`, "Regularity of reductions",
-the same for `⇝_κ`). `rules_wf` is this model's admissibility condition for registering
-that rule: the `VDefEq.WF`-style typing of the rule's two sides that `Ordered.pat` demands,
-which no kernel check performs — the model-level analogue of that regularity, for the
-generic rule. Here it is a field, checked by nothing, and what is derived from it is
-`VEnv.Ordered` (`VEnv.addInduct_WF`) — not subject reduction of the rule's instances, which
-is the separate strong-system obligation `VEnv.WF.patsStrong`.
-
-**Not pinned syntactically, and only in type through `rules_wf`:** the field binders `b::β`
-of a minor premise (those of its constructor) and the binders `v::δ` after them —
-`MinorHeaded`/`MinorFor` fix only a minor's head (some motive) and the head constant of its
-last argument, so `δ` is free in its types; `rule_shape` pins its *length* — the reduct
-applies the minor to the fields and to exactly as many further arguments as the minor has
-binders after them (thesis `e_c b v` with `v::δ`). The
-typing `rules_wf` forces the reduct's arguments `v` to have the types `δ` the minor expects,
-but pins neither `δ` nor the terms `v`: a rule whose `v` are not the thesis's recursive
-calls `rec … (u_i x)` passes every field — a well-typed `v` that does not call the recursor
-on a subterm, or a minor with an extra binder whose rule, though typed, need not normalise.
-
-**Not pinned:** the parameter arguments of the type-former applications in the major premise
-and in the motives (the thesis's shared `Γ`) — `IndApp` fixes only the index suffix of the
-major premise and `motiveFormer?` only the head of a motive's last binder, and `rules_wf`
-types the rule without tying those arguments to the parameter binders (for the auxiliary
-recursors of a nested block they are not the parameters: `Tree.rec_1`'s major premise is
-over `List Tree`); only the well-formedness of the recursor type constrains them. Likewise
-`recs_elim` pins the number of a recursor's universe parameters and the sort its motives
-eliminate into, but not that the block's constants occur in its type at the shifted levels
-`param (i+1)` (a recursor mentioning the block at `param 0`, its elimination universe,
-passes).
-
-**Deliberately not pinned, because false for nested inductive blocks** (the auxiliary
-recursor `Tree.rec_1` has two motives while `types = [Tree]`, fires on `List.nil`/`List.cons`,
-and `recs.length ≠ types.length`): `numMotives = types.length`, `numMinors = Σ ctors`,
-`recs.length = types.length`, `ru.ctor ∈` the block's own constructors, and any constraint on
-`all`. `rule_shape` pins one minor per rule; a recursor may have minors without rules.
-
-**Not modelled** (soundness-tier admissibility conditions on the declaration, deferred with
-no placeholder proof): strict positivity; the universe constraints on the constructor
-arguments (`imax(ℓ', ℓ) ≤ ℓ`); the large-elimination judgment `K LE` itself — `recs_elim`
-ties the elimination level to the recursor's extra universe parameter but not that parameter
-to the block (a `Prop`-valued block eliminating into `Sort u` passes).
-
-**Completeness boundary, not an admissibility gap:** K-like reduction (thesis §2.6.4's
-second rule, on a non-constructor major of a subsingleton eliminator) is not registered.
-`addRecRule` installs only the constructor rule and the flag `k` is recorded but unused —
-the `pats` registry is syntactic while the kernel's `toCtorWhenK` is type-directed — so the
-model's ι reduces strictly less than the kernel's. The *equalities* K-like reduction
-produces are nonetheless derivable: the thesis reads it as proof irrelevance followed by ι,
-and `IsDefEq` has both (`proofIrrel`, `pat`). What is deferred is the refinement of the
-kernel's `toCtorWhenK` step (`Verify/TypeChecker/WHNF.lean`, `reduceRecursor.WF`) and the
-admissibility of the recorded `k` (the kernel's `isKTarget`). -/
+**Not modelled**: K-like reduction as a reduction rule (`addRecRule` installs only §2.6.4's
+constructor rule, and the recorded flag `k` is unused); structure η; the kernel's `whnf` on
+a field type, where `CtorPositive` and `universes` read the manifest binders. -/
 structure VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop where
   /-- Type formers are typed in `env`. -/
   types_wf : ∀ t ∈ decl.types, t.toVConstVal.toVConstant.WF env
@@ -267,49 +392,65 @@ structure VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop where
   types_uvars : ∀ t ∈ decl.types, t.uvars = decl.uvars
   /-- So do the constructors. -/
   ctors_uvars : ∀ t ∈ decl.types, ∀ c ∈ t.ctors, c.uvars = decl.uvars
+  /-- §2.6.1–2.6.2: one result sort `ℓ` for the whole block, above the universe of every
+  constructor field (`imax(ℓ', ℓ) ≤ ℓ`), and large elimination whenever a recursor asks for
+  the extra universe parameter. -/
+  universes : ∀ envT, decl.addTypes env = some envT → ∃ ℓ,
+    (∀ t ∈ decl.types, t.type.piBody = .sort ℓ ∧ decl.nparams ≤ t.type.piArity) ∧
+    (∀ t ∈ decl.types, ∀ c ∈ t.ctors, ∀ i < c.type.piArity - decl.nparams,
+      ∃ F, c.type.piBinders[decl.nparams + i]? = some F ∧ ∃ u,
+        envT.HasType decl.uvars (c.type.fieldCtx decl.nparams i) F (.sort u) ∧
+        VLevel.imax u ℓ ≤ ℓ) ∧
+    ((∃ r ∈ decl.recs, r.uvars = decl.uvars + 1) → decl.LargeElim envT ℓ)
   /-- §2.6.3, κ: a recursor has the block's universe parameters, plus one extra — the
   first, `VLevel.param 0` — exactly when it eliminates into an arbitrary sort; every motive
   then ends in `Sort (param 0)`, and otherwise in `Prop`. -/
   recs_elim : ∀ r ∈ decl.recs, (r.uvars = decl.uvars ∨ r.uvars = decl.uvars + 1) ∧
     ∀ i < r.numMotives, ∃ A, r.type.piBinders[r.numParams + i]? = some A ∧
       A.piBody = .sort (if r.uvars = decl.uvars + 1 then .param 0 else .zero)
-  /-- Every recursor records the declaration's parameter count. A count only: the
-  parameter binders of the recursor type are unconstrained (`RecShape`). -/
+  /-- Every recursor records the declaration's parameter count. -/
   rec_params : ∀ r ∈ decl.recs, r.numParams = decl.nparams
+  /-- A constructor's parameter binders are its type former's. -/
+  ctors_params : ∀ t ∈ decl.types, ∀ c ∈ t.ctors,
+    c.type.piBinders.take decl.nparams = t.type.piBinders.take decl.nparams
+  /-- §2.6.1: a constructor returns its own type former applied to the parameter variables
+  and to as many index terms as the former has indices. -/
+  ctors_result : ∀ t ∈ decl.types, ∀ c ∈ t.ctors,
+    ∃ nf, c.type.CtorResult t.name decl.nparams nf (t.type.piArity - decl.nparams)
+  /-- §2.6.1: every constructor is strictly positive in the block's type formers. -/
+  ctors_positive : ∀ t ∈ decl.types, ∀ c ∈ t.ctors,
+    c.type.CtorPositive (decl.types.map (·.name)) decl.nparams
+  /-- The block is direct: every recursor eliminates one of its own type formers. -/
+  recs_over_block : ∀ r ∈ decl.recs,
+    ∃ t ∈ decl.types, r.type.majorFormer? r.getMajorIdx = some t.name
+  /-- §2.6.3: a recursor has one motive per type former, one minor per constructor of the
+  block, and as many indices as the type former it eliminates. -/
+  rec_counts : ∀ r ∈ decl.recs, r.numMotives = decl.types.length ∧
+    r.numMinors = (decl.types.flatMap (·.ctors)).length ∧
+    ∀ t ∈ decl.types, r.type.majorFormer? r.getMajorIdx = some t.name →
+      r.numIndices = t.type.piArity - decl.nparams
   /-- §2.6.3: the recursor telescope split and the shapes of its motives, minors and
   major premise. -/
   rec_shape : ∀ r ∈ decl.recs, r.type.RecShape r.numParams r.numMotives r.numMinors r.numIndices
   /-- A recursor has at most one rule per constructor. -/
   rules_nodup : ∀ r ∈ decl.recs, (r.rules.map (·.ctor)).Nodup
-  /-- Every rule's `ctor` is a constant of the stage-1 environment whose type is a
-  Π-telescope of `ctorParams + nfields` binders ending in a constant application
-  (`CtorShape`). A constants lookup plus an arity, nothing more: a bare `VEnv` records no
-  constructors, so this does not say `ru.ctor` *is* a constructor — any constant of that
-  shape passes. -/
-  rules_ctor : ∀ envC, decl.addTypesCtors env = some envC → ∀ r ∈ decl.recs, ∀ ru ∈ r.rules,
-    ∃ ci, envC.constants ru.ctor = some ci ∧ ci.type.CtorShape (ru.ctorParams + ru.nfields)
-  /-- A rule on one of the block's own constructors records the recursor's parameter count.
-  A count only: the constructor's parameter arguments in the generic redex are holes, tied
-  to the recursor's parameters by nothing here (`Pattern.RHS.Generic`). -/
-  rules_own_params : ∀ r ∈ decl.recs, ∀ ru ∈ r.rules,
-    ru.ctor ∈ decl.types.flatMap (·.ctors.map (·.name)) → ru.ctorParams = r.numParams
+  /-- §2.6.4: every rule fires on a constructor of the type former its recursor eliminates,
+  with the declaration's parameter count and the rule's declared field count. -/
+  rules_ctor : ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ∃ t ∈ decl.types,
+    r.type.majorFormer? r.getMajorIdx = some t.name ∧ ∃ c ∈ t.ctors,
+      ru.ctor = c.name ∧ ru.ctorParams = decl.nparams ∧
+      c.type.CtorResult t.name decl.nparams ru.nfields (t.type.piArity - decl.nparams)
   /-- Every type former of the block is eliminated by a recursor of the block. -/
   types_have_rec : ∀ t ∈ decl.types, ∃ r ∈ decl.recs, r.type.majorFormer? r.getMajorIdx = some t.name
-  /-- §2.6.3/§2.6.4, `ε` has the length of `K`: a recursor over one of the block's type
-  formers has a rule for each of its constructors (exactly one, by `rules_nodup`). Vacuous
-  for any recursor whose major premise is over a type former outside `decl.types` — the
-  auxiliary recursors of a nested block, but equally a recursor declared over an older type
-  former — since a bare `VEnv` records no constructors of older type formers and totality
-  over them cannot be stated; such a recursor passes with any set of rules. -/
+  /-- §2.6.3/§2.6.4, `ε` has the length of `K`: a recursor has a rule for each constructor
+  of the type former it eliminates (exactly one, by `rules_nodup`). -/
   rules_total : ∀ r ∈ decl.recs, ∀ t ∈ decl.types, r.type.majorFormer? r.getMajorIdx = some t.name →
     ∀ c ∈ t.ctors, ∃ ru ∈ r.rules, ru.ctor = c.name
   /-- §2.6.4, the reduct shape, tied to §2.6.3's constructor↔minor correspondence: the rule
-  for `ru.ctor` reduces to minor `j`, a minor whose last argument is headed by `ru.ctor`
-  (`MinorFor` pins that head constant only; nothing pins a unique such minor), applied to
-  the `nfields` fields and to exactly as many further arguments as the minor has binders
-  after the fields (thesis `e_c b v`, `v::δ`): `nfields ≤ piArity(minor)` and the reduct's
-  recursive-argument count is `piArity(minor) - nfields` — zero for a non-recursive
-  constructor. A count only: the terms `v` are pinned by nothing here. -/
+  for `ru.ctor` reduces to minor `j`, a minor whose last argument is headed by `ru.ctor`,
+  applied to the `nfields` fields and to exactly as many further arguments as the minor has
+  binders after the fields (thesis `e_c b v`, `v::δ`). A count only: the terms `v` are
+  pinned by nothing here. -/
   rule_shape : ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ∃ j < r.numMinors, ∃ A,
     r.type.piBinders[r.numParams + r.numMotives + j]? = some A ∧ A.MinorFor ru.ctor ∧
     ru.nfields ≤ A.piArity ∧
@@ -319,7 +460,9 @@ structure VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop where
   `VEnv.PatWF`; the other half, the template shape of the reduct, is `rule_shape`) — its
   generic redex `rec params motives minors idx (c cargs fields)` and reduct
   `rhs params motives minors fields` are typed at a common type in the context of the
-  parameters, motives, minors and fields. -/
+  parameters, motives, minors and fields. No kernel check performs it: it is the model's
+  admissibility condition for registering the rule, the analogue of the thesis's regularity
+  of reductions for the generic rule. -/
   rules_wf : ∀ envR, decl.addTypesCtorsRecs env = some envR → ∀ r ∈ decl.recs, ∀ ru ∈ r.rules,
     ∀ hc : ru.rhs.Closed,
     envR.PatTyped
@@ -336,3 +479,12 @@ theorem VInductDecl.WF.ctors_have_rules {env : VEnv} {decl : VInductDecl} (H : d
   obtain ⟨r, hr, hmaj⟩ := H.types_have_rec t ht
   obtain ⟨ru, hru, hctor⟩ := H.rules_total r hr t ht hmaj c hc
   exact ⟨r, hr, ru, hru, hctor⟩
+
+/-- Every rule records its recursor's parameter count: its constructor is one of the block's
+own, so it has the declaration's parameters (`rules_ctor`), as does the recursor
+(`rec_params`). -/
+theorem VInductDecl.WF.rules_own_params {env : VEnv} {decl : VInductDecl} (H : decl.WF env) :
+    ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ru.ctorParams = r.numParams := by
+  intro r hr ru hru
+  obtain ⟨-, -, -, -, -, -, hnp, -⟩ := H.rules_ctor r hr ru hru
+  rw [hnp, H.rec_params r hr]

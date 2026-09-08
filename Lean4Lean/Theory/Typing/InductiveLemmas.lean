@@ -680,16 +680,30 @@ theorem addInduct_recs_name_inj {env env' : VEnv} {decl : VInductDecl} {ra rb}
   obtain ⟨env1, env2, env3, s1, s2, s3, s4⟩ := addInduct_stages h
   exact addRecs_name_inj s3 ra hra rb hrb hname
 
+/-- The constructor a rule of a well-formed `decl` fires on is one of the block's own
+(`VInductDecl.WF.rules_ctor`), hence registered in the stage-1 environment with a type of
+`CtorShape (ru.ctorParams + ru.nfields)`. -/
+theorem _root_.Lean4Lean.VInductDecl.WF.rules_ctor_shape {env : VEnv} {decl : VInductDecl}
+    (hwf : decl.WF env) : ∀ envC, decl.addTypesCtors env = some envC →
+      ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ∃ ci, envC.constants ru.ctor = some ci ∧
+        ci.type.CtorShape (ru.ctorParams + ru.nfields) := by
+  intro envC hC r hr ru hru
+  obtain ⟨env1, s1, s2⟩ := Option.bind_eq_some_iff.1 hC
+  obtain ⟨t, ht, -, c, hc, hname, hnp, hres⟩ := hwf.rules_ctor r hr ru hru
+  refine ⟨c.toVConstant, ?_, ?_⟩
+  · rw [hname]; exact addCtors_find s2 t ht c hc
+  · rw [hnp]; exact hres.ctorShape
+
 /-- The constructor a rule of a well-formed `decl` fires on is registered in the
 resulting environment, with a type of `CtorShape (ru.ctorParams + ru.nfields)`
-(`VInductDecl.WF.rules_ctor`, carried forward from the stage-1 environment). -/
+(`VInductDecl.WF.rules_ctor_shape`, carried forward from the stage-1 environment). -/
 theorem addInduct_rule_ctor {env env' : VEnv} {decl : VInductDecl} {rec ru}
     (hwf : decl.WF env) (h : env.addInduct decl = some env')
     (hrec : rec ∈ decl.recs) (hru : ru ∈ rec.rules) :
     ∃ ci, env'.constants ru.ctor = some ci ∧ ci.type.CtorShape (ru.ctorParams + ru.nfields) := by
   obtain ⟨env1, env2, env3, s1, s2, s3, s4⟩ := addInduct_stages h
   have hC : decl.addTypesCtors env = some env2 := Option.bind_eq_some_iff.2 ⟨env1, s1, s2⟩
-  obtain ⟨ci, hci, hcs⟩ := hwf.rules_ctor env2 hC rec hrec ru hru
+  obtain ⟨ci, hci, hcs⟩ := hwf.rules_ctor_shape env2 hC rec hrec ru hru
   exact ⟨ci, ((addRecs_le s3).trans (addRules_le s4)).constants hci, hcs⟩
 
 /-! ### Combinatorics of ι redexes -/

@@ -19,10 +19,11 @@ constructor `ctor` (with `ctorParams` parameters and `nfields` non-parameter
 arguments) rewrites to the closed reduct template `rhs`. -/
 structure VRecRule where
   ctor : Name
-  /-- `ConstructorVal.numParams` of `ctor`. Equals the recursor's `numParams` except
-  for the auxiliary recursors of nested inductives (`Tree.rec_1` fires on `List.cons`,
-  whose one parameter is not a parameter of `Tree`). The ι key's constructor spine
-  has `ctorParams + nfields` arguments. -/
+  /-- `ConstructorVal.numParams` of `ctor`. For a direct block — the only kind
+  `VInductDecl.WF` admits — it is the recursor's `numParams`, which `WF.rules_ctor`
+  requires; the kernel's auxiliary recursors of a nested inductive are what make the two
+  differ (`Tree.rec_1` fires on `List.cons`, whose one parameter is not a parameter of
+  `Tree`). The ι key's constructor spine has `ctorParams + nfields` arguments. -/
   ctorParams : Nat
   nfields : Nat
   rhs : VExpr

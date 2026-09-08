@@ -1083,8 +1083,8 @@ instance {e : VExpr} : Decidable (∃ u, e = .sort u) := decidable_of_iff _ isSo
 instance {e : VExpr} : Decidable (∃ k, e = .bvar k) := decidable_of_iff _ isBvar_iff
 instance {e : VExpr} : Decidable (∃ I us, e = .const I us) := decidable_of_iff _ isConst_iff
 
-instance {o : Option VExpr} {P : VExpr → Prop} [DecidablePred P] :
-    Decidable (∃ A, o = some A ∧ P A) :=
+instance {α : Type _} {o : Option α} {P : α → Prop} [DecidablePred P] :
+    Decidable (∃ a, o = some a ∧ P a) :=
   match o with
   | none => isFalse (by rintro ⟨_, h, _⟩; cases h)
   | some a => decidable_of_iff (P a) ⟨fun h => ⟨a, rfl, h⟩, fun ⟨_, h, hp⟩ => Option.some.inj h ▸ hp⟩
@@ -1117,24 +1117,50 @@ def headConst? (e : VExpr) : Option Name :=
 Π-binder. -/
 def motiveFormer? (A : VExpr) : Option Name := A.piBinders.getLast?.bind headConst?
 
-/-- A constant application whose last `nind` arguments are the `nind` innermost variables:
-the syntactic shape of a major premise `z : P a` under `nind` index binders (thesis §2.6.3);
-any constant passes, a bare `VEnv` having no notion of type former. -/
-def IndApp (A : VExpr) (nind : Nat) : Prop :=
-  ∃ I us args, A = (VExpr.const I us).mkApps (args ++ bvarsDesc 0 nind)
+/-- `e.headConst?` names `c` exactly when `e`'s spine head is the constant `c`. -/
+theorem headConst?_eq_some {e : VExpr} {c : Name} :
+    e.headConst? = some c ↔ ∃ us, e.getAppFn = .const c us := by
+  simp only [headConst?]
+  cases hf : e.getAppFn <;> simp
 
-theorem IndApp_iff {A : VExpr} {nind : Nat} :
-    A.IndApp nind ↔ (∃ I us, A.getAppFn = .const I us) ∧ bvarsDesc 0 nind <:+ A.getAppArgs := by
+/-- The spine data of a constant application. -/
+theorem const_mkApps_spine {c : Name} {us : List VLevel} {args : List VExpr} :
+    ((VExpr.const c us).mkApps args).getAppFn = .const c us ∧
+      ((VExpr.const c us).mkApps args).getAppArgs = args :=
+  ⟨by rw [getAppFn_mkApps]; rfl, by rw [getAppArgs_mkApps]; rfl⟩
+
+/-- An expression is its spine head applied to its spine arguments. -/
+theorem eq_const_mkApps_of_spine {e : VExpr} {c : Name} {us : List VLevel} {args : List VExpr}
+    (hf : e.getAppFn = .const c us) (ha : e.getAppArgs = args) :
+    e = (VExpr.const c us).mkApps args := by
+  have h := mkApps_getAppFn_getAppArgs e; rw [hf, ha] at h; exact h.symm
+
+/-- `e` is the constant `c` applied to exactly `args`. -/
+theorem eq_const_mkApps_iff {e : VExpr} {c : Name} {args : List VExpr} :
+    (∃ us, e = (VExpr.const c us).mkApps args) ↔
+      e.headConst? = some c ∧ e.getAppArgs = args := by
   constructor
-  · rintro ⟨I, us, args, rfl⟩
-    exact ⟨⟨I, us, by rw [getAppFn_mkApps]; rfl⟩, ⟨args, by rw [getAppArgs_mkApps]; rfl⟩⟩
-  · rintro ⟨⟨I, us, h1⟩, args, h2⟩
-    refine ⟨I, us, args, ?_⟩
-    have h3 := mkApps_getAppFn_getAppArgs A
-    rw [h1, ← h2] at h3
-    exact h3.symm
+  · rintro ⟨us, rfl⟩
+    exact ⟨headConst?_eq_some.2 ⟨us, const_mkApps_spine.1⟩, const_mkApps_spine.2⟩
+  · rintro ⟨h1, h2⟩
+    obtain ⟨us, hf⟩ := headConst?_eq_some.1 h1
+    exact ⟨us, eq_const_mkApps_of_spine hf h2⟩
 
-instance {A : VExpr} {nind : Nat} : Decidable (A.IndApp nind) :=
-  decidable_of_iff _ IndApp_iff.symm
+/-- `e` is the constant `c` applied to `pre` and then further arguments satisfying `P`; those
+further arguments are `e.getAppArgs.drop pre.length`. -/
+theorem eq_const_mkApps_append_iff {e : VExpr} {c : Name} {pre : List VExpr}
+    {P : List VExpr → Prop} :
+    (∃ us rest, e = (VExpr.const c us).mkApps (pre ++ rest) ∧ P rest) ↔
+      e.headConst? = some c ∧ pre <+: e.getAppArgs ∧ P (e.getAppArgs.drop pre.length) := by
+  constructor
+  · rintro ⟨us, rest, rfl, hP⟩
+    refine ⟨headConst?_eq_some.2 ⟨us, const_mkApps_spine.1⟩, ?_, ?_⟩ <;>
+      rw [const_mkApps_spine.2]
+    · exact ⟨rest, rfl⟩
+    · simpa using hP
+  · rintro ⟨h1, ⟨rest, h2⟩, hP⟩
+    obtain ⟨us, hf⟩ := headConst?_eq_some.1 h1
+    refine ⟨us, rest, eq_const_mkApps_of_spine hf h2.symm, ?_⟩
+    rw [← h2] at hP; simpa using hP
 
 end VExpr

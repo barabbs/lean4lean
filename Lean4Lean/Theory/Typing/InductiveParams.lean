@@ -124,14 +124,14 @@ routes:
 * (R3) `VEnv.recSplit?`: a total decoder over the data a bare `VEnv` retains — the
   entry's hole counts and the registered recursor type — exact (`recSplit?_eq`, and the
   last clause of `WF.pats_split`) when the rule's constructor has the recursor's
-  parameters, `cnp = np`: every rule of a non-nested block and every rule of a nested
-  block's main recursors (`VInductDecl.WF.rules_own_params`).
+  parameters, `cnp = np`, which `VInductDecl.WF.rules_own_params` gives for every rule of
+  a well-formed declaration.
 
-Honest limit of (R3): for a rule of an auxiliary recursor of a nested block
-(`Tree.rec_1` on `List.cons`: `cnp = 1 ≠ np = 0`) the parameter count is not determined
-by `N = cnp + nf` and the hole counts — the major's type is a restored nested occurrence
-such as `List Tree` — so `recSplit?` reads `cnp` as `np` and misplaces the motive/minor
-boundary accordingly (`Tests/IotaShape.lean` exhibits this); (R1)/(R2) cover these rules.
+Honest limit of (R3): the decoder reads `cnp` as `np`, so on an entry whose constructor
+has parameters of its own — the auxiliary recursor of a kernel nested block, `Tree.rec_1`
+on `List.cons` with `cnp = 1 ≠ np = 0`, which `VInductDecl.WF` does not admit — it
+misplaces the motive/minor boundary (`Tests/IotaShape.lean` exhibits this); (R1)/(R2)
+cover such entries.
 Independently of the decoder, `WF.pats_split` gives `M = np+nm+nmin+nind`, `N = cnp+nf`,
 `1 ≤ nm`, `1 ≤ nmin`, the reduct as `iotaRHS` at that split, and the `RecShape`/
 `CtorShape` of the registered recursor and constructor types and the `RuleShape` of the
@@ -254,7 +254,7 @@ theorem WF.pats_split {env : VEnv} (H : env.WF) {recN M cN N rr}
   obtain ⟨cci, hcci, hcs⟩ := addInduct_rule_ctor hdecl hind hrec hru
   have hrs := hdecl.rec_shape rec hrec
   obtain ⟨j', hj', A, hA, hAm, hle', hru_s⟩ := hdecl.rule_shape rec hrec ru hru
-  obtain ⟨-, -, -, j, hj, -⟩ := id hrs
+  have hnm := hrs.one_le_numMotives
   have hR : HEq rr.1 (SimplePattern.iotaRHS rec.name ru.ctor rec.numParams rec.numMotives
     rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc) := by rw [he']; exact HEq.rfl
   exact ⟨rec.numParams, rec.numMotives, rec.numMinors, rec.numIndices, ru.ctorParams, ru.nfields,
