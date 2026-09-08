@@ -18,42 +18,10 @@ open Lean hiding Environment Exception
 open Kernel
 open private Lean.Kernel.Environment.add markQuotInit from Lean.Environment
 
-private instance : DecidableEq FVarId := fun ⟨a⟩ ⟨b⟩ =>
-  match decEq a b with
-  | isTrue h => isTrue (h ▸ rfl)
-  | isFalse h => isFalse fun e => h (FVarId.mk.inj e)
-
-theorem LocalContext.WF.empty : LocalContext.WF {} := .nil
-
-theorem LocalContext.toList_empty : ({} : LocalContext).toList = [] := by
-  unfold LocalContext.toList
-  rw [show ({} : LocalContext).decls = .empty from rfl, PersistentArray.toList'_empty]; rfl
-
-theorem LocalContext.find?_eq_toList {lctx : LocalContext} (h : lctx.WF) (x : FVarId) :
-    lctx.find? x = lctx.toList.find? (x == ·.fvarId) := h.find?_eq_find?_toList
-
-theorem LocalContext.find?_empty (x : FVarId) : ({} : LocalContext).find? x = none := by
-  rw [LocalContext.find?_eq_toList LocalContext.WF.empty, LocalContext.toList_empty]; rfl
-
-theorem LocalContext.find?_mkLocalDecl {lctx : LocalContext} (h : lctx.WF)
-    (hfv : lctx.find? fv = none) (x : FVarId) :
-    (lctx.mkLocalDecl fv n ty bi k).find? x =
-      if x = fv then some (.cdecl lctx.decls.size fv n ty bi k) else lctx.find? x := by
-  rw [LocalContext.find?_eq_toList (h.mkLocalDecl hfv), LocalContext.mkLocalDecl_toList,
-    List.find?_cons, LocalContext.find?_eq_toList h]
-  simp only [LocalDecl.fvarId]
-  split <;> simp_all
-
 theorem withLocalDecl_run {m} [Monad m] (n : Name) (bi : BinderInfo) (ty : Expr)
     (k : Expr → ExprBuildT m α) (lctx : LocalContext) (ngen : NameGenerator) :
     (withLocalDecl n bi ty k : ExprBuildT m α) lctx ngen =
       k (.fvar ⟨ngen.curr⟩) (lctx.mkLocalDecl ⟨ngen.curr⟩ n ty bi) ngen.next := rfl
-
-theorem LocalContext.mkForall_eq_fold {lctx : LocalContext} (xs : List FVarId) (b : Expr)
-    (hx : ∀ x ∈ xs, ∃ d, lctx.find? x = some d) (nd : xs.Nodup) :
-    lctx.mkForall ⟨xs.map .fvar⟩ b =
-      xs.foldr (fun a e => LocalContext.mkBindingList1 false lctx [] a (e.abstract1 a)) b := by
-  rw [LocalContext.mkForall, LocalContext.mkBinding_eq, LocalContext.mkBindingList_eq_fold hx nd]
 
 namespace AddQuotAux
 
@@ -191,7 +159,7 @@ macro "quot_mem" : tactic => `(tactic|
    repeat' (first | (refine And.intro ?_ ?_) | quot_find | (intro _ h; cases h))))
 
 macro "quot_simp" : tactic => `(tactic|
-  simp (config := { decide := true }) only [List.foldr, LocalContext.mkBindingList1,
+  simp +decide only [List.foldr, LocalContext.mkBindingList1,
     L1_find, L2_find, L3_find, L2'_find, L3'_find, L4_find, L5_find, L6_find, L4i_find, L5i_find,
     ↓reduceIte, Expr.abstractList, Expr.abstract1, Expr.arrow, Expr.prop, mkApp2, mkApp3, mkApp,
     Nat.zero_add, Nat.reduceAdd])
@@ -278,7 +246,7 @@ theorem TE_eq (u : Name) : TE u = .forallE `α (.sort (.param u))
   show LocalContext.mkForall (LE1 u) ⟨[x1].map .fvar⟩ _ = _
   rw [LocalContext.mkForall_eq_fold [x1] _ (fun x hx => by
     simp only [List.mem_singleton] at hx; subst hx; exact ⟨_, by rw [LE1_find, if_pos rfl]⟩) (by simp)]
-  simp (config := { decide := true }) only [List.foldr, LocalContext.mkBindingList1, LE1_find,
+  simp +decide only [List.foldr, LocalContext.mkBindingList1, LE1_find,
     ↓reduceIte, Expr.abstractList, Expr.abstract1, Expr.arrow, Expr.prop, Nat.zero_add]
 
 theorem Environment.get_ok {env : Environment} {n : Name} {ci : ConstantInfo}
@@ -507,16 +475,16 @@ theorem exists_addQuot {safety} {env : Environment} {venv : VEnv} (H : TrEnv saf
   refine ⟨[`u], T1, v1, ⟨DefinitionSafety.le_rfl, rfl, ?_⟩, h1', e1, ?_⟩
   · show TrExprS venv [`u] [] T1 quotConst.type; rw [T1_eq]; exact T1_tr
   refine ⟨[`u], T2, v2, ⟨DefinitionSafety.le_rfl, rfl, ?_⟩,
-    find?_insert_none mapWF.map₂ (by decide) h2', e2, ?_⟩
+    SMap.find?_insert_none mapWF.map₂ (by decide) h2', e2, ?_⟩
   · show TrExprS v1 [`u] [] T2 quotMkConst.type; rw [T2_eq]; exact T2_tr hQuot1
   refine ⟨[`u, `v], T3, v3, ⟨DefinitionSafety.le_rfl, rfl, ?_⟩,
-    find?_insert_none (SMap.insert_map₂ mapWF.map₂) (by decide)
-      (find?_insert_none mapWF.map₂ (by decide) h3'), e3, ?_⟩
+    SMap.find?_insert_none (SMap.insert_map₂ mapWF.map₂) (by decide)
+      (SMap.find?_insert_none mapWF.map₂ (by decide) h3'), e3, ?_⟩
   · show TrExprS v2 [`u, `v] [] T3 quotLiftConst.type; rw [T3_eq]; exact T3_tr hEq2 hQuot2
   refine ⟨[`u], T4, v4, ⟨DefinitionSafety.le_rfl, rfl, ?_⟩,
-    find?_insert_none (SMap.insert_map₂ (SMap.insert_map₂ mapWF.map₂)) (by decide)
-      (find?_insert_none (SMap.insert_map₂ mapWF.map₂) (by decide)
-        (find?_insert_none mapWF.map₂ (by decide) h4')), e4, rfl, rfl⟩
+    SMap.find?_insert_none (SMap.insert_map₂ (SMap.insert_map₂ mapWF.map₂)) (by decide)
+      (SMap.find?_insert_none (SMap.insert_map₂ mapWF.map₂) (by decide)
+        (SMap.find?_insert_none mapWF.map₂ (by decide) h4')), e4, rfl, rfl⟩
   · show TrExprS v3 [`u] [] T4 quotIndConst.type; rw [T4_eq]; exact T4_tr hQuot3 hMk3
 
 end AddQuotAux
@@ -626,9 +594,9 @@ theorem addQuot.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env)
       have m1 := mapWF
       have m2 := m1.insert ``Quot q1 (by rwa [← m1.find?'_eq_find?])
       have m3 := m2.insert ``Quot.mk q2
-        (find?_insert_none m1.map₂ (by decide) (by rwa [← m1.find?'_eq_find?]))
-      have m4 := m3.insert ``Quot.lift q3 (find?_insert_none m2.map₂ (by decide)
-        (find?_insert_none m1.map₂ (by decide) (by rwa [← m1.find?'_eq_find?])))
+        (SMap.find?_insert_none m1.map₂ (by decide) (by rwa [← m1.find?'_eq_find?]))
+      have m4 := m3.insert ``Quot.lift q3 (SMap.find?_insert_none m2.map₂ (by decide)
+        (SMap.find?_insert_none m1.map₂ (by decide) (by rwa [← m1.find?'_eq_find?])))
       refine safePrimitives_add' m4 (fun h hp => ?_) q4 ?_ (fun h => nomatch p4.symm.trans h) hfind hp
       · refine safePrimitives_add' m3 (fun h hp => ?_) q3 ?_ (fun h => nomatch p3.symm.trans h) h hp
         · refine safePrimitives_add' m2 (fun h hp => ?_) q2 ?_ (fun h => nomatch p2.symm.trans h) h hp

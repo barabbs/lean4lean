@@ -178,6 +178,40 @@ protected theorem WF.mkLetDecl
     .ldecl lctx.decls.size fv name ty val bi kind :: lctx.toList := by
   simp [mkLetDecl, toList]
 
+/-! ### The empty context and one declaration on top of it -/
+
+instance : DecidableEq FVarId := fun ⟨a⟩ ⟨b⟩ =>
+  match decEq a b with
+  | isTrue h => isTrue (h ▸ rfl)
+  | isFalse h => isFalse fun e => h (FVarId.mk.inj e)
+
+theorem WF.empty : WF {} := .nil
+
+theorem toList_empty : ({} : LocalContext).toList = [] := by
+  unfold toList
+  rw [show ({} : LocalContext).decls = .empty from rfl, PersistentArray.toList'_empty]; rfl
+
+theorem find?_empty (x : FVarId) : ({} : LocalContext).find? x = none := by
+  rw [WF.empty.find?_eq_find?_toList, toList_empty]; rfl
+
+/-- Lookup in a context extended by one fresh declaration: the new variable, or the
+lookup in the smaller context. -/
+theorem find?_mkLocalDecl {lctx : LocalContext} (h : lctx.WF)
+    (hfv : lctx.find? fv = none) (x : FVarId) :
+    (lctx.mkLocalDecl fv n ty bi k).find? x =
+      if x = fv then some (.cdecl lctx.decls.size fv n ty bi k) else lctx.find? x := by
+  rw [(h.mkLocalDecl hfv).find?_eq_find?_toList, mkLocalDecl_toList, List.find?_cons,
+    h.find?_eq_find?_toList]
+  simp only [LocalDecl.fvarId]
+  split <;> simp_all
+
+/-- `mkForall` over declared, distinct variables is the right fold of `mkBindingList1`. -/
+theorem mkForall_eq_fold {lctx : LocalContext} (xs : List FVarId) (b : Expr)
+    (hx : ∀ x ∈ xs, ∃ d, lctx.find? x = some d) (nd : xs.Nodup) :
+    lctx.mkForall ⟨xs.map .fvar⟩ b =
+      xs.foldr (fun a e => mkBindingList1 false lctx [] a (e.abstract1 a)) b := by
+  rw [mkForall, mkBinding_eq, mkBindingList_eq_fold hx nd]
+
 end Lean.LocalContext
 
 namespace Lean4Lean

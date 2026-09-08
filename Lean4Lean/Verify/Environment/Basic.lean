@@ -130,29 +130,6 @@ def insertConsts (C : ConstMap) (cis : List ConstantInfo) : ConstMap :=
 theorem insertConsts_cons {C : ConstMap} {ci : ConstantInfo} {cis : List ConstantInfo} :
     insertConsts C (ci :: cis) = insertConsts (C.insert ci.name ci) cis := rfl
 
-theorem find?_insert_of_ne {m : ConstMap} {n x : Name} {ci v : ConstantInfo} (wf : m.map₂.WF)
-    (hne : n ≠ x) (h : m.find? x = some v) : (m.insert n ci).find? x = some v := by
-  rw [SMap.find?_insert_of_map₂ wf, if_neg]; · exact h
-  simpa using hne
-
-theorem find?_insert_of_fresh {m : ConstMap} {n x : Name} {ci v : ConstantInfo} (wf : m.map₂.WF)
-    (hfr : m.find? n = none) (h : m.find? x = some v) : (m.insert n ci).find? x = some v :=
-  find?_insert_of_ne wf (fun e => by rw [e, h] at hfr; cases hfr) h
-
-theorem find?_insert_none {m : ConstMap} {n x : Name} {ci : ConstantInfo} (wf : m.map₂.WF)
-    (hne : n ≠ x) (h : m.find? x = none) : (m.insert n ci).find? x = none := by
-  rw [SMap.find?_insert_of_map₂ wf, if_neg]; · exact h
-  simpa using hne
-
-theorem insertList_find?_mono {α} {nm : α → Name} {ci : α → ConstantInfo} :
-    ∀ {l : List α} {m : ConstMap} {x v}, m.map₂.WF → (∀ a ∈ l, nm a ≠ x) →
-      m.find? x = some v → (l.foldl (fun m a => m.insert (nm a) (ci a)) m).find? x = some v
-  | [], _, _, _, _, _, h => h
-  | a :: l, m, x, v, wf, hne, h => by
-    show (l.foldl (fun m a => m.insert (nm a) (ci a)) (m.insert (nm a) (ci a))).find? x = some v
-    exact insertList_find?_mono (SMap.insert_map₂ wf) (fun b hb => hne b (.tail _ hb))
-      (find?_insert_of_ne wf (hne a (.head _)) h)
-
 /-- Fresh, duplicate-free names stay fresh after inserting the head of the block. -/
 theorem insertConsts_fresh_tail {C : ConstMap} {ci : ConstantInfo} {cis : List ConstantInfo}
     (wf : C.map₂.WF) (hfr : ∀ d ∈ ci :: cis, C.find? d.name = none)
@@ -160,7 +137,7 @@ theorem insertConsts_fresh_tail {C : ConstMap} {ci : ConstantInfo} {cis : List C
     ∀ d ∈ cis, (C.insert ci.name ci).find? d.name = none := by
   rw [List.map_cons, List.nodup_cons] at hnd
   intro d hd
-  exact find?_insert_none wf (fun e => hnd.1 (e ▸ List.mem_map_of_mem hd)) (hfr d (.tail _ hd))
+  exact SMap.find?_insert_none wf (fun e => hnd.1 (e ▸ List.mem_map_of_mem hd)) (hfr d (.tail _ hd))
 
 theorem insertConsts_wf : ∀ {cis : List ConstantInfo} {C : ConstMap}, C.WF →
     (∀ ci ∈ cis, C.find? ci.name = none) → (cis.map (·.name)).Nodup → (insertConsts C cis).WF
@@ -171,13 +148,11 @@ theorem insertConsts_wf : ∀ {cis : List ConstantInfo} {C : ConstMap}, C.WF →
       (insertConsts_fresh_tail hC.map₂ hfr hnd) ?_
     rw [List.map_cons, List.nodup_cons] at hnd; exact hnd.2
 
-theorem insertConsts_find?_mono : ∀ {cis : List ConstantInfo} {C : ConstMap} {x v}, C.map₂.WF →
-    (∀ ci ∈ cis, ci.name ≠ x) → C.find? x = some v → (insertConsts C cis).find? x = some v
-  | [], _, _, _, _, _, h => h
-  | ci :: cis, C, x, v, wf, hne, h => by
-    rw [insertConsts_cons]
-    exact insertConsts_find?_mono (SMap.insert_map₂ wf) (fun d hd => hne d (.tail _ hd))
-      (find?_insert_of_ne wf (hne ci (.head _)) h)
+theorem insertConsts_find?_mono {cis : List ConstantInfo} {C : ConstMap} {x v} (wf : C.map₂.WF)
+    (hne : ∀ ci ∈ cis, ci.name ≠ x) (h : C.find? x = some v) :
+    (insertConsts C cis).find? x = some v := by
+  unfold insertConsts
+  exact SMap.insertList_find?_mono (nm := (·.name)) (val := id) wf hne h
 
 /-- A constant resolvable before inserting a block of fresh names is still resolvable, to
 the same value, afterwards. -/
@@ -192,7 +167,7 @@ theorem insertConsts_find?_none : ∀ {cis : List ConstantInfo} {C : ConstMap} {
   | ci :: cis, C, x, wf, hne, h => by
     rw [insertConsts_cons]
     exact insertConsts_find?_none (SMap.insert_map₂ wf) (fun d hd => hne d (.tail _ hd))
-      (find?_insert_none wf (hne ci (.head _)) h)
+      (SMap.find?_insert_none wf (hne ci (.head _)) h)
 
 /-- A constant resolvable after inserting a block was resolvable before, or is one of the
 block's constants under its own name. -/
