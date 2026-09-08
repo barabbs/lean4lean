@@ -1,3 +1,4 @@
+import Lean4Lean.Tests.ShapeDecide
 import Lean4Lean.Theory.Proj
 import Lean4Lean.Theory.Meta
 

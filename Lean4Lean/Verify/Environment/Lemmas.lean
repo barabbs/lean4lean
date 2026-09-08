@@ -409,14 +409,14 @@ nonrec theorem TrEnv.of_value (H : TrEnv safety env venv) (h : env.find? name = 
 /-! ### Forward `find?` transport across fresh insertions
 
 A constant already resolvable stays resolvable, to the same value, across insertions of
-names it does not carry (`find?_insert_of_fresh`, `insertList_find?_mono`,
+names it does not carry (`SMap.find?_insert_of_fresh`, `SMap.insertList_find?_mono`,
 `AddInduct.find?_mono` in `Basic.lean`); here for `insertDefs` and `AddQuot`. -/
 
 theorem insertDefs_find?_mono {cis : List DefinitionVal} {C : ConstMap} {x v} (wf : C.WF)
     (hfr : ∀ d ∈ cis, C.find? d.name = none) (h : C.find? x = some v) :
     (insertDefs C cis).find? x = some v := by
   unfold insertDefs
-  refine insertList_find?_mono (nm := (·.name)) (ci := (.defnInfo ·)) wf.map₂
+  refine SMap.insertList_find?_mono (nm := (·.name)) (val := (.defnInfo ·)) wf.map₂
     (fun d hd hx => ?_) h
   have := hfr d hd; rw [hx, h] at this; cases this
 
@@ -424,7 +424,7 @@ theorem AddQuot1.find?_mono {P : ConstMap → VEnv → Prop} {Q : Prop} {name ki
     (H1 : ∀ m env, m.WF → m.find? x = some v → P m env → Q)
     (m env) (wf : m.WF) (h : m.find? x = some v) (H2 : AddQuot1 name kind ci' P m env) : Q := by
   let ⟨_, _, _, _, h2, _, h4⟩ := H2
-  exact H1 _ _ (wf.insert _ _ h2) (find?_insert_of_fresh wf.map₂ h2 h) h4
+  exact H1 _ _ (wf.insert _ _ h2) (SMap.find?_insert_of_fresh wf.map₂ h2 h) h4
 
 /-- A constant resolvable before adding the quotient constants is still resolvable, to
 the same value, afterwards. -/
@@ -544,8 +544,8 @@ translating the kernel rule's reduct; the check is trivial (so `iota_defeq` runs
 theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
     {venv : VEnv} {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
     (H : TrEnv' safety C Q venv)
-    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
     (hrec : C.find? recName = some (.recInfo rval))
+    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
     (hsafe : safety ≤ (Lean.ConstantInfo.recInfo rval).safety) :
     ∃ (cval : ConstructorVal) (rhs : VExpr) (hc : rhs.Closed),
       C.find? cName = some (.ctorInfo cval) ∧
@@ -562,13 +562,13 @@ theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
     rw [h3.map_wf.find?_insert] at hrec; split at hrec
     · injection hrec with hrec; subst hrec; exact absurd hsafe h2
     · obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih hrec
-      exact ⟨cval, rhs, hc, find?_insert_of_fresh h3.map_wf.map₂ h1 hct, htr, hp⟩
+      exact ⟨cval, rhs, hc, SMap.find?_insert_of_fresh h3.map_wf.map₂ h1 hct, htr, hp⟩
   | thm _ h2 _ _ h5 h6 ih =>
     rw [h6.map_wf.find?_insert] at hrec; split at hrec
     · exact absurd hrec (by nofun)
     · have le := VEnv.addConst_le h5
       obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih hrec
-      exact ⟨cval, rhs, hc, find?_insert_of_fresh h6.map_wf.map₂ h2 hct,
+      exact ⟨cval, rhs, hc, SMap.find?_insert_of_fresh h6.map_wf.map₂ h2 hct,
         htr.mono le, le.pats hp⟩
   | mutualDef _ hnd hfr _ hadd _ h7 ih =>
     rcases insertDefs_find? h7.map_wf hfr hnd hrec with hrec' | ⟨d, _, _, hd⟩
@@ -582,13 +582,13 @@ theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
     · exact absurd hrec (by nofun)
     · have le := VEnv.addConst_le h4
       obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih hrec
-      exact ⟨cval, rhs, hc, find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
+      exact ⟨cval, rhs, hc, SMap.find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
         htr.mono le, le.pats hp⟩
   | defn _ h2 _ h4 h5 ih =>
     rw [h5.map_wf.find?_insert] at hrec; split at hrec
     · exact absurd hrec (by nofun)
     · obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih hrec
-      exact ⟨cval, rhs, hc, find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
+      exact ⟨cval, rhs, hc, SMap.find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
         htr.mono ((VEnv.addConst_le h4).trans VEnv.addDefEq_le),
         ((VEnv.addConst_le h4).trans VEnv.addDefEq_le).pats hp⟩
   | «opaque» _ h2 _ h4 h5 ih =>
@@ -596,7 +596,7 @@ theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
     · exact absurd hrec (by nofun)
     · have le := VEnv.addConst_le h4
       obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih hrec
-      exact ⟨cval, rhs, hc, find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
+      exact ⟨cval, rhs, hc, SMap.find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
         htr.mono le, le.pats hp⟩
   | quot _ h2 h3 ih =>
     obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih (h2.pull h3.map_wf hrec)
@@ -614,22 +614,8 @@ theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
       rw [← hname, ← hpar, ← hmot, ← hmin, ← hind, ← hrunf, ← hctor, ← hructor, ← hcnp]
       exact VEnv.addInduct_pat hr hru hclosed hadd.env_eq
 
-/-- `TrEnv'`-level ι-rule lookup, stated against the constant map's own `find?`.
-The recursor is registered by one `induct` step (where `VEnv.addInduct_pat` supplies
-the `pat`) and carried forward by `.pats`-monotonicity. -/
-theorem TrEnv'.pats_iota {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
-    {venv : VEnv} {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
-    (H : TrEnv' safety C Q venv)
-    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
-    (hrec : C.find? recName = some (.recInfo rval))
-    (hsafe : safety ≤ (Lean.ConstantInfo.recInfo rval).safety) :
-    ∃ cval r, C.find? cName = some (.ctorInfo cval) ∧
-      venv.pats (SimplePattern.iota recName rval.getMajorIdx cName
-        (cval.numParams + rule.nfields)).toPattern r := by
-  obtain ⟨cval, _, _, hct, _, hp⟩ := H.pats_iota' hrule hrec hsafe
-  exact ⟨cval, _, hct, hp⟩
-
-/-- `TrEnv.pats_iota` with the registered witness named; see `TrEnv'.pats_iota'`. -/
+/-- `TrEnv'.pats_iota'` against the environment's own `find?`: the ι rule of a recursor
+rule resolvable in `env` is registered in the translated environment's `pats`. -/
 theorem TrEnv.pats_iota' {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
     {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
     (H : TrEnv safety env venv)
@@ -647,26 +633,10 @@ theorem TrEnv.pats_iota' {safety : DefinitionSafety} {env : Environment} {venv :
           rval.numIndices cval.numParams rule.nfields rhs hc, .true) := by
   have h : env.constants.find?' recName = some (.recInfo rval) := hrec
   rw [(TrEnv'.map_wf H).find?'_eq_find?] at h
-  obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := TrEnv'.pats_iota' H hrule h hsafe
+  obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := TrEnv'.pats_iota' H h hrule hsafe
   refine ⟨cval, rhs, hc, ?_, htr, hp⟩
   show env.constants.find?' cName = _
   rw [(TrEnv'.map_wf H).find?'_eq_find?]; exact hct
-
-/-- The ι-reduction rule of a recursor rule resolvable in `env` is registered in the
-translated environment's `pats`, with pattern counts mirroring `VEnv.addInduct_pat`:
-the constructor spine has `cval.numParams + rule.nfields` arguments, `cval` being the
-constructor's own `ctorInfo`. -/
-theorem TrEnv.pats_iota {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
-    {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule}
-    (H : TrEnv safety env venv)
-    (hrec : env.find? recName = some (.recInfo rval))
-    (hrule : rval.rules.find? (·.ctor == cName) = some rule)
-    (hsafe : safety ≤ (Lean.ConstantInfo.recInfo rval).safety) :
-    ∃ cval r, env.find? cName = some (.ctorInfo cval) ∧
-      venv.pats (SimplePattern.iota recName rval.getMajorIdx cName
-        (cval.numParams + rule.nfields)).toPattern r := by
-  obtain ⟨cval, _, _, hct, _, hp⟩ := H.pats_iota' hrec hrule hsafe
-  exact ⟨cval, _, hct, hp⟩
 
 /-- Inverse of `pats_iota'`, at the `TrEnv'` level, with the model-side shape of the rule:
 every registered ι pattern `SimplePattern.iota recName M cName N` comes from a kernel
@@ -710,23 +680,23 @@ theorem TrEnv'.pats_iota_inv_shape {safety : DefinitionSafety} {C : ConstMap} {Q
     obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
       ih hp
     have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, find?_insert_of_fresh wf h1 hrec, hru,
-      find?_insert_of_fresh wf h1 hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩
+    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h1 hrec, hru,
+      SMap.find?_insert_of_fresh wf h1 hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩
   | «axiom» _ h2 _ h4 Hprev ih =>
     rw [VEnv.addConst_pats h4] at hp
     obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
       ih hp
     have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, find?_insert_of_fresh wf h2 hrec, hru,
-      find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h4), hh1, hh2,
+    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
+      SMap.find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h4), hh1, hh2,
       (VEnv.addConst_le h4).constants hrci, hrs, hj⟩
   | defn _ h2 _ h4 Hprev ih =>
     rw [VEnv.addDefEq_pats, VEnv.addConst_pats h4] at hp
     obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
       ih hp
     have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, find?_insert_of_fresh wf h2 hrec, hru,
-      find?_insert_of_fresh wf h2 hct, hM, hN,
+    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
+      SMap.find?_insert_of_fresh wf h2 hct, hM, hN,
       htr.mono ((VEnv.addConst_le h4).trans VEnv.addDefEq_le), hh1, hh2,
       ((VEnv.addConst_le h4).trans VEnv.addDefEq_le).constants hrci, hrs, hj⟩
   | mutualDef _ hnd hfr _ hadd _ Hprev ih =>
@@ -743,16 +713,16 @@ theorem TrEnv'.pats_iota_inv_shape {safety : DefinitionSafety} {C : ConstMap} {Q
     obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
       ih hp
     have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, find?_insert_of_fresh wf h2 hrec, hru,
-      find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h5), hh1, hh2,
+    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
+      SMap.find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h5), hh1, hh2,
       (VEnv.addConst_le h5).constants hrci, hrs, hj⟩
   | «opaque» _ h2 _ h4 Hprev ih =>
     rw [VEnv.addConst_pats h4] at hp
     obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
       ih hp
     have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, find?_insert_of_fresh wf h2 hrec, hru,
-      find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h4), hh1, hh2,
+    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
+      SMap.find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h4), hh1, hh2,
       (VEnv.addConst_le h4).constants hrci, hrs, hj⟩
   | quot _ h2 Hprev ih =>
     rw [VEnv.addQuot_pats h2.to_addQuot] at hp
@@ -870,25 +840,6 @@ theorem TrEnv.pats_iota_inv' {safety : DefinitionSafety} {env : Environment} {ve
   · show env.constants.find?' recName = _; rw [wf.find?'_eq_find?]; exact hrec
   · show env.constants.find?' cName = _; rw [wf.find?'_eq_find?]; exact hct
 
-/-- Inverse of `pats_iota`, the counts-only corollary of `pats_iota_inv'`: from a
-registered ι pattern `SimplePattern.iota recName n cName k`, recover the kernel recursor
-`rval` (resolvable in `env` under `recName`), its rule for `cName` and the constructor
-`cval`, with `n` the kernel telescope split and `k = cval.numParams + rule.nfields`. -/
-theorem TrEnv.pats_iota_inv {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
-    {recName cName : Name} {n k : Nat}
-    {r : (SimplePattern.iota recName n cName k).toPattern.RHS ×
-      (SimplePattern.iota recName n cName k).toPattern.Check}
-    (H : TrEnv safety env venv)
-    (hp : venv.pats (SimplePattern.iota recName n cName k).toPattern r) :
-    ∃ (rval : RecursorVal) (rule : RecursorRule) (cval : ConstructorVal),
-      env.find? recName = some (.recInfo rval) ∧
-      rval.rules.find? (·.ctor == cName) = some rule ∧
-      env.find? cName = some (.ctorInfo cval) ∧
-      n = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices ∧
-      k = cval.numParams + rule.nfields := by
-  obtain ⟨rval, rule, cval, _, _, hrec, hru, hct, hn, hk, -, -, -⟩ := H.pats_iota_inv' hp
-  exact ⟨rval, rule, cval, hrec, hru, hct, hn, hk⟩
-
 /-- A registered ι rule, matched against a well-typed redex with its `Realizes` side
 conditions discharged, gives a definitional equality between redex and reduct. Thin
 wrapper over `VEnv.IsDefEq.pat`. -/
@@ -900,10 +851,10 @@ theorem TrEnv.iota_defeq {venv : VEnv} {U : Nat} {Γ : List VExpr}
     venv.IsDefEqU U Γ e (r.1.apply m1 m2) :=
   ⟨A, VEnv.IsDefEq.pat hpat hm hty hR hall⟩
 
-/-- A well-typed redex matching a recursor's ι pattern (over the constructor `cval`
-resolved in `env`) is definitionally equal to the `iotaRHS` reduct, over a template
-`rhs` translating the kernel rule's reduct. Composes `pats_iota'` with `iota_defeq` at
-the trivial check. -/
+/-- The ι reduction step of a translated environment, as `reduceRecursor.WF` needs it: a
+well-typed redex matching a recursor's ι pattern (over the constructor `cval` resolved in
+`env`) is definitionally equal to the `iotaRHS` reduct, over a template `rhs` translating
+the kernel rule's reduct. Composes `pats_iota'` with `iota_defeq` at the trivial check. -/
 theorem TrEnv.iota_rec {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
     {recName cName : Name} {rval : RecursorVal} {rule : RecursorRule} {cval : ConstructorVal}
     {U : Nat} {Γ : List VExpr} {e A : VExpr} {m1 m2}

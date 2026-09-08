@@ -48,6 +48,11 @@ inductive IsDefEqU1 : List VExpr → VExpr → VExpr → Prop where
   | extra :
     env.defeqs df → (∀ l ∈ ls, l.WF uvars) → ls.length = df.uvars →
     Γ ⊢ df.lhs.instL ls ≡ df.rhs.instL ls
+  | pat {p : Pattern} {r : p.RHS × p.Check} {m1 m2 chk} :
+    env.pats p r → p.Matches e m1 m2 → Γ ⊢ e : A →
+    r.2.Realizes m1 m2 chk →
+    (∀ t ∈ chk, Γ ⊢ t.1 ≡ t.2.1) →
+    Γ ⊢ e ≡ r.1.apply m1 m2
 
 end
 
@@ -95,8 +100,8 @@ theorem IsDefEq.inductionU1
     exact ⟨ih2.1, ih3.1, .proofIrrel (hty ih1.1) (hty ih2.1) (hty ih3.1)⟩
   | extra h1 h2 h3 _ _ _ _ _ _ _ _ _ ihl' ihr' =>
     exact ⟨ihl'.1, ihr'.1, .extra h1 h2 h3⟩
-  | pat => sorry -- `pat` (ι) case: open, pre-existing at eddf009; the `Theory` analogues
-    -- (`Strong.lean`, `ChurchRosser.lean`) are closed, see `Theory/Typing/InductiveLemmas.lean`
+  | pat hp hm _ _ hr _ ihe ihred ihall =>
+    exact ⟨ihe.1, ihred.1, .pat hp hm (hty ihe.1) hr fun t ht => (ihall t ht).2.2⟩
 
 variable! (henv : Ordered env) (hΓ : OnCtx Γ (env.IsType U))
   {defEq : List VExpr → VExpr → VExpr → Prop}

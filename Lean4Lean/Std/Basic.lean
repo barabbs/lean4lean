@@ -121,10 +121,9 @@ theorem List.Forall₂.map_eq {R : α → β → Prop} {f : α → γ} {g : β �
   | _, _, .nil => rfl
   | _, _, .cons h₁ h₂ => by simp only [List.map_cons, H _ _ h₁, List.Forall₂.map_eq H h₂]
 
-theorem List.Forall₂.append {R : α → β → Prop} :
-    ∀ {l₁ l₂ r₁ r₂}, Forall₂ R l₁ l₂ → Forall₂ R r₁ r₂ → Forall₂ R (l₁ ++ r₁) (l₂ ++ r₂)
-  | _, _, _, _, .nil, h => h
-  | _, _, _, _, .cons h₁ h₂, h => .cons h₁ (List.Forall₂.append h₂ h)
+theorem List.Forall₂.append {R : α → β → Prop} {l₁ l₂ r₁ r₂}
+    (h₁ : Forall₂ R l₁ l₂) (h₂ : Forall₂ R r₁ r₂) : Forall₂ R (l₁ ++ r₁) (l₂ ++ r₂) :=
+  (append_of_left h₁.length_eq).2 ⟨h₁, h₂⟩
 
 theorem List.Forall₂.flatMap {R : α → β → Prop} {S : γ → δ → Prop}
     {f : α → List γ} {g : β → List δ} (H : ∀ a b, R a b → Forall₂ S (f a) (g b)) :

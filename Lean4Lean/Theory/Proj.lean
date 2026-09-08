@@ -630,7 +630,7 @@ theorem instFields_minor_spine (pre : List VExpr) (s : VExpr) (fs : List VExpr) 
   apply List.ext_getElem
   · simp
   · intro t h1 h2
-    simp only [List.getElem_map, bvarsDesc_length] at h1 ⊢
+    simp only [List.getElem_map] at h1 ⊢
     rw [getElem_bvarsDesc _ _ _ (by simpa using h1),
       instFields_bvar _ _ (by simp <;> omega),
       show (pre ++ s :: fs).length - 1 - (0 + (fs.length - 1 - t)) = pre.length + (t + 1) by

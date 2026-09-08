@@ -10,23 +10,13 @@ open VExpr
 # A concrete `Params` instance from `env.pats`
 
 `VEnv.toParams` instantiates `ChurchRosser`'s abstract pattern-reduction relation
-`Params.Pat` with the environment's own registered ι rules `env.pats`. Its engine is
-the population invariant `VEnv.PatsIota`: every registered pattern is a
-`SimplePattern.iota` redex whose recursor head is a registered `RecHeaded` constant
-(`shape`) of a spine arity fixed by the recursor name (`arity`), whose constructor is
-a registered `CtorHeaded` constant (`ctor_shape`), and whose reduct is determined by
-the pattern (`functional`). The invariant is established from the staged
-`VInductDecl.WF` (`rec_shape`, `rules_ctor`, `rules_nodup`) and the stage lemmas of
-`addInduct`; from it, `pat_simple`, `pat_uniq`, `pat_app_l`, `pat_app_l_uniq` and
-`pat_app_uniq` are proved; `pat_env` is the identity. The remaining side condition
-`extra_pat` (every `defeqs` entry realised by a registered pattern) is `VEnv.DefEqsAsPats`,
-which `toParams` takes as a hypothesis.
-
-The section "Recoverability of the recursor data" records what a registered entry lets
-one recover of the recursor it came from: the full `VRecursor` from the `WF'` witness
-(`WF'.pats_origin`), the telescope split with the shapes of the registered constants
-(`WF.pats_split`), and a total decoder over the data a bare `VEnv` retains
-(`VEnv.recSplit?`), with its honest limit.
+`Params.Pat` with the environment's own registered ι rules `env.pats`. Its engine is the
+population invariant `VEnv.PatsIota`: every registered pattern is a `SimplePattern.iota`
+redex whose recursor head is a registered `RecHeaded` constant of a spine arity fixed by
+the recursor name, whose constructor is a registered `CtorHeaded` constant, and whose
+reduct is determined by the pattern. The invariant comes from `VInductDecl.WF` and the
+stage lemmas of `addInduct`, and discharges every `Params` side condition except
+`extra_pat`, which `toParams` takes as the hypothesis `VEnv.DefEqsAsPats`.
 -/
 
 /-! ### Combinatorics of ι redexes -/
@@ -96,53 +86,10 @@ theorem _root_.Lean4Lean.VDecl.WF.pats_eq_or_induct {env d env'} (h : VDecl.WF e
   · exact .inl heq
   · exact .inr ⟨decl, hdecl, hind⟩
 
-/-- Every `VDecl.WF` step only grows the environment. -/
-theorem _root_.Lean4Lean.VDecl.WF.le {env d env'} (h : VDecl.WF env d env') : env ≤ env' := by
-  cases h with
-  | «axiom» _ h2 => exact addConst_le h2
-  | «def» _ h2 => exact (addConst_le h2).trans addDefEq_le
-  | mutualDef _ h2 _ => exact (VEnv.addConsts_le h2).trans addDefEqs_le
-  | «opaque» _ h2 => exact addConst_le h2
-  | «example» _ => exact .rfl
-  | quot _ h2 => exact addQuot_le h2
-  | induct _ h2 => exact addInduct_le h2
-
-/-! ### Recoverability of the recursor data
-
-`env.pats` retains of an ι rule only its key `SimplePattern.iota recN M cN N` and its
-reduct `SimplePattern.iotaRHS`: the recursor name and summed major index `M`, the
-constructor name and spine arity `N`, and (`Pattern.RHS.iotaCounts`) the template and
-the two hole counts. The `VRecursor` it was registered from is recoverable by three
-routes:
-
-* (R1) `WF'.pats_origin`: from the `WF'` witness, the full `VInductDecl`, `VRecursor`
-  and `VRecRule` — the declaration list `ds` is the source of truth for declaration-level
-  data, as it already is for def-versus-axiom.
-* (R2) `TrEnv.pats_iota_inv'` (`Verify/Environment/Lemmas.lean`): in a translated
-  environment, the kernel `RecursorVal` and `ConstructorVal`, hence the full kernel
-  telescope split.
-* (R3) `VEnv.recSplit?`: a total decoder over the data a bare `VEnv` retains — the
-  entry's hole counts and the registered recursor type — exact (`recSplit?_eq`, and the
-  last clause of `WF.pats_split`) when the rule's constructor has the recursor's
-  parameters, `cnp = np`: every rule of a non-nested block and every rule of a nested
-  block's main recursors (`VInductDecl.WF.rules_own_params`).
-
-Honest limit of (R3): for a rule of an auxiliary recursor of a nested block
-(`Tree.rec_1` on `List.cons`: `cnp = 1 ≠ np = 0`) the parameter count is not determined
-by `N = cnp + nf` and the hole counts — the major's type is a restored nested occurrence
-such as `List Tree` — so `recSplit?` reads `cnp` as `np` and misplaces the motive/minor
-boundary accordingly (`Tests/IotaShape.lean` exhibits this); (R1)/(R2) cover these rules.
-Independently of the decoder, `WF.pats_split` gives `M = np+nm+nmin+nind`, `N = cnp+nf`,
-`1 ≤ nm`, `1 ≤ nmin`, the reduct as `iotaRHS` at that split, and the `RecShape`/
-`CtorShape` of the registered recursor and constructor types and the `RuleShape` of the
-template at some minor `j`; a consumer that knows `np` and `nind = 0` (a structure's
-recursor, `M = np + 2`) gets `(nm, nmin) = (1, 1)` by `omega`. -/
-
-/-- (R1) Origin of a registered pattern entry along a `WF'` chain: some `ds` step is the
-`addInduct` of a well-formed `decl` (`VDecl.induct decl :: ds₀` a suffix of `ds`, `ds₀`
-the declarations before it), and the entry is exactly the ι entry of one rule `ru` of one
-recursor `rec` of `decl` — key `SimplePattern.iota` and reduct `SimplePattern.iotaRHS`,
-both read off `rec`/`ru`, with `rec`'s full telescope split. -/
+/-- Origin of a registered pattern entry along a `WF'` chain: some step of `ds` is the
+`addInduct` of a well-formed `decl`, and the entry is exactly the ι entry of one rule of
+one recursor of `decl`, key and reduct both read off that rule. First step of the
+deferred ι subject-reduction proof. -/
 theorem WF'.pats_origin {ds : List VDecl} {env : VEnv} (H : env.WF' ds) {p rr}
     (hp : env.pats p rr) :
     ∃ (decl : VInductDecl) (ds₀ : List VDecl) (env₀ env₁ : VEnv),
@@ -175,93 +122,6 @@ theorem WF'.pats_origin {ds : List VDecl} {env : VEnv} (H : env.WF' ds) {p rr}
     · rcases addInduct_pats_origin' hind hp with hold | rest
       · exact .inl hold
       · exact .inr ⟨decl, hd_eq, hdecl, hind, rest⟩
-
-/-- (R3) Decode a recursor's telescope split `(np, nm, nmin, nind)` from the data a bare
-`VEnv` retains of an ι entry `iota recN M cN N ↦ R` together with the registered recursor
-type `recTy`: `nf` and `k = np + nm + nmin` are the entry's constructor- and
-recursor-side hole counts (`Pattern.RHS.iotaCounts`), `np := N - nf` (exact iff the
-constructor has the recursor's parameters, `cnp = np`), `nind := M - k`, and the
-motive/minor boundary is read off the recursor type: `nm` is the number of binders among
-positions `[np, k)` whose Π-body is a sort (`VExpr.RecShape`: motive binders end in a
-sort, minor binders in a motive application), `nmin` the rest. Total; `recSplit?_eq`
-states its exactness. -/
-def recSplit? (recTy : VExpr) {recN M cN N} (R : (SimplePattern.iota recN M cN N).toPattern.RHS) :
-    Option (Nat × Nat × Nat × Nat) := do
-  let (_, k, nf) ← R.iotaCounts
-  let np := N - nf
-  let nm := (List.range (k - np)).countP fun i =>
-    (recTy.piBinders[np + i]?).any fun A => A.piBody.isSort
-  some (np, nm, k - np - nm, M - k)
-
-/-- Exactness of `recSplit?`: on the ι entry of a rule whose constructor has the
-recursor's parameters (`cnp = np`), over a recursor type of the matching `RecShape`, the
-decoder returns the true split. The hypotheses are the corresponding clauses of
-`WF.pats_split`. -/
-theorem recSplit?_eq {recN M cN N} {R : (SimplePattern.iota recN M cN N).toPattern.RHS}
-    {recTy : VExpr} {np nm nmin nind cnp nf : Nat} {rhs : VExpr} {hc : rhs.Closed}
-    (hM : M = np + nm + nmin + nind) (hN : N = cnp + nf)
-    (hR : HEq R (SimplePattern.iotaRHS recN cN np nm nmin nind cnp nf rhs hc))
-    (hshape : recTy.RecShape np nm nmin nind) (hown : cnp = np) :
-    recSplit? recTy R = some (np, nm, nmin, nind) := by
-  subst hM hN; subst cnp
-  obtain rfl := eq_of_heq hR
-  have hcount : (List.range (nm + nmin)).countP
-      (fun i => (recTy.piBinders[np + i]?).any fun A => A.piBody.isSort) = nm := by
-    rw [List.range_add, List.countP_append, List.countP_map, List.countP_eq_length.2,
-      List.countP_eq_zero.2, List.length_range, Nat.add_zero]
-    · intro i hi
-      obtain ⟨A, hA, k', -, hk'⟩ := hshape.2.2.1 i (List.mem_range.1 hi)
-      simp only [Function.comp, ← Nat.add_assoc, hA, Option.any_some]
-      intro h
-      obtain ⟨u, hu⟩ := isSort_iff.1 h
-      rw [hu] at hk'; cases hk'
-    · intro i hi
-      obtain ⟨A, hA, ⟨u, hu⟩, -⟩ := hshape.2.1 i (List.mem_range.1 hi)
-      simp [hA, hu, isSort]
-  have h1 : np + nf - nf = np := by omega
-  have h2 : np + nm + nmin - np = nm + nmin := by omega
-  have h3 : nm + nmin - nm = nmin := by omega
-  have h4 : np + nm + nmin + nind - (np + nm + nmin) = nind := by omega
-  simp only [recSplit?, SimplePattern.iotaRHS_iotaCounts, Option.bind_eq_bind, Option.bind_some,
-    h1, h2, hcount, h3, h4]
-
-/-- The telescope split behind a registered ι entry of a well-formed environment: the
-summed major index splits as `M = np + nm + nmin + nind` with at least one motive and one
-minor, the constructor spine as `N = cnp + nf`, the reduct is `iotaRHS` at that split
-(componentwise: `HEq` on the `RHS`, `.true` check), the recursor and the constructor are
-registered with types of the matching `RecShape`/`CtorShape`, the template has the
-matching `RuleShape` at some minor `j` — the minor `MinorFor cN`, with the reduct's
-recursive-argument count its binders beyond the fields — and `recSplit?` decodes the split
-exactly when
-`cnp = np`. From `WF'.pats_origin` and `VInductDecl.WF` (`rec_shape`, `rules_ctor`,
-`rule_shape`). -/
-theorem WF.pats_split {env : VEnv} (H : env.WF) {recN M cN N rr}
-    (hp : env.pats (SimplePattern.iota recN M cN N).toPattern rr) :
-    ∃ (np nm nmin nind cnp nf : Nat) (rhs : VExpr) (hc : rhs.Closed) (ci cci : VConstant),
-      M = np + nm + nmin + nind ∧ N = cnp + nf ∧ 1 ≤ nm ∧ 1 ≤ nmin ∧
-      HEq rr.1 (SimplePattern.iotaRHS recN cN np nm nmin nind cnp nf rhs hc) ∧ rr.2 = .true ∧
-      env.constants recN = some ci ∧ ci.type.RecShape np nm nmin nind ∧
-      env.constants cN = some cci ∧ cci.type.CtorShape (cnp + nf) ∧
-      (∃ j < nmin, ∃ A, ci.type.piBinders[np + nm + j]? = some A ∧ A.MinorFor cN ∧
-        nf ≤ A.piArity ∧ rhs.RuleShape np nm nmin nf (A.piArity - nf) j) ∧
-      (cnp = np → recSplit? ci.type rr.1 = some (np, nm, nmin, nind)) := by
-  obtain ⟨ds, H⟩ := H
-  obtain ⟨decl, ds₀, env₀, env₁, -, -, hdecl, hind, hle, rec, hrec, ru, hru, hc, e, he⟩ :=
-    H.pats_origin hp
-  obtain ⟨rfl, rfl, rfl, rfl⟩ := iota_toPattern_inj e
-  have he' : rr = (SimplePattern.iotaRHS rec.name ru.ctor rec.numParams rec.numMotives
-    rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc, .true) := he
-  obtain ⟨cci, hcci, hcs⟩ := addInduct_rule_ctor hdecl hind hrec hru
-  have hrs := hdecl.rec_shape rec hrec
-  obtain ⟨j', hj', A, hA, hAm, hle', hru_s⟩ := hdecl.rule_shape rec hrec ru hru
-  obtain ⟨-, -, -, j, hj, -⟩ := id hrs
-  have hR : HEq rr.1 (SimplePattern.iotaRHS rec.name ru.ctor rec.numParams rec.numMotives
-    rec.numMinors rec.numIndices ru.ctorParams ru.nfields ru.rhs hc) := by rw [he']; exact HEq.rfl
-  exact ⟨rec.numParams, rec.numMotives, rec.numMinors, rec.numIndices, ru.ctorParams, ru.nfields,
-    ru.rhs, hc, _, cci, rfl, rfl, by omega, by omega, hR, by rw [he'],
-    hle.constants (addInduct_rec_find hind hrec), hrs, hle.constants hcci, hcs,
-    ⟨j', hj', A, hA, hAm, hle', hru_s⟩,
-    fun hown => recSplit?_eq rfl rfl hR hrs hown⟩
 
 /-! ### The population invariant -/
 
@@ -502,8 +362,8 @@ the quotient rule's redex `Quot.lift f h (Quot.mk r a)` is written under binders
 `SimplePattern` matches (`SimplePattern.defn` is unused). `DefEqsAsPats` therefore holds of
 an environment built from axioms and inductives only and fails for any environment containing
 a `def` or `quot`; `toParams` is a `Params` instance exactly for the environments that satisfy
-it, and discharging `extra_pat` for the δ/quot rules is the pre-existing gap between `Params`
-and `VDecl.WF`, left to the maintainers. -/
+it; discharging `extra_pat` for the δ and quotient rules is the remaining gap between
+`Params` and `VDecl.WF`. -/
 def DefEqsAsPats (env : VEnv) (U : Nat) : Prop :=
   ∀ {df : VDefEq} {ls : List VLevel} {uvars : Nat} {Γ : List VExpr},
     env.defeqs df → (∀ l ∈ ls, l.WF uvars) → ls.length = df.uvars →

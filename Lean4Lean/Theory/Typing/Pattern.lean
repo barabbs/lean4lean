@@ -174,11 +174,10 @@ def Pattern.RHS.Uses {p : Pattern} : p.RHS → p.Path → Prop
 
 /-- `m2` instantiates the holes `r` uses generically over a context of length `n`: those
 holes are pairwise distinct variables below `n`, and every variable below `n` is one of
-them. The remaining holes are unconstrained (for an ι rule: the index arguments and the
-constructor's parameter arguments — arbitrary terms over the context, tied to the
-recursor's parameters by nothing here; identifying them from a well-typed redex would need
-injectivity of the type formers, open under `VEnv.WF` (`Injectivity.lean`) and false under
-`Ordered`, see `VEnv.PatWF`). -/
+them. The holes `r` does not use are unconstrained here — for an ι rule the index arguments
+and the constructor's parameter arguments, arbitrary terms over the context. What ties them
+to the recursor's arguments is not this predicate but the well-formedness of the block
+(`VInductDecl.WF.rules_ctor`, `rec_shape`) together with the typing of an instance. -/
 def Pattern.RHS.Generic {p : Pattern} (r : p.RHS) (m2 : p.Path → VExpr) (n : Nat) : Prop :=
   (∀ x, r.Uses x → ∃ i < n, m2 x = .bvar i) ∧
   (∀ x y, r.Uses x → r.Uses y → m2 x = m2 y → x = y) ∧
@@ -449,6 +448,39 @@ theorem Pattern.Check.Realizes.map_instL {p : Pattern} {m1 m2} {ck : p.Check} {c
     | t :: ts, ⟨h1, h2, hr⟩ =>
       exact ⟨by simp [h1, RHS.instL_apply], by simp [h2, RHS.instL_apply], ih hr⟩
 
+/-- `RHS.apply` commutes with substitution: the `fixed` parts are closed, so a
+substitution only touches the holes. -/
+theorem Pattern.RHS.subst_apply {p : Pattern} {m1 m2} {σ : Subst} (r : p.RHS) :
+    (r.apply m1 m2).subst σ = r.apply m1 fun x => (m2 x).subst σ := by
+  induction r <;> simp [*, apply]
+  rw [(ClosedN.instL ‹_›).subst_eq .zero]
+
+/-- A match survives an arbitrary substitution: patterns are `const`/`app` trees,
+which `subst` maps homomorphically. -/
+theorem Pattern.matches_subst {p : Pattern} {e : VExpr} {m1 m2} {σ : Subst}
+    (H : p.Matches e m1 m2) :
+    p.Matches (e.subst σ) m1 fun x => (m2 x).subst σ := by
+  induction H with
+  | const => erw [show (fun _ : Empty => _) = _ by ext ⟨⟩]; exact .const
+  | var _ ih =>
+    rw [(_ : (fun _ => _) = _)]; exact ih.var
+    ext (_|_) <;> rfl
+  | app _ _ ih1 ih2 =>
+    rw [(_ : (fun _ => _) = _)]; exact ih1.app ih2
+    ext (_|_) <;> rfl
+
+/-- `Realizes` transports under substitution. -/
+theorem Pattern.Check.Realizes.map_subst {p : Pattern} {m1 m2} {ck : p.Check} {chk}
+    {σ : Subst} (hr : ck.Realizes m1 m2 chk) :
+    ck.Realizes m1 (fun x => (m2 x).subst σ)
+      (chk.map fun t => (t.1.subst σ, t.2.1.subst σ, t.2.2.subst σ)) := by
+  induction ck generalizing chk with
+  | true => cases chk <;> simp_all [Realizes]
+  | defeq a b rest ih =>
+    match chk, hr with
+    | t :: ts, ⟨h1, h2, hr⟩ =>
+      exact ⟨by simp [h1, RHS.subst_apply], by simp [h2, RHS.subst_apply], ih hr⟩
+
 inductive SimplePattern where
   | iota (recursor : Name) (major : Nat) (constr : Name) (args : Nat)
   | defn (head : Name)
@@ -471,8 +503,8 @@ rule template applied to the recursor's parameters, motives and minors and to th
 constructor's fields. `Pattern.RHS.spine`/`iotaCounts` read such a reduct back — the
 template and the numbers of recursor-side and constructor-side holes — which is all of
 the recursor's telescope the reduct retains: it depends on the motive/minor split only
-through `nm + nmin` (`iotaRHS_boundary_irrel`), exactly like `inductiveReduceRec` and
-the thesis's `rec_P C e p[b] (c b) ≡ e_c b v`. -/
+through `nm + nmin`, exactly like `inductiveReduceRec` and the thesis's
+`rec_P C e p[b] (c b) ≡ e_c b v`. -/
 
 /-- Decompose an `RHS` of the form `fixed c` applied (left-nested) to `var` holes into
 the head `c` and its holes, first hole first; `none` for any other shape. -/
@@ -585,7 +617,7 @@ theorem Pattern.matches_varN_const {c : Name} {ls : List VLevel} :
           Option ((Pattern.const c).varN n).Path) a g = _
       rw [key]
       by_cases hik : i = n
-      · subst hik; rw [dif_pos rfl]; simp [List.getElem_append, hlen]
+      · subst hik; rw [dif_pos rfl]; simp [hlen]
       · rw [dif_neg hik, Option.elim, hg i (by omega), List.getElem_append_left (by omega)]
 
 /-- The ι reduct on a match: the template, level-instantiated, applied to the recursor
@@ -643,19 +675,6 @@ theorem SimplePattern.iotaRHS_iotaCounts (r c : Name) (np nm nmin nind cnp nf : 
     (rhs : VExpr) (hrhs : rhs.Closed) :
     (iotaRHS r c np nm nmin nind cnp nf rhs hrhs).iotaCounts = some (rhs, np+nm+nmin, nf) :=
   iotaRHS'_iotaCounts ..
-
-/-- An ι reduct depends on the motive/minor split only through `nm + nmin`: the
-boundary between motives and minors is not reduction data (it is recovered from the
-recursor's type instead). -/
-theorem SimplePattern.iotaRHS_boundary_irrel {r c : Name} {np nm nmin nm' nmin' nind cnp nf : Nat}
-    {rhs : VExpr} (h : nm + nmin = nm' + nmin') (h₁ h₂ : rhs.Closed) :
-    HEq (iotaRHS r c np nm nmin nind cnp nf rhs h₁)
-      (iotaRHS r c np nm' nmin' nind cnp nf rhs h₂) := by
-  have hk : np + nm + nmin = np + nm' + nmin' := by omega
-  unfold iotaRHS
-  generalize np + nm + nmin = k₁ at hk ⊢
-  generalize np + nm' + nmin' = k₂ at hk ⊢
-  subst hk; rfl
 
 /-! ### Template-headed reducts
 

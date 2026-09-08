@@ -9,40 +9,12 @@ namespace VEnv
 /-!
 # Environment-extension lemmas for `VEnv.addInduct`
 
-`addInduct_le` (adding an inductive only grows the environment) and `addInduct_pat`
-(every recursor rule's ι-reduction rule ends up in the resulting `pats`), threaded
-through the four named stages `VInductDecl.addTypes`/`addCtors`/`addRecs`/`addRules`
-(`addInduct_stages`); and `addInduct_WF` (adding a well-formed inductive keeps the
-environment `Ordered`), proved stage by stage from `VInductDecl.WF` — the constant
-stages by `foldlM_addConst_ordered`, the ι-rule stage by `Ordered.pat` from `rules_wf`
-(the typing of the rule) and `rule_shape` (its reduct is headed by a λ-template).
-
-`Ordered` is all `addInduct_WF` establishes. The metatheory of the ι rule beyond it —
-that the reduct of a well-typed redex is (strongly) typed at the redex's type, i.e. subject
-reduction for ι — is `VEnv.WF.patsStrong`, the one ι obligation this contribution itself
-introduces and leaves open (in its `Theory` files `Inductive.lean`, `Pattern.lean`,
-`InductiveParams.lean`, this file; the `pat` cases of `Strong.lean`/`ChurchRosser.lean`'s
-`IsDefEqStrong` metatheory, `sorry` at eddf009, it closes). It is not the only ι-adjacent
-`sorry` in `Theory`/`Verify`; pre-existing ones remain: in `Verify`, `reduceRecursor.WF`
-(`Verify/TypeChecker/WHNF.lean`, the refinement of the kernel's
-`inductiveReduceRec`/`toCtorWhenK`) and the `inductDecl` case of `addDecl.WF`
-(`Verify/Environment.lean`, the `AddInduct` witness from `Environment.addInductive`) are
-open; in `Theory`, the `ParRed.extra` cases of `NormalEq.parRed` (`ChurchRosser.lean`) —
-the pattern-reduction step that `env.pats` instantiates through `VEnv.toParams` — are
-`sorry`, pre-existing at eddf009; and the `Lean4Lean.Experimental` copies of the
-definitional-equality metatheory (`Stratified.lean`, `StratifiedUntyped.lean`,
-`ParallelReduction.lean`) keep their `pat` cases as `sorry`, pre-existing at eddf009 and
-deferred there as the `Theory` copies' were (nothing in `Theory` or `Verify` imports the
-`Experimental` files). `patsStrong` is what
-the strong system (`IsDefEqStrong.pat`, annotated with the reduct's typing) asks of an
-environment through `VEnv.PatsStrong`, and what `VEnv.WF.orderedStrong` supplies to every
-consumer of `IsDefEq.strong` (inversion, unique typing, injectivity). It is not derivable
-from `VInductDecl.WF.rules_wf`: the typing of the generic rule instance transfers to an
-arbitrary well-typed instance only through inversion of the redex's typing and injectivity
-of the type formers, which fail under `Ordered`'s arbitrary definitional axioms and are
-themselves open under `VEnv.WF` (`Injectivity.lean`). The second half collects the
-population lemmas: what each stage binds in `constants` and registers in `pats`, and where
-a registered pattern entry comes from.
+`addInduct_le` (adding an inductive only grows the environment) and `addInduct_pat` (every
+recursor rule's ι rule ends up in `pats`), threaded through the stages `addTypes`/`addCtors`/
+`addRecs`/`addRules` (`addInduct_stages`); `addInduct_WF` (adding a well-formed inductive
+keeps the environment `Ordered`), proved stage by stage from `VInductDecl.WF`; and the
+population lemmas saying what each stage binds in `constants` and registers in `pats`.
+Subject reduction of the registered ι rules is the open `VEnv.WF.patsStrong` (`EnvLemmas.lean`).
 -/
 
 /-- Monotonicity of a monadic left fold in the `Option` monad: if each successful
@@ -259,43 +231,6 @@ theorem addInduct_WF (henv : Ordered env) (hdecl : decl.WF env)
   obtain ⟨envR, hR, hP⟩ := Option.bind_eq_some_iff.1 henv'
   exact addRules_ordered hdecl hR (addTypesCtorsRecs_ordered henv hdecl hR) hP
 
-/-- IOTA-TODO(soundness): subject reduction of the registered ι rules in the strong system
-(thesis §2.6.4 states the ι rule as an untyped `≡` inference in `Γ, C:κ, e::ε, b::β`, its
-reduction rule "all substitution instances" of it; that both sides of a well-typed instance
-are typed at the redex's type is the regularity lemmas — `typesys.tex`, "Regularity
-continued", subject reduction for `⇝`, and `unique.tex`, "Regularity of reductions", for
-`⇝_κ`). `VEnv.PatsStrong` asks that every strongly typed
-instance of a registered rule — in `env` or in any `Ordered` sub-environment of it, those
-`Ordered.induction` passes through — have a strongly typed reduct at the same type; it is
-the annotation `IsDefEqStrong.pat` carries and the one hypothesis of the strong system not
-supplied by `Ordered` (`VEnv.OrderedStrong`, `VEnv.WF.orderedStrong`).
-
-Why it is a theorem of well-formed environments and not of `Ordered` ones: every rule of a
-`WF` environment is the ι rule of a well-formed inductive declaration (`WF'.pats_origin`),
-typed as a schematic rule (`Ordered.patWF`, from `VInductDecl.WF.rules_wf`); a
-well-typed instance is a substitution instance of that generic rule once the recursor's
-arguments are typed by inversion of the application spine and the constructor's parameters
-are identified with the recursor's by injectivity of the type formers, and its reduct is
-then typed by substitution. Injectivity is expected to hold when the definitional axioms are
-only the δ rules of definitions and the quotient rule (`VDecl.WF`), which is `WF` — it is
-open (`Injectivity.lean`), not established; `Ordered.defeq` admits
-any well-typed axiom, e.g. `List Nat ≡ List Bool`, under which the instance
-`List.rec Nat m n c (List.cons Bool true tl)` is well-typed and its reduct is not. The
-inversion and injectivity lemmas this needs are themselves the open metatheory of
-`Injectivity.lean`/`UniqueTyping.lean`, which is why this obligation is deferred with them
-rather than proved from `rules_wf`.
-
-Stronger than the thesis's claim, by construction: `PatsStrong` asks for subject reduction in
-every `Ordered` sub-environment `env₀ ≤ env`, not only in the `WF` prefixes of `env`, because
-`OrderedStrong.strong` builds `EnvStrong` by `Ordered.induction`, which exposes the
-intermediate environments only as `Ordered` sub-environments. Such an `env₀` is a
-sub-selection of a `WF` environment — the same constant types, subsets of its δ/quot axioms
-and of its ι rules — so the injectivity the argument needs is expected to transfer, but the
-statement demands inversion and injectivity in an arbitrary `Ordered` sub-selection, which is
-more than `Injectivity.lean` targets. -/
-theorem _root_.Lean4Lean.VEnv.WF.patsStrong {env : VEnv} (H : env.WF) : env.PatsStrong :=
-  sorry
-
 /-! ## Environment-population lemmas
 
 The stage-by-stage bookkeeping of `addInduct` seen through `constants` and `pats`:
@@ -314,6 +249,13 @@ theorem addConst_pats {env env' : VEnv} {n ci} (h : env.addConst n ci = some env
   · simp at h
   · injection h with h; subst h; rfl
 
+/-- `addConst` leaves `defeqs` unchanged. -/
+theorem addConst_defeqs {env env' : VEnv} {n ci} (h : env.addConst n ci = some env') :
+    env'.defeqs = env.defeqs := by
+  rw [VEnv.addConst] at h; split at h
+  · simp at h
+  · injection h with h; subst h; rfl
+
 /-- `addDefEq` leaves `pats` unchanged. -/
 theorem addDefEq_pats {env : VEnv} {df} : (env.addDefEq df).pats = env.pats := rfl
 
@@ -325,6 +267,15 @@ theorem addConsts_pats {env env' : VEnv} : ∀ {cis},
     simp [VEnv.addConsts, Option.bind_eq_some_iff] at h
     obtain ⟨_, h1, h2⟩ := h
     exact (addConsts_pats h2).trans (addConst_pats h1)
+
+/-- `addConsts` (a block of `addConst`s) leaves `defeqs` unchanged. -/
+theorem addConsts_defeqs {env env' : VEnv} : ∀ {cis},
+    env.addConsts cis = some env' → env'.defeqs = env.defeqs
+  | [], h => by cases h; rfl
+  | _ :: _, h => by
+    simp [VEnv.addConsts, Option.bind_eq_some_iff] at h
+    obtain ⟨_, h1, h2⟩ := h
+    exact (addConsts_defeqs h2).trans (addConst_defeqs h1)
 
 /-- `addDefEqs` (a block of `addDefEq`s) leaves `pats` unchanged. -/
 theorem addDefEqs_pats : ∀ {cis : List VDefVal} {env : VEnv}, (env.addDefEqs cis).pats = env.pats
@@ -358,6 +309,16 @@ theorem foldlM_pats_preserved {α} {f : VEnv → α → Option VEnv}
   | _ :: _, _, _, h => by
     simp only [List.foldlM] at h
     obtain ⟨e1, h1, h2⟩ := Option.bind_eq_some_iff.1 h; rw [foldlM_pats_preserved hf h2, hf h1]
+
+/-- A `foldlM` whose every step preserves `defeqs` preserves `defeqs`. -/
+theorem foldlM_defeqs_preserved {α} {f : VEnv → α → Option VEnv}
+    (hf : ∀ {e a e'}, f e a = some e' → e'.defeqs = e.defeqs) :
+    ∀ {l : List α} {init env' : VEnv}, l.foldlM f init = some env' → env'.defeqs = init.defeqs
+  | [], _, _, h => by simp [List.foldlM] at h; exact h ▸ rfl
+  | _ :: _, _, _, h => by
+    simp only [List.foldlM] at h
+    obtain ⟨e1, h1, h2⟩ := Option.bind_eq_some_iff.1 h
+    rw [foldlM_defeqs_preserved hf h2, hf h1]
 
 /-- Full specification of a successful `addConst`: the name was fresh, is now bound
 to `ci`, and no other name changed. -/
@@ -527,6 +488,24 @@ theorem addRecs_pats {decl : VInductDecl} {env env' : VEnv}
     (h : decl.addRecs env = some env') : env'.pats = env.pats := by
   unfold VInductDecl.addRecs at h; exact foldlM_pats_preserved (fun hh => addConst_pats hh) h
 
+/-- `addTypes` leaves `defeqs` unchanged. -/
+theorem addTypes_defeqs {decl : VInductDecl} {env env' : VEnv}
+    (h : decl.addTypes env = some env') : env'.defeqs = env.defeqs := by
+  unfold VInductDecl.addTypes at h
+  exact foldlM_defeqs_preserved (fun hh => addConst_defeqs hh) h
+
+/-- `addCtors` leaves `defeqs` unchanged. -/
+theorem addCtors_defeqs {decl : VInductDecl} {env env' : VEnv}
+    (h : decl.addCtors env = some env') : env'.defeqs = env.defeqs := by
+  unfold VInductDecl.addCtors at h
+  exact foldlM_defeqs_preserved (fun hh => addConst_defeqs hh) h
+
+/-- `addRecs` leaves `defeqs` unchanged. -/
+theorem addRecs_defeqs {decl : VInductDecl} {env env' : VEnv}
+    (h : decl.addRecs env = some env') : env'.defeqs = env.defeqs := by
+  unfold VInductDecl.addRecs at h
+  exact foldlM_defeqs_preserved (fun hh => addConst_defeqs hh) h
+
 /-- After `addTypes`, every type former of `decl` is bound to its constant. -/
 theorem addTypes_find {decl : VInductDecl} {env env' : VEnv}
     (h : decl.addTypes env = some env') :
@@ -680,16 +659,30 @@ theorem addInduct_recs_name_inj {env env' : VEnv} {decl : VInductDecl} {ra rb}
   obtain ⟨env1, env2, env3, s1, s2, s3, s4⟩ := addInduct_stages h
   exact addRecs_name_inj s3 ra hra rb hrb hname
 
+/-- The constructor a rule of a well-formed `decl` fires on is one of the block's own
+(`VInductDecl.WF.rules_ctor`), hence registered in the stage-1 environment with a type of
+`CtorShape (ru.ctorParams + ru.nfields)`. -/
+theorem _root_.Lean4Lean.VInductDecl.WF.rules_ctor_shape {env : VEnv} {decl : VInductDecl}
+    (hwf : decl.WF env) : ∀ envC, decl.addTypesCtors env = some envC →
+      ∀ r ∈ decl.recs, ∀ ru ∈ r.rules, ∃ ci, envC.constants ru.ctor = some ci ∧
+        ci.type.CtorShape (ru.ctorParams + ru.nfields) := by
+  intro envC hC r hr ru hru
+  obtain ⟨env1, s1, s2⟩ := Option.bind_eq_some_iff.1 hC
+  obtain ⟨t, ht, -, c, hc, hname, hnp, hres⟩ := hwf.rules_ctor r hr ru hru
+  refine ⟨c.toVConstant, ?_, ?_⟩
+  · rw [hname]; exact addCtors_find s2 t ht c hc
+  · rw [hnp]; exact hres.ctorShape
+
 /-- The constructor a rule of a well-formed `decl` fires on is registered in the
 resulting environment, with a type of `CtorShape (ru.ctorParams + ru.nfields)`
-(`VInductDecl.WF.rules_ctor`, carried forward from the stage-1 environment). -/
+(`VInductDecl.WF.rules_ctor_shape`, carried forward from the stage-1 environment). -/
 theorem addInduct_rule_ctor {env env' : VEnv} {decl : VInductDecl} {rec ru}
     (hwf : decl.WF env) (h : env.addInduct decl = some env')
     (hrec : rec ∈ decl.recs) (hru : ru ∈ rec.rules) :
     ∃ ci, env'.constants ru.ctor = some ci ∧ ci.type.CtorShape (ru.ctorParams + ru.nfields) := by
   obtain ⟨env1, env2, env3, s1, s2, s3, s4⟩ := addInduct_stages h
   have hC : decl.addTypesCtors env = some env2 := Option.bind_eq_some_iff.2 ⟨env1, s1, s2⟩
-  obtain ⟨ci, hci, hcs⟩ := hwf.rules_ctor env2 hC rec hrec ru hru
+  obtain ⟨ci, hci, hcs⟩ := hwf.rules_ctor_shape env2 hC rec hrec ru hru
   exact ⟨ci, ((addRecs_le s3).trans (addRules_le s4)).constants hci, hcs⟩
 
 /-! ### Combinatorics of ι redexes -/

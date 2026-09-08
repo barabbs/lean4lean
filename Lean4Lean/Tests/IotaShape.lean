@@ -1,29 +1,33 @@
+import Lean4Lean.Tests.ShapeDecide
 import Lean4Lean.Theory.Typing.InductiveParams
 import Lean4Lean.Theory.Meta
 
 /-!
-Validation of the recursor / constructor / ι-rule shape predicates (`VExpr.RecShape`,
-`VExpr.CtorShape`, `VExpr.RuleShape` with its `VExpr.MinorFor` tie to the minor premise)
-and of the ι reduct builder `SimplePattern.iotaRHS` against the kernel's own data.
+Validation of `VInductDecl.WF` against the kernel's own data: the recursor / constructor /
+ι-rule shape predicates (`VExpr.RecShape`, `VExpr.CtorShape`, `VExpr.RuleShape` with its
+`VExpr.MinorFor` tie to the minor premise), the block clauses (`VExpr.CtorResult`,
+`VExpr.CtorPositive`, `VInductDecl.LargeElim`) and the ι reduct builder
+`SimplePattern.iotaRHS`.
 
 For each recursor we translate (`Meta.ofExpr`) the kernel's `RecursorVal.type`, each
-rule's `rhs`, and each rule constructor's type, and *decide* the shape predicates on the
-results (their `Decidable` instances make them executable). For ι we build a redex
+rule's `rhs`, and each rule constructor's type, and *decide* the predicates on the results
+(their `Decidable` instances make them executable). For ι we build a redex
 `rec params motives minors indices (ctor cparams fields)` over free variables, reduce it
 with the executable kernel (`inductiveReduceRec`), and check that `iotaRHS … |>.apply` on
-the pattern match gives the very same term. Finally we run the telescope decoder
-`VEnv.recSplit?` on the reduct and the recursor's type: it must recover the kernel's
-`(numParams, numMotives, numMinors, numIndices)` whenever the rule's constructor has the
-recursor's parameters, and must *not* for the auxiliary recursor of a nested block (its
-documented limit).
+the pattern match gives the very same term.
 
-The declarations cover the cases `VInductDecl.WF` must be inhabitable for: a plain
-recursive type (`Nat`), a parametrised one (`List`), a structure (`P2`), an indexed family
-(`Vec`), a mutual block (`Ev`/`Od`), a nested block with its auxiliary recursor
-(`Tree.rec`/`Tree.rec_1`, whose rules fire on `List.nil`/`List.cons` with
-`ctorParams = 1 ≠ numParams = 0`), a K-like type (`Eq`), a recursor with λ-abstracted
-recursive arguments (`Acc`), and an empty type (`False`); then (`checkAll`) every clause
-on a further set of adversarial shapes and on a sweep of the library's inductive types.
+`VInductDecl.WF` specifies a *direct* mutual block, so a nested inductive type — one whose
+constructors mention the block inside another type former, and whose auxiliary recursors
+eliminate that other former — is a negative control here: `Tree` (`node : List Tree → Tree`,
+`Tree.rec_1` over `List Tree`) is the documented one, and `checkNested` runs on the further
+nested shapes below. Their ι rules are still checked against the kernel, the pattern
+machinery being general.
+
+`checkAll` runs every clause on a hand-picked list of type formers: a plain recursive type
+(`Nat`), a parametrised one (`List`), a structure (`P2`), an indexed family (`Vec`), a
+mutual block (`Ev`/`Od`), a K-like type (`Eq`), a recursor with λ-abstracted recursive
+arguments (`Acc`), an empty type (`False`), and a selection of stable `Init`/`Std`
+inductives.
 -/
 
 namespace Lean4Lean.Tests.IotaShape
@@ -161,17 +165,6 @@ def checkIota (recName ctorName : Name) (cus : List Level)
         let R := SimplePattern.iotaRHS recName ctorName r.numParams r.numMotives r.numMinors
           r.numIndices c.numParams rule.nfields rhs hc
         unless R.apply m1 m2 = redv do throwError "ι reduct mismatch for {recName}/{ctorName}"
-        -- (R3) `VEnv.recSplit?` decodes the kernel's telescope split from the entry and the
-        -- recursor's type exactly when the rule's constructor has the recursor's parameters;
-        -- for the auxiliary recursor of a nested block it reads `cnp` as `np` instead.
-        let ty ← Meta.ofExpr r.levelParams {} r.type
-        let split := VEnv.recSplit? ty R
-        let truth := some (r.numParams, r.numMotives, r.numMinors, r.numIndices)
-        if c.numParams = r.numParams then
-          unless split = truth do
-            throwError "recSplit? mismatch for {recName}/{ctorName}: {repr split}"
-        else if split = truth then
-          throwError "recSplit? unexpectedly exact for the nested rule {recName}/{ctorName}"
       else throwError "the reduct template of {recName}/{ctorName} is not closed"
 
 /-- `types_have_rec`: the recursor of inductive type `I` eliminates `I`. -/
@@ -180,26 +173,128 @@ def checkTypesHaveRec (I : Name) : MetaM Unit := do
   let ty ← Meta.ofExpr r.levelParams {} r.type
   unless ty.majorFormer? r.getMajorIdx = some I do throwError "types_have_rec fails for {I}"
 
-/-- The `VInductDecl.WF` clauses not decided by `checkShapes`: `rec_params`,
-`rules_own_params`, `rules_nodup`, `rules_ctor` (with the constructor's own `numParams`),
-and closedness of the reducts. -/
+/-- The `VInductDecl.WF` clauses not decided by `checkShapes` or `blockFailures`:
+`rec_params`, `rules_nodup`, the parameter count every rule records
+(`rules_own_params`), the `CtorShape` its constructor's type has, and closedness of the
+reducts. -/
 def checkMore (n : Name) : MetaM Unit := do
   let .recInfo r ← getConstInfo n | throwError "{n} is not a recursor"
   let some I0 := r.all.head? | throwError "{n} has an empty block"
   let .inductInfo ival0 ← getConstInfo I0 | throwError "{I0} is not an inductive type"
   unless r.numParams = ival0.numParams do throwError "rec_params fails for {n}"
   unless (r.rules.map (·.ctor)).Nodup do throwError "rules_nodup fails for {n}"
-  let own : List Name ← r.all.flatMapM fun t => do
-    let .inductInfo iv ← getConstInfo t | throwError "{t} is not an inductive type"
-    pure iv.ctors
   for ru in r.rules do
     let .ctorInfo c ← getConstInfo ru.ctor | throwError "{ru.ctor} is not a constructor"
-    if ru.ctor ∈ own then
-      unless c.numParams = r.numParams do throwError "rules_own_params fails for {n}/{ru.ctor}"
+    unless c.numParams = r.numParams do throwError "rules_own_params fails for {n}/{ru.ctor}"
     let cty ← Meta.ofExpr c.levelParams {} c.type
-    unless cty.CtorShape (c.numParams + ru.nfields) do throwError "rules_ctor fails for {n}/{ru.ctor}"
+    unless cty.CtorShape (c.numParams + ru.nfields) do
+      throwError "CtorShape fails for {n}/{ru.ctor}"
     let rhs ← Meta.ofExpr r.levelParams {} ru.rhs
     unless rhs.Closed do throwError "the reduct of {n}/{ru.ctor} is not closed"
+
+/-- The result sort of a Π-telescope. -/
+def resultSort : Expr → Option Level
+  | .forallE _ _ b _ => resultSort b
+  | .sort l => some l
+  | _ => none
+
+/-- Which clause of `VInductDecl.LargeElim` applies to the block of `I`: `0` if the block's
+result sort is never `Prop`, `1` if it is a single type former with no constructor, `2` if
+with one constructor, and `none` if none applies. Clause `2` also returns the fields the
+syntactic half leaves open — those the constructor's result type does not mention
+(`VExpr.FieldInIndices`), which pass only if they are propositions, a typing judgment this
+does not decide. -/
+def largeElimClause (I : Name) : MetaM (Option (Nat × List Nat)) := do
+  let .inductInfo iv ← getConstInfo I | throwError "{I} is not an inductive type"
+  let some I0 := iv.all.head? | throwError "{I} has an empty block"
+  let .inductInfo iv0 ← getConstInfo I0 | throwError "{I0} is not an inductive type"
+  let some l := resultSort iv0.type | throwError "the type former {I0} does not end in a sort"
+  if l.isNeverZero then return some (0, [])
+  unless iv.all.length = 1 do return none
+  match iv0.ctors with
+  | [] => return some (1, [])
+  | [cn] =>
+    let .ctorInfo c ← getConstInfo cn | throwError "{cn} is not a constructor"
+    let cty ← Meta.ofExpr c.levelParams {} c.type
+    return some (2, (List.range c.numFields).filter fun i => !cty.FieldInIndices iv0.numParams i)
+  | _ => return none
+
+/-- The recursors of the block of `I`: `I.rec` and the auxiliary `I.rec_1`, `I.rec_2`, … of
+a nested block. -/
+def recsOf (I : Name) : MetaM (List Name) := do
+  let env ← getEnv
+  let mut out := [mkRecName I]
+  let mut i := 1
+  while env.contains ((mkRecName I).appendIndexAfter i) do
+    out := out ++ [(mkRecName I).appendIndexAfter i]
+    i := i + 1
+  pure out
+
+/-- The block-level clauses of `VInductDecl.WF`, decided on the kernel's data for the mutual
+block of `I`: `ctors_params`, `ctors_result`, `ctors_positive`, `recs_over_block`,
+`rec_counts`, `rec_shape`, `rules_total`, the syntactic part of `rules_ctor`, and the
+syntactic half of the large-elimination clause of `universes`. Returns the clauses that
+fail; a direct block fails none, a nested one fails `ctors_positive` and `recs_over_block`
+at least. -/
+def blockFailures (I : Name) : MetaM (Array String) := do
+  let .inductInfo iv ← getConstInfo I | throwError "{I} is not an inductive type"
+  let some I0 := iv.all.head? | throwError "{I} has an empty block"
+  let .inductInfo iv0 ← getConstInfo I0 | throwError "{I0} is not an inductive type"
+  let np := iv0.numParams
+  let fs := iv.all
+  let mut bad : Array String := #[]
+  let mut nctors := 0
+  for J in fs do
+    let .inductInfo ivJ ← getConstInfo J | throwError "{J} is not an inductive type"
+    let jty ← Meta.ofExpr ivJ.levelParams {} ivJ.type
+    nctors := nctors + ivJ.ctors.length
+    for cn in ivJ.ctors do
+      let .ctorInfo c ← getConstInfo cn | throwError "{cn} is not a constructor"
+      let cty ← Meta.ofExpr c.levelParams {} c.type
+      unless cty.piBinders.take np = jty.piBinders.take np do
+        bad := bad.push s!"ctors_params/{cn}"
+      unless cty.CtorResult J np c.numFields (jty.piArity - np) do
+        bad := bad.push s!"ctors_result/{cn}"
+      unless cty.CtorPositive fs np do
+        bad := bad.push s!"ctors_positive/{cn}"
+  let mut wantsLarge := false
+  for J in fs do
+    for rn in ← recsOf J do
+      let .recInfo r ← getConstInfo rn | throwError "{rn} is not a recursor"
+      let rty ← Meta.ofExpr r.levelParams {} r.type
+      if r.levelParams.length = iv0.levelParams.length + 1 then wantsLarge := true
+      unless rty.RecShape r.numParams r.numMotives r.numMinors r.numIndices do
+        bad := bad.push s!"rec_shape/{rn}"
+      unless r.numMotives = fs.length ∧ r.numMinors = nctors do
+        bad := bad.push s!"rec_counts/{rn}"
+      let some major := rty.majorFormer? r.getMajorIdx | throwError "majorFormer? fails for {rn}"
+      unless major ∈ fs do
+        bad := bad.push s!"recs_over_block/{rn}"
+        continue
+      let .inductInfo ivM ← getConstInfo major | throwError "{major} is not an inductive type"
+      let mty ← Meta.ofExpr ivM.levelParams {} ivM.type
+      unless r.numIndices = mty.piArity - np do bad := bad.push s!"rec_counts/{rn}"
+      unless ∀ c ∈ ivM.ctors, ∃ ru ∈ r.rules, ru.ctor = c do
+        bad := bad.push s!"rules_total/{rn}"
+      for ru in r.rules do
+        let .ctorInfo c ← getConstInfo ru.ctor | throwError "{ru.ctor} is not a constructor"
+        let cty ← Meta.ofExpr c.levelParams {} c.type
+        unless ru.ctor ∈ ivM.ctors ∧ c.numParams = np ∧
+            cty.CtorResult major np ru.nfields (mty.piArity - np) do
+          bad := bad.push s!"rules_ctor/{rn}/{ru.ctor}"
+  if wantsLarge && (← largeElimClause I).isNone then bad := bad.push "universes/LargeElim"
+  return bad
+
+/-- Every block clause holds for the direct block of `I`. -/
+def checkBlock (I : Name) : MetaM Unit := do
+  let bad ← blockFailures I
+  unless bad.isEmpty do
+    throwError "block clauses fail for {I}: {String.intercalate ", " bad.toList}"
+
+/-- Some block clause fails for `I`: the negative control for a nested block. -/
+def checkBlockRejected (I : Name) : MetaM Unit := do
+  let bad ← blockFailures I
+  if bad.isEmpty then throwError "the block clauses accept the nested block {I}"
 
 /-- `checkIota` with the constructor's levels and parameters read off the recursor's major
 premise, so that the auxiliary recursors of nested blocks are covered generically. -/
@@ -213,23 +308,22 @@ def checkIotaAuto (recName ctorName : Name) : MetaM Unit := do
     pure (us, args.map (·.abstract xs))
   checkIota recName ctorName cus (fun xs => absParams.map (·.instantiateRev xs))
 
-/-- The recursors of the block of `I`: `I.rec` and the auxiliary `I.rec_1`, `I.rec_2`, … of
-a nested block. -/
-def recsOf (I : Name) : MetaM (List Name) := do
-  let env ← getEnv
-  let mut out := [mkRecName I]
-  let mut i := 1
-  while env.contains ((mkRecName I).appendIndexAfter i) do
-    out := out ++ [(mkRecName I).appendIndexAfter i]
-    i := i + 1
-  pure out
-
 /-- Every check on every recursor of the block of `I` and every rule of each. -/
 def checkAll (I : Name) : MetaM Unit := do
   checkTypesHaveRec I
+  checkBlock I
   for rn in ← recsOf I do
     checkShapes rn
     checkMore rn
+    let .recInfo r ← getConstInfo rn | throwError "{rn} is not a recursor"
+    for ru in r.rules do
+      checkIotaAuto rn ru.ctor
+
+/-- A nested block: `VInductDecl.WF` rejects it, but its ι rules still agree with the
+kernel's, the pattern machinery being general. -/
+def checkNested (I : Name) : MetaM Unit := do
+  checkBlockRejected I
+  for rn in ← recsOf I do
     let .recInfo r ← getConstInfo rn | throwError "{rn} is not a recursor"
     for ru in r.rules do
       checkIotaAuto rn ru.ctor
@@ -293,9 +387,72 @@ inductive Wrap (p : Prop) : Prop where
 inductive SigmaLike : Prop where
   | mk (n : Nat) (h : n = n) : SigmaLike
 
+/-! ### Negative controls Lean's elaborator will not declare
+
+A non-positive constructor and a `Prop` with two constructors eliminating into `Sort u`,
+written as `VExpr`/`VInductDecl` literals. -/
+
+/-- A non-positive constructor `(Bad → False) → Bad`. -/
+def badCtorType : VExpr :=
+  .forallE (.forallE (.const `Bad []) (.const ``False [])) (.const `Bad [])
+
+/-- A strictly positive constructor of the same type former, `(Nat → Bad) → Bad`. -/
+def goodCtorType : VExpr :=
+  .forallE (.forallE (.const ``Nat []) (.const `Bad [])) (.const `Bad [])
+
+theorem badCtorType_not_positive : ¬ badCtorType.CtorPositive [`Bad] 0 := by decide
+theorem goodCtorType_positive : goodCtorType.CtorPositive [`Bad] 0 := by decide
+
+/-! A `Prop` with two constructors whose recursor asks for the extra universe parameter:
+with the ι rules of both constructors it identifies the two proofs' motives, collapsing
+definitional equality. Only the large-elimination clause of `VInductDecl.WF.universes`
+rules it out. -/
+namespace TwoCtorProp
+
+abbrev Pn : Name := .num .anonymous 1
+abbrev t1n : Name := .num .anonymous 2
+abbrev t2n : Name := .num .anonymous 3
+abbrev Rn : Name := .num .anonymous 4
+
+def Pc : VExpr := .const Pn []
+def t1c : VExpr := .const t1n []
+def t2c : VExpr := .const t2n []
+def CT : VExpr := .forallE Pc (.sort (.param 0))
+def M1T : VExpr := .app (.bvar 0) t1c
+def M2T : VExpr := .app (.bvar 1) t2c
+def RT : VExpr := .forallE CT (.forallE M1T (.forallE M2T (.forallE Pc (.app (.bvar 3) (.bvar 0)))))
+def rhs1 : VExpr := .lam CT (.lam M1T (.lam M2T (.bvar 1)))
+def rhs2 : VExpr := .lam CT (.lam M1T (.lam M2T (.bvar 0)))
+
+def t1V : VConstVal := { name := t1n, uvars := 0, type := Pc }
+def t2V : VConstVal := { name := t2n, uvars := 0, type := Pc }
+def PT : VInductiveType :=
+  { name := Pn, uvars := 0, type := .sort .zero, ctors := [t1V, t2V] }
+def ru1 : VRecRule := { ctor := t1n, ctorParams := 0, nfields := 0, rhs := rhs1 }
+def ru2 : VRecRule := { ctor := t2n, ctorParams := 0, nfields := 0, rhs := rhs2 }
+def RV : VRecursor :=
+  { name := Rn, uvars := 1, type := RT, all := [Pn],
+    numParams := 0, numMotives := 1, numMinors := 2, numIndices := 0,
+    k := false, rules := [ru1, ru2] }
+
+def declB : VInductDecl where
+  uvars := 0
+  nparams := 0
+  types := [PT]
+  recs := [RV]
+
+/-- The recursor asks for large elimination. -/
+theorem declB_wants_large : ∃ r ∈ declB.recs, r.uvars = declB.uvars + 1 := by decide
+
+/-- The syntactic half of `VInductDecl.LargeElim` refuses it: a `Prop` with two
+constructors is not `LargeElimShape`. -/
+theorem declB_not_largeElimShape : ¬ declB.LargeElimShape := by decide
+
+end TwoCtorProp
+
 run_meta do
   for n in [``Nat.rec, ``List.rec, ``P2.rec, ``Vec.rec, ``Ev.rec, ``Od.rec, ``Tree.rec,
-      ``Tree.rec_1, ``Eq.rec, ``Acc.rec, ``False.rec] do
+      ``Eq.rec, ``Acc.rec, ``False.rec] do
     checkShapes n
   for I in [``Nat, ``List, ``P2, ``Vec, ``Ev, ``Od, ``Tree, ``Eq, ``Acc, ``False] do
     checkTypesHaveRec I
@@ -407,16 +564,42 @@ run_meta do
   checkIota ``Eq.rec ``Eq.refl [.param `u_1] (fun xs => #[xs[0]!, xs[1]!])
   checkIota ``Acc.rec ``Acc.intro [.param `u] (fun xs => #[xs[0]!, xs[1]!])
 
-  -- Every check, on the shapes above and on a sweep of the library's inductive types.
-  for I in [``TreeP, ``T2, ``T3, ``MA, ``MB, ``T4, ``Refl, ``Le, ``Dep, ``TreeQ, ``Fn,
-      ``EvI, ``OdI, ``PropLarge, ``Wrap, ``SigmaLike,
-      ``Nat, ``List, ``Bool, ``Option, ``Sum, ``Prod, ``PProd, ``PSum, ``PSigma, ``Sigma,
-      ``Subtype, ``And, ``Or, ``Exists, ``Nonempty, ``Decidable, ``Fin, ``Char, ``String,
-      ``Array, ``Except, ``ULift, ``PLift, ``HEq, ``Iff, ``WellFounded, ``Acc, ``Eq, ``PUnit,
-      ``True, ``False, ``Empty, ``PEmpty, ``Lean.Syntax, ``Lean.Json, ``Lean.Expr,
-      ``Lean.Name, ``Lean.Level, ``Lean.LocalDecl, ``Lean.Elab.Term.MatchAltView,
-      ``Lean.Meta.Simp.Step, ``Std.Format, ``Lean.MessageData, ``Lean.Elab.Info,
-      ``Lean.Elab.InfoTree] do
+  -- Which clause of `LargeElim` applies, and what its syntactic half leaves to the typing
+  -- side: `Nat` lives outside `Prop`; `False` has no constructor; `Eq` has one with no
+  -- field; `And`'s two fields and the inductive hypothesis of `Acc.intro` pass only as
+  -- propositions; `Or`, a `Prop` with two constructors, has no clause and asks for none.
+  unless (← largeElimClause ``Nat) = some (0, []) do throwError "LargeElim clause for Nat"
+  unless (← largeElimClause ``False) = some (1, []) do throwError "LargeElim clause for False"
+  unless (← largeElimClause ``Eq) = some (2, []) do throwError "LargeElim clause for Eq"
+  unless (← largeElimClause ``And) = some (2, [0, 1]) do throwError "LargeElim clause for And"
+  unless (← largeElimClause ``Acc) = some (2, [1]) do throwError "LargeElim clause for Acc"
+  unless (← largeElimClause ``Or) = none do throwError "LargeElim clause for Or"
+
+  -- The documented nested control. `Tree.node : List Tree → Tree` restores the block
+  -- through `List`, so it is not strictly positive; `Tree.rec_1` eliminates `List`, a type
+  -- former outside the block, so its major premise is not a `MajorApp` of the block's
+  -- parameter and index variables.
+  let .ctorInfo node ← getConstInfo ``Tree.node | throwError "Tree.node"
+  let nodeTy ← Meta.ofExpr node.levelParams {} node.type
+  if nodeTy.CtorPositive [``Tree] 0 then throwError "CtorPositive accepts Tree.node"
+  let .recInfo tree1 ← getConstInfo ``Tree.rec_1 | throwError "Tree.rec_1"
+  let tree1Ty ← Meta.ofExpr tree1.levelParams {} tree1.type
+  unless tree1Ty.majorFormer? tree1.getMajorIdx = some ``List do
+    throwError "the major premise of Tree.rec_1 is not over List"
+  if tree1Ty.RecShape tree1.numParams tree1.numMotives tree1.numMinors tree1.numIndices then
+    throwError "RecShape accepts the major premise of Tree.rec_1"
+
+  -- Every check, on the direct shapes above and on a selection of `Init`/`Std` inductives.
+  for I in [``Refl, ``Le, ``Dep, ``EvI, ``OdI, ``PropLarge, ``Wrap, ``SigmaLike,
+      ``Nat, ``List, ``P2, ``Vec, ``Ev, ``Od, ``Bool, ``Option, ``Sum, ``Prod, ``PProd,
+      ``PSum, ``PSigma, ``Sigma, ``Subtype, ``And, ``Or, ``Exists, ``Nonempty, ``Decidable,
+      ``Fin, ``Char, ``String, ``Array, ``Except, ``ULift, ``PLift, ``HEq, ``Iff,
+      ``WellFounded, ``Acc, ``Eq, ``PUnit, ``True, ``False, ``Empty, ``PEmpty,
+      ``Lean.Name, ``Lean.Level, ``Std.Format] do
     checkAll I
+
+  -- Nested blocks are rejected; their ι rules still agree with the kernel's.
+  for I in [``Tree, ``TreeP, ``T2, ``T3, ``MA, ``MB, ``T4, ``TreeQ, ``Fn] do
+    checkNested I
 
 end Lean4Lean.Tests.IotaShape
