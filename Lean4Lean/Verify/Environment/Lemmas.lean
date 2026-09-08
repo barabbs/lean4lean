@@ -965,9 +965,11 @@ pre-existing unique-typing / Π-injectivity sorries (`Injectivity.lean`'s `IsDef
 theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environment}
     {venv : VEnv} {U : Nat} {Γ : List VExpr} {S ctorName : Name} {i : Nat}
     {rval : RecursorVal} {cval : ConstructorVal}
+    {usS : List VLevel} {uss : Nat → List VLevel} {params' : List VExpr} {np : Nat}
+    {fieldTys : List VExpr}
     {cus : List VLevel} {params fields : List VExpr} {d e'' : VExpr}
     (H : TrEnv safety kenv venv) (hΓ : OnCtx Γ (venv.IsType U))
-    (hp : TrProjCtor venv U Γ S i d e'' ctorName)
+    (hp : TrProjCtor venv U Γ S i d e'' ctorName usS uss params' np fieldTys)
     (hrec : kenv.find? (mkRecName S) = some (.recInfo rval))
     (hctor : kenv.find? ctorName = some (.ctorInfo cval))
     (hnp : rval.numParams = cval.numParams) (hnm : rval.numMotives = 1)
@@ -977,14 +979,20 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
     (hi : i < cval.numFields) :
     venv.IsDefEqU U Γ e'' (fields[i]'(hflen ▸ hi)) := by
   have henv : venv.WF := H.wf
-  obtain ⟨usS, uss, params', np, ci, rci, cty, fieldTys, r, hpat, hnp', hci, hch, hcty, hF, hi',
-    hrci, harity, hE, hPF, rfl⟩ := hp
+  obtain ⟨ci, hci, hch, cty, hcty, hF⟩ := hp.ctor
+  obtain ⟨rci, hrci, harity⟩ := hp.minor_arity
+  have hi' := hp.field_lt
+  have hnp' := hp.params_length
+  have hE := hp.major_ty
+  have hPF := hp.fn_ty
+  obtain rfl := hp.eq
   -- (A) the constructor's arity: the spine `params ++ fields` is saturated
   have hnf : np + fieldTys.length = params.length + fields.length := by
     have := VExpr.instPis_piArity _ _ (hch.instL usS) hcty
     rw [VExpr.piArity_instL, H.ctor_arity hctor hci] at this
     rw [hF, VExpr.piBinders_length]; omega
   -- (B) the registered rule: the kernel recursor and its rule, with the model-side shape
+  obtain ⟨r, hpat⟩ := hp.pat
   revert r hpat
   generalize hM : np + 1 + 1 + 0 = M
   generalize hN : np + fieldTys.length = N

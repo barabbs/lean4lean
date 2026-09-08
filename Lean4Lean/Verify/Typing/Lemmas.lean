@@ -640,23 +640,26 @@ end VLCtx
 
 theorem TrProj.weak' (henv : Ordered env) (W : Ctx.Lift' n Γ Γ')
     (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.lift' n) (e'.lift' n) := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, rfl, hi, hrci, harity, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, fieldTys, H⟩ := H
+  obtain ⟨ci, hci, hch, cty, hcty, rfl⟩ := H.ctor
+  have hi := H.field_lt
   have hlen : (cty.piBinders.mapIdx fun j F => F.lift' (n.consN j)).length =
       cty.piBinders.length := List.length_mapIdx
-  obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota (mkRecName s) (np+1+1+0) ctorName
-      (np + (cty.piBinders.mapIdx fun j F => F.lift' (n.consN j)).length)).toPattern r' := by
-    rw [hlen]; exact ⟨r, hpat⟩
-  refine ⟨ctorName, usS, uss, params.map (·.lift' n), np, ci, rci, cty.lift' n,
-    cty.piBinders.mapIdx fun j F => F.lift' (n.consN j), r', hpat', by simpa using hnp, hci, hch,
-    ?_, (VExpr.piBinders_lift' ..).symm, by rw [hlen]; exact hi, hrci, by rw [hlen]; exact harity,
-    ?_, ?_, ?_⟩
-  · have := VExpr.instPis_lift' _ _ n hcty
-    rwa [(henv.closedC hci).instL.lift'_eq Lift.Fixes.zero] at this
-  · simpa only [VExpr.mkApps_lift', VExpr.lift'] using hE.weak' henv W
-  · simpa only [VExpr.lift', VExpr.mkApps_lift', VExpr.projFn_lift' n hi,
-      VExpr.projMotiveBody_lift' n (Nat.le_of_lt hi)] using hPF.weak' henv W
-  · simp only [VExpr.lift', VExpr.projFn_lift' n hi]
+  refine ⟨ctorName, usS, uss, params.map (·.lift' n), np,
+    cty.piBinders.mapIdx fun j F => F.lift' (n.consN j),
+    { pat := by rw [hlen]; exact H.pat
+      params_length := by simpa using H.params_length
+      ctor := ⟨ci, hci, hch, cty.lift' n, ?_, (VExpr.piBinders_lift' ..).symm⟩
+      field_lt := by rw [hlen]; exact hi
+      minor_arity := by rw [hlen]; exact H.minor_arity
+      major_ty := by
+        simpa only [VExpr.mkApps_lift', VExpr.lift'] using H.major_ty.weak' henv W
+      fn_ty := by
+        simpa only [VExpr.lift', VExpr.mkApps_lift', VExpr.projFn_lift' n hi,
+          VExpr.projMotiveBody_lift' n (Nat.le_of_lt hi)] using H.fn_ty.weak' henv W
+      eq := by rw [H.eq]; simp only [VExpr.lift', VExpr.projFn_lift' n hi] }⟩
+  have := VExpr.instPis_lift' _ _ n hcty
+  rwa [(henv.closedC hci).instL.lift'_eq Lift.Fixes.zero] at this
 
 theorem TrProj.weakN (henv : Ordered env) (W : Ctx.LiftN n k Γ Γ')
     (H : TrProj env U Γ s i e e') : TrProj env U Γ' s i (e.liftN n k) (e'.liftN n k) := by
@@ -736,10 +739,9 @@ theorem HasType.skips (W : Ctx.LiftN n k Γ Γ')
     (h1 : env.HasType U Γ' e A) (h2 : e.Skips n k) : ∃ B, env.HasType U Γ' e B ∧ B.Skips n k :=
   IsDefEq.skips henv hΓ' W h1 h2 h2
 
-/-- PROJ-TODO(soundness): `TrProj` strengthening, the inverse of `TrProj.weak'`. The type of
-`e.lift' l` is only *defeq* to a lifted type, so recovering a parameter list over `Γ` needs
-both `IsDefEqU.weakN_iff` (`UniqueTyping.lean:172`, itself a `sorry`) and type-former
-injectivity (`Injectivity.lean`, open). -/
+/-- Strengthening for `TrProj`, the inverse of `TrProj.weak'`. Open: the type of `e.lift' l` is
+only *defeq* to a lifted type, so recovering the parameters over `Γ` needs `IsDefEqU.weakN_iff`,
+itself open. -/
 theorem TrProj.weak'_inv (henv : VEnv.WF env) (hΓ' : OnCtx Γ' (env.IsType U))
     (W : Ctx.Lift' l Γ Γ') : TrProj env U Γ' s i (e.lift' l) e' → ∃ e', TrProj env U Γ s i e e' :=
   sorry
@@ -751,12 +753,11 @@ theorem TrProj.defeqDFC (henv : VEnv.WF env) (hΓ : env.IsDefEqCtx U [] Γ₁ Γ
   -- whose typing does not mention it: transport the two pinned `HasType`s to `Γ₂`, swap `e₁`
   -- for the defeq `e₂` on the major (`HasType.defeqU_l`, hence the pre-existing unique-typing
   -- `sorryAx`; no new trust), and rebuild `P_i e₂`.
-  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, hF, hi, hrci, harity, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, fieldTys, H⟩ := H
   have hΓ₂ := (hΓ.symm henv).isType
-  have hE₂ := HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) (hE.defeqDFC henv hΓ)
-  exact ⟨_, ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r, hpat, hnp, hci, hch, hcty,
-    hF, hi, hrci, harity, hE₂, hPF.defeqDFC henv hΓ, rfl⟩
+  have hE₂ := HasType.defeqU_l henv hΓ₂ (he.defeqDFC henv hΓ) (H.major_ty.defeqDFC henv hΓ)
+  exact ⟨_, ctorName, usS, uss, params, np, fieldTys,
+    { H with major_ty := hE₂, fn_ty := H.fn_ty.defeqDFC henv hΓ, eq := rfl }⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.ContainsLits l
@@ -765,11 +766,17 @@ nonrec theorem VEnv.ContainsLits.mono : ∀ {l}, env.ContainsLits l → env'.Con
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrProj.mono (H : TrProj env U Γ s i e e') : TrProj env' U Γ s i e e' := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, hF, hi, hrci, harity, hE, hPF, he'⟩ := H
-  exact ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r, henv.pats hpat, hnp,
-    henv.constants hci, hch, hcty, hF, hi, henv.constants hrci, harity, hE.mono henv,
-    hPF.mono henv, he'⟩
+  obtain ⟨ctorName, usS, uss, params, np, fieldTys, H⟩ := H
+  obtain ⟨r, hpat⟩ := H.pat
+  obtain ⟨ci, hci, hch, cty, hcty, hF⟩ := H.ctor
+  obtain ⟨rci, hrci, harity⟩ := H.minor_arity
+  exact ⟨ctorName, usS, uss, params, np, fieldTys,
+    { H with
+      pat := ⟨r, henv.pats hpat⟩
+      ctor := ⟨ci, henv.constants hci, hch, cty, hcty, hF⟩
+      minor_arity := ⟨rci, henv.constants hrci, harity⟩
+      major_ty := H.major_ty.mono henv
+      fn_ty := H.fn_ty.mono henv }⟩
 
 variable! {env env' : VEnv} (henv : env ≤ env') in
 theorem TrExprS.mono (H : TrExprS env Us Δ e e') : TrExprS env' Us Δ e e' := by
@@ -930,10 +937,9 @@ theorem TrExpr.fvarsIn (H : TrExpr env Us Δ e e') : FVarsIn (· ∈ Δ.fvars) e
 theorem TrExpr.fvarsList (H : TrExpr env Us Δ e e') : e.fvarsList ⊆ Δ.fvars :=
   (fvarsIn_iff.1 H.fvarsIn).1
 
-theorem TrProj.wf (H1 : TrProj env U Γ s i e e') (H2 : VExpr.WF env U Γ e) :
-    VExpr.WF env U Γ e' := by
-  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hE, hPF, rfl⟩ := H1
-  exact ⟨_, hPF.app hE⟩
+theorem TrProj.wf (H : TrProj env U Γ s i e e') : VExpr.WF env U Γ e' := by
+  obtain ⟨_, _, _, _, _, _, H⟩ := H
+  exact H.eq ▸ ⟨_, H.fn_ty.app H.major_ty⟩
 
 theorem TrExpr.wf (H : TrExpr env Us Δ e e') : VExpr.WF env Us.length Δ.toCtx e' :=
   let ⟨_, _, _, H⟩ := H; ⟨_, H.hasType.2⟩
@@ -953,7 +959,7 @@ theorem TrExprS.wf (H : TrExprS env Us Δ e e') : VExpr.WF env Us.length Δ.toCt
   | forallE h1 h2 => have ⟨_, h1'⟩ := h1; have ⟨_, h2'⟩ := h2; exact ⟨_, h1'.forallE h2'⟩
   | letE h1 _ _ _ _ _ ih3 => exact ih3 ⟨hΔ, nofun, h1⟩
   | lit _ _ ih | mdata _ ih => exact ih hΔ
-  | proj _ h2 ih => exact h2.wf (ih hΔ)
+  | proj _ h2 => exact h2.wf
 
 variable! (henv : Ordered env) {Us : List Name} (hΔ : VLCtx.WF env Us.length Δ) in
 theorem TrExprS.trExpr (H : TrExprS env Us Δ e e') : TrExpr env Us Δ e e' :=
@@ -976,17 +982,14 @@ theorem TrExpr.app (henv : VEnv.WF env) (hΔ : OnCtx Δ.toCtx (env.IsType Us.len
   ⟨_, .app h3.hasType.1 h4.hasType.1 s3 s4, _, h3.appDF h4⟩
 
 variable! (henv : VEnv.WF env) (hΓ : IsDefEqCtx env U [] Γ₁ Γ₂) in
-/-- PROJ-TODO(soundness): the `TrProj.uniq` residual. Both sides are `P_i e` with `P_i` a
-*function* of `(s, ctorName, usS, uss, params, i)` given `env` (`fieldTys` is pinned to the
-constructor's telescope), so what is left is: (i) `S usS₁ params₁ ≡ S usS₂ params₂` from
-unique typing of `e₁ ≡ e₂`; (ii) type-former injectivity (`Injectivity.lean`, open) giving
-`usS₁ ≈ usS₂` and `params₁ ≡ params₂`; (iii) `np₁ = np₂`, pinning each `np` to the kernel's
-`numParams` by inversion of the typing premise `HasType e (S usS params)` — the `np+1+1+0`
-key alone cannot exclude a two-minor recursor read as `(np+1)+1+1+0`; (iv) `ctorName₁ =
-ctorName₂` from the registry being single-constructor for `s`; (v) `uss₁ j ≈ uss₂ j` for the
-used `j` from sort uniqueness of `F_j`; then two congruences — `instPis` under pointwise
-`IsDefEq` of `params` (`IsDefEq.instDF`) and `projFn` by induction on `i`
-(`constDF`/`appDF`/`lamDF`) — and `appDF`. No recursor-typing inversion is needed. -/
+/-- Both sides are `P_i e` with `P_i` a *function* of `(s, ctorName, usS, uss, params, i)` given
+`env` (`fieldTys` is pinned to the constructor's telescope). Open; what is needed is unique
+typing of the projection function, type-former injectivity for `usS` and `params` — and for the
+head names, since the `proj` case of `IsDefEqE` compares two projections up to the index alone —
+and functionality of the ι registry for `np` and the field count: the key `np+1+1+0` alone does
+not exclude a two-minor recursor read as `(np+1)+1+1+0`, nor a second constructor for `s`. Then
+two congruences — `instPis` under pointwise `IsDefEq` of `params` and `projFn` by induction on
+`i` — and `appDF`. -/
 theorem TrProj.uniq (H1 : TrProj env U Γ₁ s₁ i e₁ e₁') (H2 : TrProj env U Γ₂ s₂ i e₂ e₂')
     (H : env.IsDefEqU U Γ₁ e₁ e₂) :
     env.IsDefEqU U Γ₁ e₁' e₂' :=
@@ -1294,24 +1297,28 @@ theorem TrExprS.instN_var (W : VLCtx.InstN Δ₀ e₀' A₀ dk k Δ₁ Δ) (H : 
 theorem TrProj.instN (henv : Ordered env) (W : Ctx.InstN Γ₀ e₀ A₀ k Γ₁ Γ)
     (H : TrProj env U Γ₁ s i e e') (h₀ : env.HasType U Γ₀ e₀ A₀) :
     TrProj env U Γ s i (e.inst e₀ k) (e'.inst e₀ k) := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, rfl, hi, hrci, harity, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, fieldTys, H⟩ := H
+  obtain ⟨ci, hci, hch, cty, hcty, rfl⟩ := H.ctor
+  have hi := H.field_lt
   have hcty' : cty.CtorHeaded := VExpr.instPis_ctorHeaded _ _ (hch.instL usS) hcty
   have hlen : (cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j)).length =
       cty.piBinders.length := List.length_mapIdx
-  obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota (mkRecName s) (np+1+1+0) ctorName
-      (np + (cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j)).length)).toPattern r' := by
-    rw [hlen]; exact ⟨r, hpat⟩
-  refine ⟨ctorName, usS, uss, params.map (·.inst e₀ k), np, ci, rci, cty.inst e₀ k,
-    cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j), r', hpat', by simpa using hnp, hci, hch,
-    ?_, (VExpr.piBinders_inst_of_ctorHeaded hcty' e₀ k).symm, by rw [hlen]; exact hi, hrci,
-    by rw [hlen]; exact harity, ?_, ?_, ?_⟩
-  · have := VExpr.instPis_inst _ _ e₀ k hcty
-    rwa [(henv.closedC hci).instL.instN_eq (Nat.zero_le _)] at this
-  · simpa only [VExpr.mkApps_inst, VExpr.inst] using hE.instN henv W h₀
-  · simpa only [VExpr.inst, VExpr.mkApps_inst, VExpr.projFn_inst e₀ k hi,
-      VExpr.projMotiveBody_instN e₀ k (Nat.le_of_lt hi)] using hPF.instN henv W h₀
-  · simp only [VExpr.inst, VExpr.projFn_inst e₀ k hi]
+  refine ⟨ctorName, usS, uss, params.map (·.inst e₀ k), np,
+    cty.piBinders.mapIdx fun j F => F.inst e₀ (k + j),
+    { pat := by rw [hlen]; exact H.pat
+      params_length := by simpa using H.params_length
+      ctor := ⟨ci, hci, hch, cty.inst e₀ k, ?_,
+        (VExpr.piBinders_inst_of_ctorHeaded hcty' e₀ k).symm⟩
+      field_lt := by rw [hlen]; exact hi
+      minor_arity := by rw [hlen]; exact H.minor_arity
+      major_ty := by
+        simpa only [VExpr.mkApps_inst, VExpr.inst] using H.major_ty.instN henv W h₀
+      fn_ty := by
+        simpa only [VExpr.inst, VExpr.mkApps_inst, VExpr.projFn_inst e₀ k hi,
+          VExpr.projMotiveBody_instN e₀ k (Nat.le_of_lt hi)] using H.fn_ty.instN henv W h₀
+      eq := by rw [H.eq]; simp only [VExpr.inst, VExpr.projFn_inst e₀ k hi] }⟩
+  have := VExpr.instPis_inst _ _ e₀ k hcty
+  rwa [(henv.closedC hci).instL.instN_eq (Nat.zero_le _)] at this
 
 variable! (henv : Ordered env) (h₀ : TrExprS env Us Δ₀ e₀ e₀')
   (t₀ : env.HasType Us.length Δ₀.toCtx e₀' A₀) in
@@ -1581,21 +1588,23 @@ theorem ofLevel_mkLevelIMax'
 variable! {ls : List VLevel} (hls : ∀ l ∈ ls, l.WF U') in
 theorem TrProj.instL (H : TrProj env U Γ s i e e') :
     TrProj env U' (Γ.map (VExpr.instL ls)) s i (e.instL ls) (e'.instL ls) := by
-  obtain ⟨ctorName, usS, uss, params, np, ci, rci, cty, fieldTys, r,
-    hpat, hnp, hci, hch, hcty, rfl, hi, hrci, harity, hE, hPF, rfl⟩ := H
+  obtain ⟨ctorName, usS, uss, params, np, fieldTys, H⟩ := H
+  obtain ⟨ci, hci, hch, cty, hcty, rfl⟩ := H.ctor
+  have hi := H.field_lt
   have hlen : (cty.piBinders.map (·.instL ls)).length = cty.piBinders.length := List.length_map _
-  obtain ⟨r', hpat'⟩ : ∃ r', env.pats (SimplePattern.iota (mkRecName s) (np+1+1+0) ctorName
-      (np + (cty.piBinders.map (·.instL ls)).length)).toPattern r' := by
-    rw [hlen]; exact ⟨r, hpat⟩
   refine ⟨ctorName, usS.map (VLevel.inst ls), fun j => (uss j).map (VLevel.inst ls),
-    params.map (·.instL ls), np, ci, rci, cty.instL ls, cty.piBinders.map (·.instL ls), r', hpat',
-    by simpa using hnp, hci, hch, ?_, (VExpr.piBinders_instL ..).symm, by rw [hlen]; exact hi,
-    hrci, by rw [hlen]; exact harity, ?_, ?_, ?_⟩
-  · have := VExpr.instPis_instL _ _ ls hcty; rwa [VExpr.instL_instL] at this
-  · simpa only [VExpr.mkApps_instL, VExpr.instL] using hE.instL hls
-  · simpa only [VExpr.instL, VExpr.mkApps_instL, VExpr.projFn_instL ls,
-      VExpr.projMotiveBody_instL ls] using hPF.instL hls
-  · simp only [VExpr.instL, VExpr.projFn_instL ls]
+    params.map (·.instL ls), np, cty.piBinders.map (·.instL ls),
+    { pat := by rw [hlen]; exact H.pat
+      params_length := by simpa using H.params_length
+      ctor := ⟨ci, hci, hch, cty.instL ls, ?_, (VExpr.piBinders_instL ..).symm⟩
+      field_lt := by rw [hlen]; exact hi
+      minor_arity := by rw [hlen]; exact H.minor_arity
+      major_ty := by simpa only [VExpr.mkApps_instL, VExpr.instL] using H.major_ty.instL hls
+      fn_ty := by
+        simpa only [VExpr.instL, VExpr.mkApps_instL, VExpr.projFn_instL ls,
+          VExpr.projMotiveBody_instL ls] using H.fn_ty.instL hls
+      eq := by rw [H.eq]; simp only [VExpr.instL, VExpr.projFn_instL ls] }⟩
+  have := VExpr.instPis_instL _ _ ls hcty; rwa [VExpr.instL_instL] at this
 
 section
 

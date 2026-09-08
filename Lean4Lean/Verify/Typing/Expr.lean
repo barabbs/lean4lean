@@ -66,91 +66,75 @@ theorem VLCtx.WF.fvwf : ∀ {Δ}, VLCtx.WF env U Δ → Δ.FVWF
   | [], h => h
   | _ :: _, ⟨h1, h2, _⟩ => ⟨h1.fvwf, h2⟩
 
-/-- `TrProjCtor env U Γ S i e e' c` relates the translated structure value `e : S usS params`
-to the translation `e'` of its `i`-th projection `.proj S i e`, with the structure's constructor
-`c` exposed (`TrProj` hides it; `TrEnv.proj_defeq` needs it to tie the registered ι rule to the
-constructor spine `e` reduces to). `VExpr` has no projection node; a projection is a recursor
-expansion in the style of Carneiro's thesis's `inv_x` (typesys.tex §"Undecidability of
-definitional equality") applied to `e`:
+/-- `TrProjCtor env U Γ S i e e' c usS uss params np fieldTys` relates the translated structure
+value `e : S usS params` to the translation `e'` of its `i`-th projection `.proj S i e`, with the
+constructor `c` and the data of the expansion exposed (`TrProj` hides them). `VExpr` has no
+projection node; a projection is a recursor expansion in the style of Carneiro's thesis's `inv_x`
+(typesys.tex §"Undecidability of definitional equality") applied to `e`:
 
     e' = P_i e,   P_i = S.rec (uss i) params (λ x : S usS params. F_i[f_j := P_j x]) (λ f. f_i)
 
-(`VExpr.projFn`, `Theory/Proj.lean`), where `F₀ … F_{n-1}` is the constructor's field telescope
-instantiated at `params` — read off `c`'s type as `inferProj` does (`instPis`/`piBinders`) —
-and the earlier projections `P_j`, `j < i`, are the same expansions (`VExpr.projFns`,
-well-founded on `i`). The motive of field `i` is the field's type with the earlier fields
-replaced by their projections of the bound major, so that `P_i e : F_i[f_j := P_j e]`
-(`VExpr.projTy`) — the kernel's `inferProj` result with `.proj S j e ↦ P_j e`, and the
-dependent typing shape of the thesis's *primitive* projections `π₂ p : β[π₁ p/x]`
-(Wtypes.tex). For field `0` and for every field whose type does not mention earlier fields
-this is the constant motive `λ _. F_i`.
+(`VExpr.projFn`, `Theory/Proj.lean`), where `F₀ … F_{n-1}` is the field telescope `fieldTys` and
+the earlier projections `P_j`, `j < i`, are the same expansions (`VExpr.projFns`, well-founded on
+`i`). The motive of field `i` is the field's type with the earlier fields replaced by their
+projections of the bound major, so that `P_i e : F_i[f_j := P_j e]` — the kernel's `inferProj`
+result with `.proj S j e ↦ P_j e`, and the dependent typing shape of the thesis's *primitive*
+projections `π₂ p : β[π₁ p/x]` (Wtypes.tex). The level list `uss j` is per field: the elimination
+level of `P_j` is the sort of `F_j`, which differs between fields (`Sigma.fst` at `u+1`,
+`Sigma.snd` at `v+1`); an unused `P_j` vanishes under substitution, so its `uss j` is irrelevant.
 
-What is pinned and why:
-* the ι rule of `S.rec` on `c` (`env.pats`, key `iota S.rec (np+1+1+0) c (np+n)`): the only
-  inductive metadata a `VEnv` retains, monotone under `VEnv.LE`; the `1+1+0` split says one
-  motive, one minor, no indices — a non-nested, non-indexed single-constructor type;
-* `fieldTys := piBinders ((c.type.instL usS).instPis params)`: `inferProj` verbatim, and it
-  makes the expansion a *function* of `(S, c, usS, uss, params, i, e)` (`TrProj.uniq`). The
-  constructor's type is `CtorHeaded` — its Π-telescope ends in a constant application, as every
-  constructor type does — so that instantiating a variable cannot create binders and the
-  telescope is stable under `TrProj.instN` (`VExpr.piBinders_inst_of_ctorHeaded`);
-* `S.rec`'s binder `np+1` — its minor premise, by the key — has exactly `n` Π-binders
-  (`VExpr.binderArity?`): the fields, and no inductive-hypothesis binder. The constructor is
-  non-recursive, so the registered reduct applies the minor to the fields alone
-  (`VInductDecl.WF.rule_shape`'s count), which is what `TrEnv.proj_defeq` β-reduces through
-  `fieldSelector`;
-* `e : S usS params` and `P_i : ∀ x : S usS params, F_i[f_j := P_j x]`: the typing of the
-  projection function. It is inhabited, for every kernel-accepted projection of a
-  non-recursive structure, by β at the major, ι (`IsDefEq.pat`) on the generic constructor
-  spine `c usS params f₀ … f_{n-1}` for each used `P_j`, and `IsDefEq.instDF` — no
-  structure-η (derivation in the module docstring of `Theory/Proj.lean`);
-* `uss j` is existential per field: the elimination level of `P_j` is the sort of `F_j`,
-  which differs between fields (`Sigma.fst` at `u+1`, `Sigma.snd` at `v+1`); an unused `P_j`
-  vanishes from `P_i` under substitution, so its `uss j` is irrelevant.
+Scope: single-constructor types that are non-recursive, non-indexed and non-mutual. Projections
+of reflexive, indexed and nested single-constructor types are accepted by `inferProj` but are
+outside this relation — a completeness boundary, not a soundness one. The Prop gate of
+`inferProj` fires only on an earlier field the rest of the telescope mentions: on unused earlier
+fields model and kernel agree, while a non-Prop earlier field used later in the telescope but
+absent from the projected field's motive is rejected by the kernel and expressible here. -/
+structure TrProjCtor (env : VEnv) (U : Nat) (Γ : List VExpr) (S : Name) (i : Nat) (e e' : VExpr)
+    (ctorName : Name) (usS : List VLevel) (uss : Nat → List VLevel) (params : List VExpr)
+    (np : Nat) (fieldTys : List VExpr) : Prop where
+  /-- The ι rule of `S.rec` on `ctorName` is registered: the only inductive metadata a `VEnv`
+  retains, monotone under `VEnv.LE`. The key records the sum `np+1+1+0` of the recursor's
+  telescope split; the reading "one motive, one minor, no indices" is enforced by `minor_arity`
+  and, in `TrEnv.proj_defeq`, by the kernel's structure facts. -/
+  pat : ∃ r, env.pats (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName
+    (np + fieldTys.length)).toPattern r
+  /-- `params` are the structure's parameters. -/
+  params_length : params.length = np
+  /-- `fieldTys` is the constructor's field telescope instantiated at `params`: the
+  manifest-binder reading of `inferProj`'s loops (the kernel `whnf`s at each binder;
+  non-manifest telescopes are out of scope). It makes the expansion a *function* of
+  `(S, ctorName, usS, uss, params, i, e)` (`TrProj.uniq`). The constructor's type is
+  `CtorHeaded` — its Π-telescope ends in a constant application, as every constructor type
+  does — so instantiating a variable cannot create binders and the telescope is stable under
+  `TrProj.instN` (`VExpr.piBinders_inst_of_ctorHeaded`). -/
+  ctor : ∃ ci, env.constants ctorName = some ci ∧ ci.type.CtorHeaded ∧
+    ∃ cty, (ci.type.instL usS).instPis params = some cty ∧ fieldTys = cty.piBinders
+  /-- The projected field exists. -/
+  field_lt : i < fieldTys.length
+  /-- The minor premise of `S.rec` (binder `np+1`, after the parameters and the motive) has
+  exactly the fields as binders, and no inductive-hypothesis binder: the constructor is
+  non-recursive, so the registered reduct applies the minor to the fields alone, which is what
+  `TrEnv.proj_defeq` β-reduces through `VExpr.fieldSelector`. A reflexive structure, whose minor
+  carries an extra binder, is excluded here rather than by the key. -/
+  minor_arity : ∃ rci, env.constants (mkRecName S) = some rci ∧
+    rci.type.binderArity? (np+1) = some fieldTys.length
+  /-- The projected term is a value of the structure. -/
+  major_ty : env.HasType U Γ e ((VExpr.const S usS).mkApps params)
+  /-- The expansion is a function on the structure. Derivable for a kernel-accepted projection
+  of a structure in the scope above by β at the major, ι (`IsDefEq.pat`) on the generic
+  constructor spine for each used `P_j`, and `IsDefEq.instDF` — no structure-η (derivation in
+  the module docstring of `Theory/Proj.lean`, instance witnesses in `Tests/ProjInhabit.lean`);
+  the general construction is the open `inferProj.WF_struct`. -/
+  fn_ty : env.HasType U Γ (VExpr.projFn S usS uss params fieldTys i)
+    (.forallE ((VExpr.const S usS).mkApps params)
+      (VExpr.projMotiveBody S usS uss params fieldTys i))
+  /-- `e'` is the expansion applied to the projected term. -/
+  eq : e' = .app (VExpr.projFn S usS uss params fieldTys i) e
 
-Scope: single-constructor, non-recursive, non-indexed inductives (Lean `structure`s other
-than nested-recursive ones such as `Lean.Language.SnapshotTree`; all of `Init`/`Std`).
-Nested structures (extra motives and minors) and indexed single-constructor families are
-excluded by the `np+1+1+0` key. Reflexive structures (`structure Refl where next : Nat → Refl`)
-have the key too — one motive, one minor, no indices — but their minor premise carries an
-inductive-hypothesis binder after the fields: excluded by the minor's arity pin (and, were
-it dropped, by the typing premise — `fieldSelector` has only the fields as binders), not by
-the key. Both are a completeness boundary, not a soundness one. The model is slightly more permissive than
-`inferProj`'s Prop gate: an *unused* non-Prop earlier field of a `Prop` structure does not
-block a projection here (its `P_j` vanishes), while the kernel rejects it; harmless for a
-refinement. -/
-def TrProjCtor (env : VEnv) (U : Nat) (Γ : List VExpr)
-    (S : Name) (i : Nat) (e e' : VExpr) (ctorName : Name) : Prop :=
-  ∃ (usS : List VLevel) (uss : Nat → List VLevel) (params : List VExpr) (np : Nat)
-    (ci rci : VConstant) (cty : VExpr) (fieldTys : List VExpr)
-    (r : (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.RHS ×
-         (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np+fieldTys.length)).toPattern.Check),
-    env.pats (SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np+fieldTys.length)).toPattern r ∧
-    params.length = np ∧
-    env.constants ctorName = some ci ∧
-    ci.type.CtorHeaded ∧
-    (ci.type.instL usS).instPis params = some cty ∧
-    fieldTys = cty.piBinders ∧
-    i < fieldTys.length ∧
-    env.constants (mkRecName S) = some rci ∧
-    rci.type.binderArity? (np+1) = some fieldTys.length ∧
-    env.HasType U Γ e ((VExpr.const S usS).mkApps params) ∧
-    env.HasType U Γ (VExpr.projFn S usS uss params fieldTys i)
-      (.forallE ((VExpr.const S usS).mkApps params)
-        (VExpr.projMotiveBody S usS uss params fieldTys i)) ∧
-    e' = .app (VExpr.projFn S usS uss params fieldTys i) e
-
-/-- `TrProjCtor` with the constructor hidden. -/
+/-- `TrProjCtor` with the constructor and the data of the expansion hidden. -/
 def TrProj (env : VEnv) (U : Nat) (Γ : List VExpr) (S : Name) (i : Nat) (e e' : VExpr) : Prop :=
-  ∃ ctorName, TrProjCtor env U Γ S i e e' ctorName
-
-theorem TrProjCtor.toTrProj {env : VEnv} {U : Nat} {Γ : List VExpr} {S : Name} {i : Nat}
-    {e e' : VExpr} {ctorName : Name} (H : TrProjCtor env U Γ S i e e' ctorName) :
-    TrProj env U Γ S i e e' := ⟨_, H⟩
-
-theorem TrProj.exists_ctorName {env : VEnv} {U : Nat} {Γ : List VExpr} {S : Name} {i : Nat}
-    {e e' : VExpr} (H : TrProj env U Γ S i e e') :
-    ∃ ctorName, TrProjCtor env U Γ S i e e' ctorName := H
+  ∃ ctorName usS uss params np fieldTys,
+    TrProjCtor env U Γ S i e e' ctorName usS uss params np fieldTys
 
 def VEnv.ContainsLits (env : VEnv) : Literal → Prop
   | .natVal _ => env.contains ``Nat
