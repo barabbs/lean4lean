@@ -1,4 +1,5 @@
 import Lean4Lean.Tests.ShapeDecide
+import Lean4Lean.Verify.Environment.Lemmas
 import Lean4Lean.Verify.Typing.Expr
 
 /-!
@@ -575,5 +576,22 @@ info: 'Lean4Lean.Tests.ProjInhabit.Dependent.inhabDep0' depends on axioms: [prop
 info: 'Lean4Lean.Tests.ProjInhabit.Dependent.inhabDep1' depends on axioms: [propext, Quot.sound]
 -/
 #guard_msgs in #print axioms Dependent.inhabDep1
+
+/-! ### Axiom profile of projection reduction
+
+`TrEnv.proj_defeq` has no `sorry` of its own: the `sorryAx` below is inherited from unique
+typing, Π-injectivity and `VEnv.WF.patsStrong`, and the `PersistentHashMap` axioms come with
+the kernel environment lemmas. -/
+
+/--
+info: 'Lean4Lean.TrEnv.proj_defeq' depends on axioms: [propext,
+ sorryAx,
+ Classical.choice,
+ Quot.sound,
+ Lean.PersistentHashMap.findAux_isSome,
+ Lean.PersistentHashMap.WF.find?_eq,
+ Lean.PersistentHashMap.WF.toList'_insert]
+-/
+#guard_msgs in #print axioms Lean4Lean.TrEnv.proj_defeq
 
 end Lean4Lean.Tests.ProjInhabit

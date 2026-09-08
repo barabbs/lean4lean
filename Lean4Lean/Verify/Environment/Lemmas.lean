@@ -1017,8 +1017,7 @@ kernel's structure facts — non-mutual, single-constructor, non-indexed — the
 and `reduceProjCore` establish before they accept a projection; `TrEnv.structure_rec` turns them
 into the recursor's telescope split, of which the `np+1+1+0` key of `TrProjCtor` retains only
 the sum. The proof fires the registered ι rule (`pats_iota_inv_shape`) on `P_i spine` and
-β-reduces its reduct through `VExpr.fieldSelector`. No `sorry` of its own: the `sorryAx` in its
-`#print axioms` is inherited from unique typing, Π-injectivity and `VEnv.WF.patsStrong`. -/
+β-reduces its reduct through `VExpr.fieldSelector`. -/
 theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environment}
     {venv : VEnv} {U : Nat} {Γ : List VExpr} {S ctorName : Name} {i : Nat}
     {ival : InductiveVal} {cval : ConstructorVal}

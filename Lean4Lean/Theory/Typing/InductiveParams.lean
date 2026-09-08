@@ -371,7 +371,10 @@ those would put δ and ι rules in one family, and the coherence conditions (`pa
 registered recursor and constructor name. `env.constants` does not record which of the three
 a name is, and a definition's type can be `CtorHeaded` as easily as a constructor's, so that
 separation is a further environment invariant rather than a consequence of the present ones.
-For the quotient rule the redex is not a `SimplePattern` at all. -/
+For the quotient rule the redex is not a `SimplePattern` at all.
+
+`DefEqsAsPats.of_no_defeqs` gives the vacuous case, and `inductParams` the resulting
+instance for an environment consisting of one inductive block. -/
 def DefEqsAsPats (env : VEnv) (U : Nat) : Prop :=
   ∀ {df : VDefEq} {ls : List VLevel} {uvars : Nat} {Γ : List VExpr},
     env.defeqs df → (∀ l ∈ ls, l.WF uvars) → ls.length = df.uvars →
@@ -384,7 +387,9 @@ abstract reduction relation `Pat` to be `env.pats`. Five side conditions are
 discharged from `VEnv.PatsIota`; `pat_wf` is `IsDefEq.pat` (recovering a `Realizes`
 witness from `Check.OK`); `pat_env` is the identity; `extra_pat` is the hypothesis
 `hδ : env.DefEqsAsPats U`, which restricts the instance to the environments whose
-definitional axioms are all realised by registered patterns (see `DefEqsAsPats`). -/
+definitional axioms are all realised by registered patterns (see `DefEqsAsPats`).
+`inductParams` instantiates it, and `IsDefEq.crDefEq_of_induct` runs Church–Rosser through
+the result. -/
 @[reducible] def toParams (env : VEnv) (henv : env.WF) (U : Nat) (hδ : env.DefEqsAsPats U) :
     Params where
   env := env
@@ -401,6 +406,28 @@ definitional axioms are all realised by registered patterns (see `DefEqsAsPats`)
   pat_app_uniq := fun hp hp' hs hs' h3 h3' => henv.pat_app_uniq hp hp' hs hs' h3 h3'
   extra_pat := fun h1 h2 h3 => hδ h1 h2 h3
   pat_env := id
+
+/-! ### An environment the instance applies to -/
+
+/-- An environment with no definitional axiom satisfies `DefEqsAsPats` vacuously. -/
+theorem DefEqsAsPats.of_no_defeqs {env : VEnv} {U : Nat} (h : ∀ df, ¬ env.defeqs df) :
+    env.DefEqsAsPats U := fun hdf _ _ => absurd hdf (h _)
+
+/-- The `Params` instance for an environment consisting of a single well-formed inductive
+block: `addInduct` registers ι rules and no definitional axiom (`addInduct_defeqs`), so
+`DefEqsAsPats` holds vacuously and `toParams` applies. -/
+@[reducible] def inductParams {decl : VInductDecl} {env : VEnv} (hdecl : decl.WF ∅)
+    (h : VEnv.addInduct ∅ decl = some env) (U : Nat) : Params :=
+  env.toParams ⟨[.induct decl], .decl (.induct hdecl h) .empty⟩ U <|
+    DefEqsAsPats.of_no_defeqs fun _ hdf => by rw [addInduct_defeqs h] at hdf; exact hdf
+
+/-- Church–Rosser for such an environment: definitionally equal terms have parallel
+reduction sequences meeting at `NormalEq` terms. -/
+theorem IsDefEq.crDefEq_of_induct {decl : VInductDecl} {env : VEnv} (hdecl : decl.WF ∅)
+    (h : VEnv.addInduct ∅ decl = some env) {U Γ e₁ e₂ A} (hΓ : OnCtx Γ (env.IsType U))
+    (he : env.IsDefEq U Γ e₁ e₂ A) : @CRDefEq (inductParams hdecl h U) Γ e₁ e₂ :=
+  letI := inductParams hdecl h U
+  IsDefEq.church_rosser hΓ he
 
 end VEnv
 end Lean4Lean

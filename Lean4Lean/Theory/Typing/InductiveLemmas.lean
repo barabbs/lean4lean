@@ -506,6 +506,28 @@ theorem addRecs_defeqs {decl : VInductDecl} {env env' : VEnv}
   unfold VInductDecl.addRecs at h
   exact foldlM_defeqs_preserved (fun hh => addConst_defeqs hh) h
 
+/-- Registering one ι rule leaves `defeqs` unchanged. -/
+theorem addRecRule_defeqs {env env' : VEnv} {r ru}
+    (h : env.addRecRule r ru = some env') : env'.defeqs = env.defeqs := by
+  unfold addRecRule at h
+  split at h
+  · cases h; rfl
+  · cases h
+
+/-- `addRules` leaves `defeqs` unchanged. -/
+theorem addRules_defeqs {decl : VInductDecl} {env env' : VEnv}
+    (h : decl.addRules env = some env') : env'.defeqs = env.defeqs := by
+  unfold VInductDecl.addRules at h
+  exact foldlM_defeqs_preserved
+    (fun hh => foldlM_defeqs_preserved (fun hh2 => addRecRule_defeqs hh2) hh) h
+
+/-- `addInduct` leaves `defeqs` unchanged: an inductive block contributes constants and ι
+rules, never a definitional axiom. -/
+theorem addInduct_defeqs {env env' : VEnv} {decl : VInductDecl}
+    (h : env.addInduct decl = some env') : env'.defeqs = env.defeqs := by
+  obtain ⟨_, _, _, hT, hC, hR, hP⟩ := addInduct_stages h
+  rw [addRules_defeqs hP, addRecs_defeqs hR, addCtors_defeqs hC, addTypes_defeqs hT]
+
 /-- After `addTypes`, every type former of `decl` is bound to its constant. -/
 theorem addTypes_find {decl : VInductDecl} {env env' : VEnv}
     (h : decl.addTypes env = some env') :
