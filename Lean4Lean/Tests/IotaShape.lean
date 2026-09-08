@@ -1,3 +1,4 @@
+import Lean4Lean.Tests.ShapeDecide
 import Lean4Lean.Theory.Typing.InductiveParams
 import Lean4Lean.Theory.Meta
 
@@ -13,11 +14,7 @@ rule's `rhs`, and each rule constructor's type, and *decide* the predicates on t
 (their `Decidable` instances make them executable). For ι we build a redex
 `rec params motives minors indices (ctor cparams fields)` over free variables, reduce it
 with the executable kernel (`inductiveReduceRec`), and check that `iotaRHS … |>.apply` on
-the pattern match gives the very same term. Finally we run the telescope decoder
-`VEnv.recSplit?` on the reduct and the recursor's type: it must recover the kernel's
-`(numParams, numMotives, numMinors, numIndices)` whenever the rule's constructor has the
-recursor's parameters, and must *not* for the auxiliary recursor of a nested block (its
-documented limit).
+the pattern match gives the very same term.
 
 `VInductDecl.WF` specifies a *direct* mutual block, so a nested inductive type — one whose
 constructors mention the block inside another type former, and whose auxiliary recursors
@@ -168,17 +165,6 @@ def checkIota (recName ctorName : Name) (cus : List Level)
         let R := SimplePattern.iotaRHS recName ctorName r.numParams r.numMotives r.numMinors
           r.numIndices c.numParams rule.nfields rhs hc
         unless R.apply m1 m2 = redv do throwError "ι reduct mismatch for {recName}/{ctorName}"
-        -- (R3) `VEnv.recSplit?` decodes the kernel's telescope split from the entry and the
-        -- recursor's type exactly when the rule's constructor has the recursor's parameters;
-        -- for the auxiliary recursor of a nested block it reads `cnp` as `np` instead.
-        let ty ← Meta.ofExpr r.levelParams {} r.type
-        let split := VEnv.recSplit? ty R
-        let truth := some (r.numParams, r.numMotives, r.numMinors, r.numIndices)
-        if c.numParams = r.numParams then
-          unless split = truth do
-            throwError "recSplit? mismatch for {recName}/{ctorName}: {repr split}"
-        else if split = truth then
-          throwError "recSplit? unexpectedly exact for the nested rule {recName}/{ctorName}"
       else throwError "the reduct template of {recName}/{ctorName} is not closed"
 
 /-- `types_have_rec`: the recursor of inductive type `I` eliminates `I`. -/

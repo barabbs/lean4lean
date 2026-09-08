@@ -503,8 +503,8 @@ rule template applied to the recursor's parameters, motives and minors and to th
 constructor's fields. `Pattern.RHS.spine`/`iotaCounts` read such a reduct back — the
 template and the numbers of recursor-side and constructor-side holes — which is all of
 the recursor's telescope the reduct retains: it depends on the motive/minor split only
-through `nm + nmin` (`iotaRHS_boundary_irrel`), exactly like `inductiveReduceRec` and
-the thesis's `rec_P C e p[b] (c b) ≡ e_c b v`. -/
+through `nm + nmin`, exactly like `inductiveReduceRec` and the thesis's
+`rec_P C e p[b] (c b) ≡ e_c b v`. -/
 
 /-- Decompose an `RHS` of the form `fixed c` applied (left-nested) to `var` holes into
 the head `c` and its holes, first hole first; `none` for any other shape. -/
@@ -599,19 +599,6 @@ theorem SimplePattern.iotaRHS_iotaCounts (r c : Name) (np nm nmin nind cnp nf : 
     (rhs : VExpr) (hrhs : rhs.Closed) :
     (iotaRHS r c np nm nmin nind cnp nf rhs hrhs).iotaCounts = some (rhs, np+nm+nmin, nf) :=
   iotaRHS'_iotaCounts ..
-
-/-- An ι reduct depends on the motive/minor split only through `nm + nmin`: the
-boundary between motives and minors is not reduction data (it is recovered from the
-recursor's type instead). -/
-theorem SimplePattern.iotaRHS_boundary_irrel {r c : Name} {np nm nmin nm' nmin' nind cnp nf : Nat}
-    {rhs : VExpr} (h : nm + nmin = nm' + nmin') (h₁ h₂ : rhs.Closed) :
-    HEq (iotaRHS r c np nm nmin nind cnp nf rhs h₁)
-      (iotaRHS r c np nm' nmin' nind cnp nf rhs h₂) := by
-  have hk : np + nm + nmin = np + nm' + nmin' := by omega
-  unfold iotaRHS
-  generalize np + nm + nmin = k₁ at hk ⊢
-  generalize np + nm' + nmin' = k₂ at hk ⊢
-  subst hk; rfl
 
 /-! ### Template-headed reducts
 

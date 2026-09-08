@@ -15,11 +15,6 @@ constructors, recursors, ι rules), and the declaration well-formedness predicat
 `VInductDecl.WF` it is checked against.
 -/
 
-/-- `Nat.decidableExistsLT`, restated under `Decidable` so that instance search finds
-it for bounded existentials `∃ m < n, p m`. -/
-instance decidableExistsLT' {n : Nat} {p : Nat → Prop} [DecidablePred p] :
-    Decidable (∃ m, m < n ∧ p m) := Nat.decidableExistsLT n
-
 namespace VExpr
 
 /-! ### Positivity and the result type of a constructor (thesis §2.6.1) -/
@@ -43,9 +38,6 @@ theorem mentionsConst_iff {cs : List Name} :
   | .app .. | .lam .. | .forallE .. => by
     simp [mentionsConst, MentionsConst, mentionsConst_iff]
 
-instance {cs : List Name} {e : VExpr} : Decidable (e.MentionsConst cs) :=
-  decidable_of_iff _ mentionsConst_iff
-
 /-- Thesis §2.6.1, the result type of a constructor of `T`: a Π-telescope of `np` parameters
 and `nf` fields ending in `T` applied to the parameter variables in order and then `nind`
 index terms. -/
@@ -66,9 +58,6 @@ theorem CtorResult_iff {ty : VExpr} {T : Name} {np nf nind : Nat} :
     ⟨fun ⟨us, idx, h1, h2⟩ => ⟨us, idx, h2, h1⟩, fun ⟨us, idx, h1, h2⟩ => ⟨us, idx, h2, h1⟩⟩
   rw [this, eq_const_mkApps_append_iff (P := fun idx => idx.length = nind), bvarsDesc_length]
 
-instance {ty : VExpr} {T : Name} {np nf nind : Nat} : Decidable (ty.CtorResult T np nf nind) :=
-  decidable_of_iff _ CtorResult_iff.symm
-
 /-- Thesis §2.6.3, the major premise `z : P p x` of a recursor over `T`: `T` applied to the
 recursor's own parameter variables and to its index variables. -/
 def MajorApp (A : VExpr) (T : Name) (np nm nmin nind : Nat) : Prop :=
@@ -79,9 +68,6 @@ theorem MajorApp_iff {A : VExpr} {T : Name} {np nm nmin nind : Nat} :
       A.headConst? = some T ∧
         A.getAppArgs = bvarsDesc (nm + nmin + nind) np ++ bvarsDesc 0 nind :=
   eq_const_mkApps_iff
-
-instance {A : VExpr} {T : Name} {np nm nmin nind : Nat} :
-    Decidable (A.MajorApp T np nm nmin nind) := decidable_of_iff _ MajorApp_iff.symm
 
 /-- Thesis §2.6.1, the kernel's `isValidIndApp?`: an application of one of the block's type
 formers `fs` to the block's parameter variables — seen from `d` binders below the field
@@ -99,9 +85,6 @@ theorem ValidIndApp_iff {fs : List Name} {np d : Nat} {e : VExpr} :
   · rintro ⟨T, hT, hc, hpre, hidx⟩; exact ⟨⟨T, hc, hT⟩, hpre, hidx⟩
   · rintro ⟨⟨T, hc, hT⟩, hpre, hidx⟩; exact ⟨T, hT, hc, hpre, hidx⟩
 
-instance {fs : List Name} {np d : Nat} {e : VExpr} : Decidable (e.ValidIndApp fs np d) :=
-  decidable_of_iff _ ValidIndApp_iff.symm
-
 /-- Thesis §2.6.1, strict positivity of one constructor field, mirroring the kernel's
 `checkPositivity`: either no former of `fs` occurs in the field type, or it is
 `∀ x₁ … x_k, B` with no `xᵢ`'s type mentioning a former and `B` a `ValidIndApp`. The kernel
@@ -112,9 +95,6 @@ def FieldPositive (fs : List Name) (np d : Nat) (ty : VExpr) : Prop :=
     ((∀ A ∈ ty.piBinders, ¬ A.MentionsConst fs) ∧
       ty.piBody.ValidIndApp fs np (d + ty.piArity))
 
-instance {fs : List Name} {np d : Nat} {ty : VExpr} : Decidable (ty.FieldPositive fs np d) := by
-  unfold FieldPositive; infer_instance
-
 /-- Thesis §2.6.1, strict positivity of a constructor with `np` parameters: no former of
 `fs` occurs in a parameter binder, and every later binder — field `i`, sitting under `np + i`
 binders — is `FieldPositive`. The result type is pinned separately, by `CtorResult`. -/
@@ -122,16 +102,10 @@ def CtorPositive (fs : List Name) (np : Nat) (ty : VExpr) : Prop :=
   (∀ A ∈ ty.piBinders.take np, ¬ A.MentionsConst fs) ∧
   ∀ i < ty.piArity - np, ∃ A, ty.piBinders[np + i]? = some A ∧ A.FieldPositive fs np i
 
-instance {fs : List Name} {np : Nat} {ty : VExpr} : Decidable (ty.CtorPositive fs np) := by
-  unfold CtorPositive; infer_instance
-
 /-- Field `i` of a constructor with `np` parameters occurs among the index arguments of its
 result type: the syntactic clause of the kernel's `isLargeEliminator`. -/
 def FieldInIndices (ty : VExpr) (np i : Nat) : Prop :=
   VExpr.bvar (ty.piArity - np - 1 - i) ∈ ty.piBody.getAppArgs.drop np
-
-instance {ty : VExpr} {np i : Nat} : Decidable (ty.FieldInIndices np i) := by
-  unfold FieldInIndices; infer_instance
 
 /-- The de Bruijn context of field `i` of a constructor with `np` parameters: the parameter
 and earlier-field binder types, innermost first. -/
@@ -204,19 +178,6 @@ def RuleShape (rhs : VExpr) (np nm nmin nf nrec j : Nat) : Prop :=
 
 end VExpr
 
-instance {A : VExpr} : Decidable A.MotiveShape := by unfold VExpr.MotiveShape; infer_instance
-instance {A : VExpr} {i nm : Nat} : Decidable (A.MinorHeaded i nm) := by
-  unfold VExpr.MinorHeaded; infer_instance
-instance {A : VExpr} {c : Name} : Decidable (A.MinorFor c) := by
-  unfold VExpr.MinorFor; infer_instance
-instance {ty : VExpr} {np nm nmin nind : Nat} : Decidable (ty.RecShape np nm nmin nind) := by
-  unfold VExpr.RecShape; infer_instance
-instance {ty : VExpr} {arity : Nat} : Decidable (ty.CtorShape arity) := by
-  unfold VExpr.CtorShape; infer_instance
-instance {rhs : VExpr} {np nm nmin nf nrec j : Nat} :
-    Decidable (rhs.RuleShape np nm nmin nf nrec j) := by
-  unfold VExpr.RuleShape; infer_instance
-
 /-- A rule reduct is a λ-abstraction: its λ-arity counts at least the minor premises, of
 which there is at least one (`j < nmin`). -/
 theorem VExpr.RuleShape.lam {rhs : VExpr} {np nm nmin nf nrec j : Nat}
@@ -225,11 +186,6 @@ theorem VExpr.RuleShape.lam {rhs : VExpr} {np nm nmin nf nrec j : Nat}
   cases rhs with
   | lam A b => exact ⟨A, b, rfl⟩
   | _ => simp [VExpr.lamArity] at h1; omega
-
-/-- A minor premise headed by a motive is `RecHeaded`. -/
-theorem VExpr.MinorHeaded.recHeaded {A : VExpr} {i nm : Nat} (h : A.MinorHeaded i nm) :
-    A.RecHeaded :=
-  let ⟨_, _, h⟩ := h; ⟨_, h⟩
 
 /-- A recursor type is `RecHeaded`: its Π-body is a motive application. -/
 theorem VExpr.RecShape.recHeaded {ty : VExpr} {np nm nmin nind : Nat}
@@ -280,9 +236,6 @@ case is a single type former with at most one constructor. Whether a field of th
 constructor is a proposition is a typing judgment, not decided here. -/
 def VInductDecl.LargeElimShape (decl : VInductDecl) : Prop :=
   decl.types.length = 1 ∧ ∀ t ∈ decl.types, t.ctors.length ≤ 1
-
-instance {decl : VInductDecl} : Decidable decl.LargeElimShape := by
-  unfold VInductDecl.LargeElimShape; infer_instance
 
 /-- A block whose result sort can be `Prop` eliminates largely only in the shape
 `LargeElimShape` allows. -/

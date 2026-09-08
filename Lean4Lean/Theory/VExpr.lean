@@ -14,9 +14,6 @@ inductive VExpr where
 
 instance : Inhabited VExpr := ⟨.sort .zero⟩
 
-deriving instance DecidableEq for VLevel
-deriving instance DecidableEq for VExpr
-
 def liftVar (n i : Nat) (k := 0) : Nat := if i < k then i else n + i
 
 theorem liftVar_lt (h : i < k) : liftVar n i k = i := if_pos h
@@ -1043,9 +1040,6 @@ theorem eq_mkApps_append_iff {e f : VExpr} {pre : List VExpr} :
     rw [h1, ← h2, List.append_assoc, mkApps_append, mkApps_getAppFn_getAppArgs] at h3
     exact h3.symm
 
-instance {e f : VExpr} {pre : List VExpr} : Decidable (∃ rest, e = f.mkApps (pre ++ rest)) :=
-  decidable_of_iff _ eq_mkApps_append_iff.symm
-
 /-- `eq_mkApps_append_iff` with the number of further arguments pinned. -/
 theorem eq_mkApps_append_length_iff {e f : VExpr} {pre : List VExpr} {n : Nat} :
     (∃ rest, rest.length = n ∧ e = f.mkApps (pre ++ rest)) ↔
@@ -1058,10 +1052,6 @@ theorem eq_mkApps_append_length_iff {e f : VExpr} {pre : List VExpr} {n : Nat} :
     obtain ⟨rest, rfl⟩ := eq_mkApps_append_iff.2 ⟨h1, h2⟩
     refine ⟨rest, ?_, rfl⟩
     simp at h3; omega
-
-instance {e f : VExpr} {pre : List VExpr} {n : Nat} :
-    Decidable (∃ rest, rest.length = n ∧ e = f.mkApps (pre ++ rest)) :=
-  decidable_of_iff _ eq_mkApps_append_length_iff.symm
 
 /-- Head-constructor tests, with their reflections into existentials. -/
 def isSort : VExpr → Bool
@@ -1082,12 +1072,6 @@ theorem isConst_iff {e : VExpr} : e.isConst = true ↔ ∃ I us, e = .const I us
 instance {e : VExpr} : Decidable (∃ u, e = .sort u) := decidable_of_iff _ isSort_iff
 instance {e : VExpr} : Decidable (∃ k, e = .bvar k) := decidable_of_iff _ isBvar_iff
 instance {e : VExpr} : Decidable (∃ I us, e = .const I us) := decidable_of_iff _ isConst_iff
-
-instance {α : Type _} {o : Option α} {P : α → Prop} [DecidablePred P] :
-    Decidable (∃ a, o = some a ∧ P a) :=
-  match o with
-  | none => isFalse (by rintro ⟨_, h, _⟩; cases h)
-  | some a => decidable_of_iff (P a) ⟨fun h => ⟨a, rfl, h⟩, fun ⟨_, h, hp⟩ => Option.some.inj h ▸ hp⟩
 
 /-- The Π-body of `ty` is headed by a bound variable: the shape of a recursor's type and of
 a minor premise, whose targets are applications of a motive binder (for the recursor's own
