@@ -203,18 +203,28 @@ theorem insertConsts_find?_self : ∀ {cis : List ConstantInfo} {C : ConstMap}, 
 
 /-! ### Translation of an inductive block -/
 
-/-- Translation of one type former with its constructors, at safety level `safety`. The
-type former's `inductInfo` translates in the environment before the block (`env₁`); the
-constructors' `ctorInfo`s in the environment holding the type formers (`envT`), where their
-types are meaningful, and their `numParams + numFields` is the Π-arity of the model type,
-which is how the kernel's `nfields` reaches the ι bookkeeping (`AddInduct.ctor_find`).
-`ival.ctors` lists exactly the translated constructors. -/
-structure TrIndType (safety : DefinitionSafety) (env₁ envT : VEnv) (ival : InductiveVal)
-    (cvals : List ConstructorVal) (t : VInductiveType) : Prop where
+/-- Translation of one type former with its constructors, at safety level `safety`, in a block
+of `nparams` parameters whose type formers are named `block`. The type former's `inductInfo`
+translates in the environment before the block (`env₁`); the constructors' `ctorInfo`s in the
+environment holding the type formers (`envT`), where their types are meaningful, and their
+`numParams + numFields` is the Π-arity of the model type, which is how the kernel's `nfields`
+reaches the ι bookkeeping (`AddInduct.ctor_find`). `ival.ctors` lists exactly the translated
+constructors, and `all`/`numParams`/`numIndices` say that the kernel's block bookkeeping is the
+model's — the counts a recursor's telescope split is computed from
+(`VInductDecl.WF.rec_counts`). -/
+structure TrIndType (safety : DefinitionSafety) (env₁ envT : VEnv) (nparams : Nat)
+    (block : List Name) (ival : InductiveVal) (cvals : List ConstructorVal)
+    (t : VInductiveType) : Prop where
   tr : TrConstVal safety env₁ (.inductInfo ival) t.toVConstVal
   ctor_names : ival.ctors = cvals.map (·.name)
   ctors : List.Forall₂ (fun cval c => TrConstVal safety envT (.ctorInfo cval) c ∧
     cval.numParams + cval.numFields = c.type.piArity) cvals t.ctors
+  /-- The type former lists the block it belongs to. -/
+  all : ival.all = block
+  /-- It records the block's parameter count. -/
+  numParams : ival.numParams = nparams
+  /-- Its indices are what its model type's telescope leaves after the parameters. -/
+  numIndices : ival.numIndices = t.type.piArity - nparams
 
 /-- Translation of one recursor, at safety level `safety`: its `recInfo` in the environment
 holding the type formers and constructors (`envC`), the telescope split and `k` flag copied,
@@ -236,6 +246,8 @@ structure TrRecursor (safety : DefinitionSafety) (envC envR : VEnv) (m₂ : Cons
     (∃ cval : ConstructorVal,
       m₂.find? rule.ctor = some (.ctorInfo cval) ∧ ru.ctorParams = cval.numParams) ∧
     TrExprS envR rval.levelParams [] rule.rhs ru.rhs) rval.rules r.rules
+  /-- The kernel names a recursor after the type former it eliminates. -/
+  name_major : ∀ n, r.type.majorFormer? r.getMajorIdx = some n → rval.name = mkRecName n
 
 /-- The constants an inductive block adds to the constant map, by kind: all type formers,
 all constructors (in block order), all recursors. This is the model's stage order
@@ -267,7 +279,8 @@ structure AddInduct (safety : DefinitionSafety) (m₁ : ConstMap) (env₁ : VEnv
   stC : decl.addCtors envT = some envC
   stR : decl.addRecs envC = some envR
   stP : decl.addRules envR = some env₂
-  types : List.Forall₂ (fun iv t => TrIndType safety env₁ envT iv.1 iv.2 t) ivals decl.types
+  types : List.Forall₂ (fun iv t =>
+    TrIndType safety env₁ envT decl.nparams (decl.types.map (·.name)) iv.1 iv.2 t) ivals decl.types
   recs : List.Forall₂ (TrRecursor safety envC envR m₂) rvals decl.recs
   /-- The block's constants in the order the kernel inserted them. -/
   order : List ConstantInfo

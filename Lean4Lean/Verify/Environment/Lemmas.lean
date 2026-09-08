@@ -175,38 +175,35 @@ theorem TrEnv'.aligned (H : TrEnv' safety C Q venv) : Aligned safety C venv := b
 
 theorem TrEnv'.map_wf (H : TrEnv' safety C Q venv) : C.WF := H.aligned.map_wf
 
-/-! ### Recursor lookup across the quotient constants
+/-! ### Lookups across the quotient constants
 
-`pats_iota` (below) pulls a `recInfo` lookup back across a `quot` step: `addQuot`
-registers only `quotInfo` constants. -/
+`pats_iota` and `structure_rec` (below) pull a `recInfo`, `inductInfo` or `ctorInfo` lookup
+back across a `quot` step: `addQuot` registers only `quotInfo` constants. -/
 
-/-- Pull a `recInfo` lookup back across one fresh non-`recInfo` insertion: since
-the inserted value is not a `recInfo`, a `recInfo` resolved in the extended map
-was already resolved before the insertion. -/
-theorem pull_recInfo {m : ConstMap} {name recName : Name} {q : ConstantInfo}
-    {rval : RecursorVal} (wf : m.WF) (hq : ∀ v, q ≠ .recInfo v)
-    (h : (m.insert name q).find? recName = some (.recInfo rval)) :
-    m.find? recName = some (.recInfo rval) := by
+/-- Pull a lookup back across one fresh insertion of a different constant. -/
+theorem pull_insert {m : ConstMap} {name x : Name} {q ci : ConstantInfo} (wf : m.WF) (hq : q ≠ ci)
+    (h : (m.insert name q).find? x = some ci) : m.find? x = some ci := by
   rw [wf.find?_insert] at h; split at h
-  · exact absurd (Option.some.inj h) (hq rval)
+  · exact absurd (Option.some.inj h) hq
   · exact h
 
-/-- Pull-back combinator for one `AddQuot1` step: the inserted quotient constant
-is a `quotInfo`, so a `recInfo` lookup passes through it. -/
-theorem AddQuot1.pull {P : ConstMap → VEnv → Prop} {name kind ci' recName rval}
-    (H1 : ∀ m env, m.WF → P m env → m.find? recName = some (.recInfo rval))
-    (m env) (wf : m.WF) (H2 : AddQuot1 name kind ci' P m env) :
-    m.find? recName = some (.recInfo rval) := by
+/-- Pull-back combinator for one `AddQuot1` step: the inserted constant is a `quotInfo`, so a
+lookup of anything else passes through it. -/
+theorem AddQuot1.pull {P : ConstMap → VEnv → Prop} {name kind ci' x ci}
+    (hq : ∀ q, ConstantInfo.quotInfo q ≠ ci)
+    (H1 : ∀ m env, m.WF → P m env → m.find? x = some ci)
+    (m env) (wf : m.WF) (H2 : AddQuot1 name kind ci' P m env) : m.find? x = some ci := by
   let ⟨_, _, _, _, h2, _, h4⟩ := H2
-  exact pull_recInfo wf (fun _ => by nofun) (H1 _ _ (wf.insert _ _ h2) h4)
+  exact pull_insert wf (hq _) (H1 _ _ (wf.insert _ _ h2) h4)
 
-/-- A `recInfo` resolvable after adding the quotient constants was already
-resolvable before: `addQuot` only registers `quotInfo` constants. -/
-theorem AddQuot.pull {recName rval} (H : AddQuot C₁ C₂ env₁ env₂) (wf : C₁.WF)
-    (hfind : C₂.find? recName = some (.recInfo rval)) :
-    C₁.find? recName = some (.recInfo rval) := by
+/-- A constant other than a `quotInfo` resolvable after adding the quotient constants was
+already resolvable before. -/
+theorem AddQuot.pull {x ci} (hq : ∀ q, ConstantInfo.quotInfo q ≠ ci)
+    (H : AddQuot C₁ C₂ env₁ env₂) (wf : C₁.WF) (hfind : C₂.find? x = some ci) :
+    C₁.find? x = some ci := by
   dsimp [AddQuot] at H
-  refine (AddQuot1.pull <| AddQuot1.pull <| AddQuot1.pull <| AddQuot1.pull ?_) _ _ wf H
+  refine (AddQuot1.pull hq <| AddQuot1.pull hq <| AddQuot1.pull hq <| AddQuot1.pull hq ?_)
+    _ _ wf H
   rintro m env hwf ⟨rfl, _⟩; exact hfind
 
 /-- Inserting a whole block of definitions preserves constant-map well-formedness,
@@ -435,31 +432,7 @@ theorem AddQuot.find?_mono {x v} (H : AddQuot C₁ C₂ env₁ env₂) (wf : C�
     AddQuot1.find?_mono ?_) _ _ wf h H
   rintro m env _ h ⟨rfl, _⟩; exact h
 
-/-! ### Constructor lookups across the quotient constants, and pulling a model constant back -/
-
-theorem pull_ctorInfo {m : ConstMap} {name c : Name} {q : ConstantInfo}
-    {cval : ConstructorVal} (wf : m.WF) (hq : ∀ v, q ≠ .ctorInfo v)
-    (h : (m.insert name q).find? c = some (.ctorInfo cval)) :
-    m.find? c = some (.ctorInfo cval) := by
-  rw [wf.find?_insert] at h; split at h
-  · exact absurd (Option.some.inj h) (hq cval)
-  · exact h
-
-theorem AddQuot1.pull_ctor {P : ConstMap → VEnv → Prop} {name kind ci' c cval}
-    (H1 : ∀ m env, m.WF → P m env → m.find? c = some (.ctorInfo cval))
-    (m env) (wf : m.WF) (H2 : AddQuot1 name kind ci' P m env) :
-    m.find? c = some (.ctorInfo cval) := by
-  let ⟨_, _, _, _, h2, _, h4⟩ := H2
-  exact pull_ctorInfo wf (fun _ => by nofun) (H1 _ _ (wf.insert _ _ h2) h4)
-
-/-- A `ctorInfo` resolvable after adding the quotient constants was already resolvable
-before. -/
-theorem AddQuot.pull_ctor {c cval} (H : AddQuot C₁ C₂ env₁ env₂) (wf : C₁.WF)
-    (hfind : C₂.find? c = some (.ctorInfo cval)) : C₁.find? c = some (.ctorInfo cval) := by
-  dsimp [AddQuot] at H
-  refine (AddQuot1.pull_ctor <| AddQuot1.pull_ctor <| AddQuot1.pull_ctor <|
-    AddQuot1.pull_ctor ?_) _ _ wf H
-  rintro m env hwf ⟨rfl, _⟩; exact hfind
+/-! ### Pulling a model constant back -/
 
 /-- A model constant of an extension `env ≤ env'` whose name was already registered (at a
 visible safety) was already the model constant of `env`: constants are never overwritten. -/
@@ -510,7 +483,7 @@ theorem TrEnv'.ctor_arity {safety : DefinitionSafety} {C : ConstMap} {Q : Bool} 
     · cases hk
     · exact ih hk (Hprev.aligned.constants_pull (VEnv.addConst_le h4) hk hs hv)
   | quot _ h2 Hprev ih =>
-    have hk' := h2.pull_ctor Hprev.map_wf hk
+    have hk' := h2.pull (by nofun) Hprev.map_wf hk
     exact ih hk' (Hprev.aligned.constants_pull h2.le hk' hs hv)
   | induct _ hadd Hprev ih =>
     rcases hadd.find? Hprev.map_wf hk with hk' | ⟨hmem, hname⟩
@@ -534,6 +507,162 @@ theorem TrEnv.ctor_arity {safety : DefinitionSafety} {env : Environment} {venv :
   rw [(TrEnv'.map_wf H).find?'_eq_find?] at h
   exact TrEnv'.ctor_arity H h hv
 
+/-! ### Structure-likeness -/
+
+theorem mkRecName_inj {a b : Name} (h : mkRecName a = mkRecName b) : a = b := by
+  injection h
+
+/-- **Structure-likeness, `TrEnv'` level.** An inductive that the kernel records as non-mutual
+(`all = [S]`), single-constructor and non-indexed — what `inferProj` and `reduceProjCore` test —
+has a recursor with the type former's parameters, one motive, one minor and no indices, and a
+constructor with those same parameters. The model pins the counts on the block
+(`VInductDecl.WF.rec_counts`, `rec_params`) and `AddInduct` ties the block to the kernel's
+`InductiveVal`/`RecursorVal` (`TrIndType.all`, `TrRecursor.name_major`). Both constants must be
+visible at `safety`, or an ignored declaration could carry any counts at all. -/
+theorem TrEnv'.structure_rec {safety : DefinitionSafety} {C : ConstMap} {Q : Bool} {venv : VEnv}
+    {S ctorName : Name} {ival : InductiveVal} {rval : RecursorVal}
+    (H : TrEnv' safety C Q venv)
+    (hS : C.find? S = some (.inductInfo ival))
+    (hsS : safety ≤ (ConstantInfo.inductInfo ival).safety)
+    (hrec : C.find? (mkRecName S) = some (.recInfo rval))
+    (hsR : safety ≤ (ConstantInfo.recInfo rval).safety)
+    (hall : ival.all = [S]) (hctors : ival.ctors = [ctorName]) (hnind : ival.numIndices = 0) :
+    rval.numParams = ival.numParams ∧ rval.numMotives = 1 ∧ rval.numMinors = 1 ∧
+      rval.numIndices = 0 ∧ ∃ cval : ConstructorVal,
+        C.find? ctorName = some (.ctorInfo cval) ∧ cval.numParams = ival.numParams := by
+  induction H with
+  | empty => simp [SMap.find?] at hS
+  | ignore h1 h2 Hprev ih =>
+    have wf := Hprev.map_wf
+    rw [wf.find?_insert] at hS hrec
+    split at hS
+    · cases hS; exact absurd hsS h2
+    split at hrec
+    · cases hrec; exact absurd hsR h2
+    obtain ⟨h3, h4, h5, h6, cval, hcv, hcp⟩ := ih hS hrec
+    exact ⟨h3, h4, h5, h6, cval, SMap.find?_insert_of_fresh wf.map₂ h1 hcv, hcp⟩
+  | «axiom» _ h2 _ _ Hprev ih | defn _ h2 _ _ Hprev ih | thm _ h2 _ _ _ Hprev ih
+  | «opaque» _ h2 _ _ Hprev ih =>
+    have wf := Hprev.map_wf
+    obtain ⟨h3, h4, h5, h6, cval, hcv, hcp⟩ :=
+      ih (pull_insert wf (by nofun) hS) (pull_insert wf (by nofun) hrec)
+    exact ⟨h3, h4, h5, h6, cval, SMap.find?_insert_of_fresh wf.map₂ h2 hcv, hcp⟩
+  | mutualDef _ hnd hfr _ _ _ Hprev ih =>
+    have wf := Hprev.map_wf
+    rcases insertDefs_find? wf hfr hnd hS with hS' | ⟨_, _, _, hd⟩
+    · rcases insertDefs_find? wf hfr hnd hrec with hrec' | ⟨_, _, _, hd⟩
+      · obtain ⟨h3, h4, h5, h6, cval, hcv, hcp⟩ := ih hS' hrec'
+        exact ⟨h3, h4, h5, h6, cval, insertDefs_find?_mono wf hfr hcv, hcp⟩
+      · cases hd
+    · cases hd
+  | quot _ h2 Hprev ih =>
+    have wf := Hprev.map_wf
+    obtain ⟨h3, h4, h5, h6, cval, hcv, hcp⟩ :=
+      ih (h2.pull (by nofun) wf hS) (h2.pull (by nofun) wf hrec)
+    exact ⟨h3, h4, h5, h6, cval, h2.find?_mono wf hcv, hcp⟩
+  | induct hwf hadd Hprev ih =>
+    have wf := Hprev.map_wf
+    rcases hadd.find? wf hS with hS' | ⟨hmemS, hnameS⟩ <;>
+      rcases hadd.find? wf hrec with hrec' | ⟨hmemR, hnameR⟩
+    -- both resolve before the block
+    · obtain ⟨h3, h4, h5, h6, cval, hcv, hcp⟩ := ih hS' hrec'
+      exact ⟨h3, h4, h5, h6, cval, hadd.find?_mono wf hcv, hcp⟩
+    -- the block's recursor is named after a type former of the block, which is fresh in the
+    -- map `S` already resolves in
+    · rcases AddInduct.mem_consts.1 hmemR with ⟨_, _, h'⟩ | ⟨_, _, _, _, h'⟩ | ⟨rv, hrv, h'⟩ <;>
+        cases h'
+      obtain ⟨r, hr, htrR⟩ := hadd.recs.forall_exists_l _ hrv
+      obtain ⟨t, ht, hmaj⟩ := hwf.recs_over_block r hr
+      obtain ⟨iv, hiv, htrT⟩ := hadd.types.forall_exists_r t ht
+      have hfr := hadd.fresh _ (AddInduct.mem_consts.2 (.inl ⟨iv, hiv, rfl⟩))
+      rw [show (ConstantInfo.inductInfo iv.1).name = S from mkRecName_inj
+        (((htrR.name_major _ hmaj).trans (congrArg mkRecName htrT.tr.2.symm)).symm.trans hnameR),
+        hS'] at hfr
+      cases hfr
+    -- dually: the recursor of the block's new type former `S` is fresh too
+    · rcases AddInduct.mem_consts.1 hmemS with ⟨iv, hiv, h'⟩ | ⟨_, _, _, _, h'⟩ | ⟨_, _, h'⟩ <;>
+        cases h'
+      obtain ⟨t, ht, htrT⟩ := hadd.types.forall_exists_l _ hiv
+      obtain ⟨r, hr, hmaj⟩ := hwf.types_have_rec t ht
+      obtain ⟨rv, hrv, htrR⟩ := hadd.recs.forall_exists_r r hr
+      have hfr := hadd.fresh _ (AddInduct.mem_consts.2 (.inr (.inr ⟨rv, hrv, rfl⟩)))
+      rw [show (ConstantInfo.recInfo rv).name = mkRecName S from
+        ((htrR.name_major _ hmaj).trans (congrArg mkRecName htrT.tr.2.symm)).trans
+          (congrArg mkRecName hnameS), hrec'] at hfr
+      cases hfr
+    -- both come from the block: read the counts off the model declaration
+    · rcases AddInduct.mem_consts.1 hmemS with ⟨iv, hiv, h'⟩ | ⟨_, _, _, _, h'⟩ | ⟨_, _, h'⟩ <;>
+        cases h'
+      rcases AddInduct.mem_consts.1 hmemR with ⟨_, _, h'⟩ | ⟨_, _, _, _, h'⟩ | ⟨rv, hrv, h'⟩ <;>
+        cases h'
+      obtain ⟨t, ht, htrT⟩ := hadd.types.forall_exists_l _ hiv
+      obtain ⟨r, hr, htrR⟩ := hadd.recs.forall_exists_l _ hrv
+      obtain ⟨t', ht', hmaj⟩ := hwf.recs_over_block r hr
+      have e1 : rval.name = mkRecName S := hnameR
+      have e2 : iv.1.name = S := hnameS
+      have e3 : iv.1.name = t.name := htrT.tr.2
+      -- the recursor eliminates the type former named `S`
+      obtain rfl : t' = t := by
+        refine VEnv.nodup_map_inj_on (VEnv.addTypes_nodup hadd.stT) _ ht' _ ht (mkRecName_inj ?_)
+        rw [← htrR.name_major _ hmaj, e1, ← e2, e3]
+      -- the block is the single type former `S` with its single constructor
+      obtain ⟨hmot, hmin, hind⟩ := hwf.rec_counts r hr
+      have hind := hind _ ht hmaj
+      have hnames := htrT.all
+      rw [hall] at hnames
+      have hlen := congrArg List.length hnames
+      simp only [List.length_cons, List.length_nil, List.length_map] at hlen
+      obtain ⟨t₀, ht₀⟩ := List.length_eq_one_iff.1 hlen.symm
+      rw [ht₀] at ht hmot hmin
+      cases List.mem_singleton.1 ht
+      simp only [List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
+        List.append_nil] at hmot hmin
+      obtain ⟨cval, hcvals⟩ : ∃ cval, iv.2 = [cval] :=
+        List.length_eq_one_iff.1 (by
+          rw [← List.length_map (f := (·.name)), ← htrT.ctor_names, hctors]; rfl)
+      have hcname : cval.name = ctorName := by
+        have h := htrT.ctor_names; rw [hcvals, hctors] at h; exact (List.cons.inj h.symm).1
+      have hcmem : ConstantInfo.ctorInfo cval ∈ AddInduct.consts hadd.ivals hadd.rvals :=
+        AddInduct.mem_consts.2 (.inr (.inl ⟨iv, hiv, cval, by rw [hcvals]; exact .head _, rfl⟩))
+      have hcfind := hadd.find?_self wf hcmem
+      rw [show (ConstantInfo.ctorInfo cval).name = ctorName from hcname] at hcfind
+      have hnp : cval.numParams = iv.1.numParams := by
+        rcases hadd.ctor_find wf hwf hcfind with h | ⟨-, -, -, -, -, r', hr', -, -, -, -, -, hnp'⟩
+        · have hfr := hadd.fresh _ hcmem
+          rw [show (ConstantInfo.ctorInfo cval).name = ctorName from hcname, h] at hfr
+          cases hfr
+        · rw [← hnp', hwf.rec_params r' hr', htrT.numParams]
+      refine ⟨?_, ?_, ?_, ?_, cval, hcfind, hnp⟩
+      · rw [← htrR.numParams, hwf.rec_params r hr, htrT.numParams]
+      · rw [← htrR.numMotives, hmot]
+      · rw [← htrR.numMinors, hmin, ← htrT.ctors.length_eq, hcvals]; rfl
+      · rw [← htrR.numIndices, hind, ← htrT.numIndices, hnind]
+
+/-- `TrEnv'.structure_rec` against the kernel environment, with the visibility of the type former
+and its recursor witnessed by their model constants. -/
+theorem TrEnv.structure_rec {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
+    {S ctorName : Name} {ival : InductiveVal} {rval : RecursorVal} {ciS rci : VConstant}
+    (H : TrEnv safety env venv)
+    (hS : env.find? S = some (.inductInfo ival)) (hvS : venv.constants S = some ciS)
+    (hrec : env.find? (mkRecName S) = some (.recInfo rval))
+    (hvR : venv.constants (mkRecName S) = some rci)
+    (hall : ival.all = [S]) (hctors : ival.ctors = [ctorName]) (hnind : ival.numIndices = 0) :
+    rval.numParams = ival.numParams ∧ rval.numMotives = 1 ∧ rval.numMinors = 1 ∧
+      rval.numIndices = 0 ∧ ∃ cval : ConstructorVal,
+        env.find? ctorName = some (.ctorInfo cval) ∧ cval.numParams = ival.numParams := by
+  have wf := TrEnv'.map_wf H
+  have hS' : env.constants.find?' S = some (.inductInfo ival) := hS
+  have hrec' : env.constants.find?' (mkRecName S) = some (.recInfo rval) := hrec
+  rw [wf.find?'_eq_find?] at hS' hrec'
+  obtain ⟨_, h1, hsS⟩ := H.aligned.find?_iff.2 ⟨ciS, hvS⟩
+  rw [hS'] at h1; cases h1
+  obtain ⟨_, h2, hsR⟩ := H.aligned.find?_iff.2 ⟨rci, hvR⟩
+  rw [hrec'] at h2; cases h2
+  obtain ⟨h3, h4, h5, h6, cval, hcv, hcp⟩ :=
+    TrEnv'.structure_rec H hS' hsS hrec' hsR hall hctors hnind
+  refine ⟨h3, h4, h5, h6, cval, ?_, hcp⟩
+  show env.constants.find?' ctorName = _
+  rw [wf.find?'_eq_find?]; exact hcv
 /-! ### The ι-reduction interface -/
 
 /-- `TrEnv'`-level ι-rule lookup with the registered witness named: the reduct is
@@ -599,7 +728,7 @@ theorem TrEnv'.pats_iota' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
       exact ⟨cval, rhs, hc, SMap.find?_insert_of_fresh h5.map_wf.map₂ h2 hct,
         htr.mono le, le.pats hp⟩
   | quot _ h2 h3 ih =>
-    obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih (h2.pull h3.map_wf hrec)
+    obtain ⟨cval, rhs, hc, hct, htr, hp⟩ := ih (h2.pull (by nofun) h3.map_wf hrec)
     exact ⟨cval, rhs, hc, h2.find?_mono h3.map_wf hct, htr.mono h2.le, h2.le.pats hp⟩
   | induct _ hadd h3 ih =>
     rcases hadd.rec_find h3.map_wf hrec with
@@ -638,18 +767,61 @@ theorem TrEnv.pats_iota' {safety : DefinitionSafety} {env : Environment} {venv :
   show env.constants.find?' cName = _
   rw [(TrEnv'.map_wf H).find?'_eq_find?]; exact hct
 
-/-- Inverse of `pats_iota'`, at the `TrEnv'` level, with the model-side shape of the rule:
-every registered ι pattern `SimplePattern.iota recName M cName N` comes from a kernel
-recursor `rval` (resolvable in `C` under `recName`) and its rule for `cName` (found by
-constructor, uniquely by `VInductDecl.WF.rules_nodup`), whose constructor `cval` is
-resolvable in `C`; `M` and `N` are the kernel telescope split and
-`cval.numParams + rule.nfields`, and the registered entry is `iotaRHS` at those counts over
-a translation of the kernel reduct, with the trivial check (the reduct component is stated
-with `HEq` because its type mentions `M` and `N`). On the model side, the recursor is a
-registered constant whose type has `RecShape` at the kernel split
-(`VInductDecl.WF.rec_shape` through `TrRecursor`), and the reduct has `RuleShape` at the
-rule's minor `j` — a minor `MinorFor cName` with `rule.nfields` binders followed by exactly
-as many as the reduct applies it to beyond the fields (`VInductDecl.WF.rule_shape`). -/
+/-- The kernel data behind one registered ι pattern `SimplePattern.iota recName M cName N`, with
+the shape the reduct has on both sides. The recursor `rval` is resolvable in `C` under `recName`
+and so is its rule for `cName` (found by constructor, uniquely by `VInductDecl.WF.rules_nodup`)
+and that constructor `cval`; `M` and `N` are the kernel telescope split and
+`cval.numParams + rule.nfields`, and the registered entry is `iotaRHS` at those counts over a
+translation `rhs` of the kernel reduct, with the trivial check (`rhs_eq` is stated with `HEq`
+because the type of `r.1` mentions `M` and `N`). On the model side the recursor is a registered
+constant whose type has `RecShape` at that split (`VInductDecl.WF.rec_shape` through
+`TrRecursor`), and the reduct has `RuleShape` at the rule's minor `j` — a minor `MinorFor cName`
+with `rule.nfields` binders followed by exactly as many arguments as the reduct applies it to
+beyond the fields (`VInductDecl.WF.rule_shape`). -/
+structure TrEnv'.IotaRule (C : ConstMap) (venv : VEnv) (recName cName : Name) (M N : Nat)
+    (r : (SimplePattern.iota recName M cName N).toPattern.RHS ×
+      (SimplePattern.iota recName M cName N).toPattern.Check)
+    (rval : RecursorVal) (rule : RecursorRule) (cval : ConstructorVal) (rhs : VExpr)
+    (hc : rhs.Closed) (rci : VConstant) : Prop where
+  rec_find : C.find? recName = some (.recInfo rval)
+  rule_find : rval.rules.find? (·.ctor == cName) = some rule
+  ctor_find : C.find? cName = some (.ctorInfo cval)
+  key_split : M = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices
+  key_arity : N = cval.numParams + rule.nfields
+  tr : TrExprS venv rval.levelParams [] rule.rhs rhs
+  rhs_eq : HEq r.1 (SimplePattern.iotaRHS recName cName rval.numParams rval.numMotives
+    rval.numMinors rval.numIndices cval.numParams rule.nfields rhs hc)
+  chk_eq : r.2 = .true
+  rec_const : venv.constants recName = some rci
+  rec_shape : rci.type.RecShape rval.numParams rval.numMotives rval.numMinors rval.numIndices
+  minor : ∃ j < rval.numMinors, ∃ A,
+    rci.type.piBinders[rval.numParams + rval.numMotives + j]? = some A ∧ A.MinorFor cName ∧
+    rule.nfields ≤ A.piArity ∧
+    rhs.RuleShape rval.numParams rval.numMotives rval.numMinors rule.nfields
+      (A.piArity - rule.nfields) j
+
+/-- Transport along one step of `TrEnv'` other than `induct`: such a step only extends the
+constant map (with fresh names) and the model environment, and the kernel data of a rule
+registered before the step is unchanged. -/
+theorem TrEnv'.IotaRule.step {C C' : ConstMap} {venv venv' : VEnv}
+    (hle : venv ≤ venv') (hmap : ∀ {x ci}, C.find? x = some ci → C'.find? x = some ci)
+    (h : IotaRule C venv recName cName M N r rval rule cval rhs hc rci) :
+    IotaRule C' venv' recName cName M N r rval rule cval rhs hc rci where
+  rec_find := hmap h.rec_find
+  rule_find := h.rule_find
+  ctor_find := hmap h.ctor_find
+  key_split := h.key_split
+  key_arity := h.key_arity
+  tr := h.tr.mono hle
+  rhs_eq := h.rhs_eq
+  chk_eq := h.chk_eq
+  rec_const := hle.constants h.rec_const
+  rec_shape := h.rec_shape
+  minor := h.minor
+
+/-- Inverse of `pats_iota'`, at the `TrEnv'` level: every registered ι pattern comes from a
+kernel recursor rule, with the data and shape of `TrEnv'.IotaRule`. Only the `induct` step
+registers a rule; every other step transports one along `IotaRule.step`. -/
 theorem TrEnv'.pats_iota_inv_shape {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
     {venv : VEnv} {recName cName : Name} {M N : Nat}
     {r : (SimplePattern.iota recName M cName N).toPattern.RHS ×
@@ -658,129 +830,75 @@ theorem TrEnv'.pats_iota_inv_shape {safety : DefinitionSafety} {C : ConstMap} {Q
     (hp : venv.pats (SimplePattern.iota recName M cName N).toPattern r) :
     ∃ (rval : RecursorVal) (rule : RecursorRule) (cval : ConstructorVal) (rhs : VExpr)
       (hc : rhs.Closed) (rci : VConstant),
-      C.find? recName = some (.recInfo rval) ∧
-      rval.rules.find? (·.ctor == cName) = some rule ∧
-      C.find? cName = some (.ctorInfo cval) ∧
-      M = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices ∧
-      N = cval.numParams + rule.nfields ∧
-      TrExprS venv rval.levelParams [] rule.rhs rhs ∧
-      HEq r.1 (SimplePattern.iotaRHS recName cName rval.numParams rval.numMotives
-        rval.numMinors rval.numIndices cval.numParams rule.nfields rhs hc) ∧
-      r.2 = .true ∧
-      venv.constants recName = some rci ∧
-      rci.type.RecShape rval.numParams rval.numMotives rval.numMinors rval.numIndices ∧
-      ∃ j < rval.numMinors, ∃ A,
-        rci.type.piBinders[rval.numParams + rval.numMotives + j]? = some A ∧ A.MinorFor cName ∧
-        rule.nfields ≤ A.piArity ∧
-        rhs.RuleShape rval.numParams rval.numMotives rval.numMinors rule.nfields
-          (A.piArity - rule.nfields) j := by
+      IotaRule C venv recName cName M N r rval rule cval rhs hc rci := by
   induction H with
   | empty => exact (hp : False).elim
   | ignore h1 _ Hprev ih =>
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h1 hrec, hru,
-      SMap.find?_insert_of_fresh wf h1 hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci,
+      h.step .rfl (SMap.find?_insert_of_fresh Hprev.map_wf.map₂ h1)⟩
   | «axiom» _ h2 _ h4 Hprev ih =>
     rw [VEnv.addConst_pats h4] at hp
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
-      SMap.find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h4), hh1, hh2,
-      (VEnv.addConst_le h4).constants hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci, h.step (VEnv.addConst_le h4)
+      (SMap.find?_insert_of_fresh Hprev.map_wf.map₂ h2)⟩
   | defn _ h2 _ h4 Hprev ih =>
     rw [VEnv.addDefEq_pats, VEnv.addConst_pats h4] at hp
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
-      SMap.find?_insert_of_fresh wf h2 hct, hM, hN,
-      htr.mono ((VEnv.addConst_le h4).trans VEnv.addDefEq_le), hh1, hh2,
-      ((VEnv.addConst_le h4).trans VEnv.addDefEq_le).constants hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci,
+      h.step ((VEnv.addConst_le h4).trans VEnv.addDefEq_le)
+        (SMap.find?_insert_of_fresh Hprev.map_wf.map₂ h2)⟩
   | mutualDef _ hnd hfr _ hadd _ Hprev ih =>
     rw [VEnv.addDefEqs_pats, VEnv.addConsts_pats hadd] at hp
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf
-    exact ⟨rval, rule, cval, rhs, hc, rci, insertDefs_find?_mono wf hfr hrec, hru,
-      insertDefs_find?_mono wf hfr hct, hM, hN,
-      htr.mono ((VEnv.addConsts_le hadd).trans VEnv.addDefEqs_le), hh1, hh2,
-      ((VEnv.addConsts_le hadd).trans VEnv.addDefEqs_le).constants hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci,
+      h.step ((VEnv.addConsts_le hadd).trans VEnv.addDefEqs_le)
+        (insertDefs_find?_mono Hprev.map_wf hfr)⟩
   | thm _ h2 _ _ h5 Hprev ih =>
     rw [VEnv.addConst_pats h5] at hp
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
-      SMap.find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h5), hh1, hh2,
-      (VEnv.addConst_le h5).constants hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci, h.step (VEnv.addConst_le h5)
+      (SMap.find?_insert_of_fresh Hprev.map_wf.map₂ h2)⟩
   | «opaque» _ h2 _ h4 Hprev ih =>
     rw [VEnv.addConst_pats h4] at hp
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf.map₂
-    exact ⟨rval, rule, cval, rhs, hc, rci, SMap.find?_insert_of_fresh wf h2 hrec, hru,
-      SMap.find?_insert_of_fresh wf h2 hct, hM, hN, htr.mono (VEnv.addConst_le h4), hh1, hh2,
-      (VEnv.addConst_le h4).constants hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci, h.step (VEnv.addConst_le h4)
+      (SMap.find?_insert_of_fresh Hprev.map_wf.map₂ h2)⟩
   | quot _ h2 Hprev ih =>
     rw [VEnv.addQuot_pats h2.to_addQuot] at hp
-    obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-      ih hp
-    have wf := Hprev.map_wf
-    exact ⟨rval, rule, cval, rhs, hc, rci, h2.find?_mono wf hrec, hru, h2.find?_mono wf hct, hM, hN,
-      htr.mono h2.le, hh1, hh2, h2.le.constants hrci, hrs, hj⟩
+    obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hp
+    exact ⟨rval, rule, cval, rhs, hc, rci, h.step h2.le (h2.find?_mono Hprev.map_wf)⟩
   | induct hwf hadd Hprev ih =>
     have wf := Hprev.map_wf
     rcases VEnv.addInduct_pats_origin' hadd.env_eq hp with
       hold | ⟨rec, hrec, ru, hru, hc, e, he⟩
-    · obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-        ih hold
-      exact ⟨rval, rule, cval, rhs, hc, rci, hadd.find?_mono wf hrec, hru, hadd.find?_mono wf hct,
-        hM, hN, htr.mono hadd.le, hh1, hh2, hadd.le.constants hrci, hrs, hj⟩
+    · obtain ⟨rval, rule, cval, rhs, hc, rci, h⟩ := ih hold
+      exact ⟨rval, rule, cval, rhs, hc, rci, h.step hadd.le (hadd.find?_mono wf)⟩
     · obtain ⟨hrn, hm, hcn, hkk⟩ := VEnv.iota_toPattern_inj e
       subst hrn hm hcn hkk
       cases e
       obtain ⟨rval, hrfind, hmaj, hpar, hmot, hmin, hind, hrules⟩ := hadd.rec_reg wf hwf hrec
       obtain ⟨rule, hfind, hnf, ⟨cval, hcfind, hcnp⟩, htr⟩ := hrules ru hru
-      have hrs := hwf.rec_shape rec hrec
       obtain ⟨j, hj, A, hA, hAm, hAle, hru_s⟩ := hwf.rule_shape rec hrec ru hru
-      refine ⟨rval, rule, cval, ru.rhs, hc, rec.toVConstVal.toVConstant, hrfind, hfind, hcfind, ?_,
-        by rw [← hcnp, ← hnf], htr, ?_, ?_, VEnv.addInduct_rec_find hadd.env_eq hrec, ?_, ?_⟩
-      · rw [hmaj]; rfl
+      refine ⟨rval, rule, cval, ru.rhs, hc, rec.toVConstVal.toVConstant,
+        { rec_find := hrfind, rule_find := hfind, ctor_find := hcfind
+          key_split := by rw [hmaj]; rfl
+          key_arity := by rw [← hcnp, ← hnf]
+          tr := htr
+          rhs_eq := ?_
+          chk_eq := congrArg Prod.snd he
+          rec_const := VEnv.addInduct_rec_find hadd.env_eq hrec
+          rec_shape := ?_
+          minor := ?_ }⟩
       · rw [← hpar, ← hmot, ← hmin, ← hind, ← hcnp, ← hnf]
         exact heq_of_eq (congrArg Prod.fst he)
-      · exact congrArg Prod.snd he
-      · rw [← hpar, ← hmot, ← hmin, ← hind]; exact hrs
+      · rw [← hpar, ← hmot, ← hmin, ← hind]; exact hwf.rec_shape rec hrec
       · refine ⟨j, by rw [← hmin]; exact hj, A, ?_, hAm, by rw [← hnf]; exact hAle, ?_⟩
         · rw [← hpar, ← hmot]; exact hA
         · rw [← hpar, ← hmot, ← hmin, ← hnf]; exact hru_s
 
-/-- Inverse of `pats_iota'`, at the `TrEnv'` level: the kernel-side half of
-`TrEnv'.pats_iota_inv_shape`. -/
-theorem TrEnv'.pats_iota_inv' {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
-    {venv : VEnv} {recName cName : Name} {M N : Nat}
-    {r : (SimplePattern.iota recName M cName N).toPattern.RHS ×
-      (SimplePattern.iota recName M cName N).toPattern.Check}
-    (H : TrEnv' safety C Q venv)
-    (hp : venv.pats (SimplePattern.iota recName M cName N).toPattern r) :
-    ∃ (rval : RecursorVal) (rule : RecursorRule) (cval : ConstructorVal) (rhs : VExpr)
-      (hc : rhs.Closed),
-      C.find? recName = some (.recInfo rval) ∧
-      rval.rules.find? (·.ctor == cName) = some rule ∧
-      C.find? cName = some (.ctorInfo cval) ∧
-      M = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices ∧
-      N = cval.numParams + rule.nfields ∧
-      TrExprS venv rval.levelParams [] rule.rhs rhs ∧
-      HEq r.1 (SimplePattern.iotaRHS recName cName rval.numParams rval.numMotives
-        rval.numMinors rval.numIndices cval.numParams rule.nfields rhs hc) ∧
-      r.2 = .true := by
-  obtain ⟨rval, rule, cval, rhs, hc, -, hrec, hru, hct, hM, hN, htr, hh1, hh2, -, -, -⟩ :=
-    H.pats_iota_inv_shape hp
-  exact ⟨rval, rule, cval, rhs, hc, hrec, hru, hct, hM, hN, htr, hh1, hh2⟩
-
-/-- `TrEnv'.pats_iota_inv_shape` against the kernel environment. -/
+/-- `TrEnv'.pats_iota_inv_shape` against the kernel environment: the constant lookups of
+`IotaRule` are then the environment's own `find?`. -/
 theorem TrEnv.pats_iota_inv_shape {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
     {recName cName : Name} {M N : Nat}
     {r : (SimplePattern.iota recName M cName N).toPattern.RHS ×
@@ -789,56 +907,8 @@ theorem TrEnv.pats_iota_inv_shape {safety : DefinitionSafety} {env : Environment
     (hp : venv.pats (SimplePattern.iota recName M cName N).toPattern r) :
     ∃ (rval : RecursorVal) (rule : RecursorRule) (cval : ConstructorVal) (rhs : VExpr)
       (hc : rhs.Closed) (rci : VConstant),
-      env.find? recName = some (.recInfo rval) ∧
-      rval.rules.find? (·.ctor == cName) = some rule ∧
-      env.find? cName = some (.ctorInfo cval) ∧
-      M = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices ∧
-      N = cval.numParams + rule.nfields ∧
-      TrExprS venv rval.levelParams [] rule.rhs rhs ∧
-      HEq r.1 (SimplePattern.iotaRHS recName cName rval.numParams rval.numMotives
-        rval.numMinors rval.numIndices cval.numParams rule.nfields rhs hc) ∧
-      r.2 = .true ∧
-      venv.constants recName = some rci ∧
-      rci.type.RecShape rval.numParams rval.numMotives rval.numMinors rval.numIndices ∧
-      ∃ j < rval.numMinors, ∃ A,
-        rci.type.piBinders[rval.numParams + rval.numMotives + j]? = some A ∧ A.MinorFor cName ∧
-        rule.nfields ≤ A.piArity ∧
-        rhs.RuleShape rval.numParams rval.numMotives rval.numMinors rule.nfields
-          (A.piArity - rule.nfields) j := by
-  obtain ⟨rval, rule, cval, rhs, hc, rci, hrec, hru, hct, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩ :=
-    TrEnv'.pats_iota_inv_shape H hp
-  have wf := TrEnv'.map_wf H
-  refine ⟨rval, rule, cval, rhs, hc, rci, ?_, hru, ?_, hM, hN, htr, hh1, hh2, hrci, hrs, hj⟩
-  · show env.constants.find?' recName = _; rw [wf.find?'_eq_find?]; exact hrec
-  · show env.constants.find?' cName = _; rw [wf.find?'_eq_find?]; exact hct
-
-/-- Inverse of `pats_iota'`; see `TrEnv'.pats_iota_inv'`. From a registered ι pattern,
-recover the kernel recursor and its rule for the constructor, the constructor itself, the
-full kernel telescope split behind `M`, the split of `N` into the constructor's parameter
-and field counts, and the registered reduct. -/
-theorem TrEnv.pats_iota_inv' {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
-    {recName cName : Name} {M N : Nat}
-    {r : (SimplePattern.iota recName M cName N).toPattern.RHS ×
-      (SimplePattern.iota recName M cName N).toPattern.Check}
-    (H : TrEnv safety env venv)
-    (hp : venv.pats (SimplePattern.iota recName M cName N).toPattern r) :
-    ∃ (rval : RecursorVal) (rule : RecursorRule) (cval : ConstructorVal) (rhs : VExpr)
-      (hc : rhs.Closed),
-      env.find? recName = some (.recInfo rval) ∧
-      rval.rules.find? (·.ctor == cName) = some rule ∧
-      env.find? cName = some (.ctorInfo cval) ∧
-      M = rval.numParams + rval.numMotives + rval.numMinors + rval.numIndices ∧
-      N = cval.numParams + rule.nfields ∧
-      TrExprS venv rval.levelParams [] rule.rhs rhs ∧
-      HEq r.1 (SimplePattern.iotaRHS recName cName rval.numParams rval.numMotives
-        rval.numMinors rval.numIndices cval.numParams rule.nfields rhs hc) ∧
-      r.2 = .true := by
-  obtain ⟨rval, rule, cval, rhs, hc, hrec, hru, hct, hM, hN, htr, hh1, hh2⟩ :=
-    TrEnv'.pats_iota_inv' H hp
-  have wf := TrEnv'.map_wf H
-  refine ⟨rval, rule, cval, rhs, hc, ?_, hru, ?_, hM, hN, htr, hh1, hh2⟩
-  · show env.constants.find?' recName = _; rw [wf.find?'_eq_find?]; exact hrec
-  · show env.constants.find?' cName = _; rw [wf.find?'_eq_find?]; exact hct
+      TrEnv'.IotaRule env.constants venv recName cName M N r rval rule cval rhs hc rci :=
+  TrEnv'.pats_iota_inv_shape H hp
 
 /-- A registered ι rule, matched against a well-typed redex with its `Realizes` side
 conditions discharged, gives a definitional equality between redex and reduct. Thin
@@ -940,42 +1010,27 @@ theorem VEnv.IsDefEqU.betaN {env : VEnv} {U : Nat} {Γ : List VExpr}
   | [], _ :: _, _, _, h, _ | _ :: _, [], _, _, h, _ => nomatch h
 
 /-- **Projection reduction.** The recursor expansion `e''` of the `i`-th projection of a
-structure value `d` (`TrProjCtor`, with the constructor `ctorName` named) reduces, when `d`
-is definitionally a saturated spine `ctorName cus (params ++ fields)` of the kernel's
-constructor `cval`, to the field `fields[i]`.
-
-The kernel side supplies what the model's `VEnv` cannot express: the constructor's arity
-(`hlen`/`hflen`, against `cval` — `TrEnv.ctor_arity` ties it to the model telescope), and
-the segmentation of `S.rec`'s telescope (`hnp`/`hnm`/`hnmin`/`hnind`: the recursor of a
-structure with `cval.numParams` parameters, one motive, one minor, no indices — the
-`np+1+1+0` key of `TrProjCtor` retains only their sum, and a `VEnv` cannot tell a parameter
-binder from a motive binder). This is the interface the `proj` case of `TrExprS` soundness
-consumes.
-
-Proof: `d ≡ spine` at the structure type (unique typing), so `P_i d ≡ P_i spine`; the
-registered ι rule of `S.rec` on `ctorName` (`pats_iota_inv_shape`) fires on `P_i spine`
-(`IsDefEq.pat`, trivial check); its reduct is the rule template — by `rule_shape` and the
-minor's arity pin, `λ params motive minor fields, minor fields` with no recursive arguments —
-applied to the redex's arguments, which β-reduces (`IsDefEqU.betaN`) to
-`fieldSelector fieldTys i fields`, and once more to `fields[i]`.
-
-No `sorry` of its own: the `sorryAx` in its `#print axioms` is inherited only from the
-pre-existing unique-typing / Π-injectivity sorries (`Injectivity.lean`'s `IsDefEqU.sort_inv`,
-`IsDefEqU.forallE_inv_stratified`; `UniqueTyping.lean`) and from `VEnv.WF.patsStrong`. -/
+structure value `d` reduces, when `d` is definitionally the saturated constructor spine
+`ctorName cus (params ++ fields)`, to the field `fields[i]`. The premises about `S` are the
+kernel's structure facts — non-mutual, single-constructor, non-indexed — the ones `inferProj`
+and `reduceProjCore` establish before they accept a projection; `TrEnv.structure_rec` turns them
+into the recursor's telescope split, of which the `np+1+1+0` key of `TrProjCtor` retains only
+the sum. The proof fires the registered ι rule (`pats_iota_inv_shape`) on `P_i spine` and
+β-reduces its reduct through `VExpr.fieldSelector`. No `sorry` of its own: the `sorryAx` in its
+`#print axioms` is inherited from unique typing, Π-injectivity and `VEnv.WF.patsStrong`. -/
 theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environment}
     {venv : VEnv} {U : Nat} {Γ : List VExpr} {S ctorName : Name} {i : Nat}
-    {rval : RecursorVal} {cval : ConstructorVal}
+    {ival : InductiveVal} {cval : ConstructorVal}
     {usS : List VLevel} {uss : Nat → List VLevel} {params' : List VExpr} {np : Nat}
     {fieldTys : List VExpr}
     {cus : List VLevel} {params fields : List VExpr} {d e'' : VExpr}
     (H : TrEnv safety kenv venv) (hΓ : OnCtx Γ (venv.IsType U))
     (hp : TrProjCtor venv U Γ S i d e'' ctorName usS uss params' np fieldTys)
-    (hrec : kenv.find? (mkRecName S) = some (.recInfo rval))
+    (hS : kenv.find? S = some (.inductInfo ival))
+    (hall : ival.all = [S]) (hctors : ival.ctors = [ctorName]) (hnind : ival.numIndices = 0)
     (hctor : kenv.find? ctorName = some (.ctorInfo cval))
-    (hnp : rval.numParams = cval.numParams) (hnm : rval.numMotives = 1)
-    (hnmin : rval.numMinors = 1) (hnind : rval.numIndices = 0)
     (hd : venv.IsDefEqU U Γ d ((VExpr.const ctorName cus).mkApps (params ++ fields)))
-    (hlen : params.length = cval.numParams) (hflen : fields.length = cval.numFields)
+    (hlen : params.length = ival.numParams) (hflen : fields.length = cval.numFields)
     (hi : i < cval.numFields) :
     venv.IsDefEqU U Γ e'' (fields[i]'(hflen ▸ hi)) := by
   have henv : venv.WF := H.wf
@@ -986,8 +1041,12 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
   have hE := hp.major_ty
   have hPF := hp.fn_ty
   obtain rfl := hp.eq
+  -- the type former is visible in the model, which is what `structure_rec` needs of it
+  obtain ⟨_, hSty⟩ := hE.isType henv hΓ
+  obtain ⟨_, hSty⟩ := hSty.mkApps_inv_head henv hΓ
+  obtain ⟨_, hvS, -, -⟩ := hSty.const_inv henv hΓ
   -- (A) the constructor's arity: the spine `params ++ fields` is saturated
-  have hnf : np + fieldTys.length = params.length + fields.length := by
+  have hnf : np + fieldTys.length = cval.numParams + cval.numFields := by
     have := VExpr.instPis_piArity _ _ (hch.instL usS) hcty
     rw [VExpr.piArity_instL, H.ctor_arity hctor hci] at this
     rw [hF, VExpr.piBinders_length]; omega
@@ -997,27 +1056,41 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
   generalize hM : np + 1 + 1 + 0 = M
   generalize hN : np + fieldTys.length = N
   intro r hpat
-  obtain ⟨rval', rule, cval', rhs, hc, rci', hrec', hrule, hctor', rfl, rfl, -, hR, hchk, hrci',
-    -, j, hj, A, hA, -, hAle, hla, recArgs, hrl, hlb⟩ := H.pats_iota_inv_shape hpat
-  rw [hrec] at hrec'; cases hrec'
-  rw [hctor] at hctor'; cases hctor'
+  obtain ⟨rval, rule, cval', rhs, hc, rci', hR⟩ := H.pats_iota_inv_shape hpat
+  have hctorC : kenv.constants.find? ctorName = some (.ctorInfo cval) := by
+    have h : kenv.constants.find?' ctorName = some (.ctorInfo cval) := hctor
+    rwa [(TrEnv'.map_wf H).find?'_eq_find?] at h
+  have hctor' := hR.ctor_find
+  rw [hctorC] at hctor'; cases hctor'
+  have hrci' := hR.rec_const
   rw [hrci] at hrci'; cases hrci'
+  obtain ⟨j, hj, A, hA, -, hAle, hla, recArgs, hrl, hlb⟩ := hR.minor
+  have hrule := hR.rule_find
+  obtain rfl := hR.key_split
+  obtain rfl := hR.key_arity
+  -- (C) the kernel's structure facts: one motive, one minor, no indices
+  have hrecK : kenv.find? (mkRecName S) = some (.recInfo rval) := by
+    show kenv.constants.find?' _ = _
+    rw [(TrEnv'.map_wf H).find?'_eq_find?]; exact hR.rec_find
+  obtain ⟨hnp, hnm, hnmin, hnind', cval', hctor', hcnp⟩ :=
+    H.structure_rec hS hvS hrecK hrci hall hctors hnind
+  rw [hctor] at hctor'; cases hctor'
   obtain ⟨R, chk⟩ := r
-  cases eq_of_heq hR; cases hchk
+  cases eq_of_heq hR.rhs_eq; cases hR.chk_eq
   have hnpeq : rval.numParams = np := by omega
   have hnfeq : rule.nfields = fieldTys.length := by omega
   have hfl : fields.length = fieldTys.length := by omega
   have hplen : params.length = np := by omega
-  -- (C) the minor: exactly the fields as binders, so the reduct has no recursive arguments
+  -- (D) the minor: exactly the fields as binders, so the reduct has no recursive arguments
   have hj0 : j = 0 := by omega
   subst hj0
   rw [show rval.numParams + rval.numMotives + 0 = np + 1 by omega] at hA
   rw [VExpr.binderArity?, hA, Option.map_some] at harity
   have hA' : A.piArity = fieldTys.length := Option.some.inj harity
   obtain rfl : recArgs = [] := List.eq_nil_of_length_eq_zero (by omega)
-  rw [List.append_nil, hnfeq, show fieldTys.length + (rval.numMinors - 1 - 0) = fieldTys.length by
-    omega] at hlb
-  -- (D) `P_i d ≡ P_i spine`, then ι on `P_i spine`
+  rw [List.append_nil, hnfeq, show fieldTys.length + (rval.numMinors - 1 - 0) =
+    fieldTys.length by omega] at hlb
+  -- (E) `P_i d ≡ P_i spine`, then ι on `P_i spine`
   have hde := hd.of_l henv hΓ hE
   have h1 : venv.IsDefEqU U Γ (.app (VExpr.projFn S usS uss params' fieldTys i) d)
       (.app (VExpr.projFn S usS uss params' fieldTys i) ((VExpr.const ctorName cus).mkApps
@@ -1047,11 +1120,11 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
           rule.nfields rhs hc))
       ((VExpr.projMotiveBody S usS uss params' fieldTys i).inst
         ((VExpr.const ctorName cus).mkApps (params ++ fields))) := hι
+  have hpn : cval.numParams = params.length := hcnp.trans hlen.symm
   rw [SimplePattern.iotaRHS'_apply _ _ _ _ _ _ _ _ _ (Sum.elim g1 g2)
     (by simp; omega) (by simp; omega) hg1 hg2,
-    List.take_of_length_le (by simp; omega), show cval.numParams = params.length from hlen.symm,
-    List.drop_left] at hι
-  -- (E) β through the template, then through `fieldSelector`
+    List.take_of_length_le (by simp; omega), hpn, List.drop_left] at hι
+  -- (F) β through the template, then through `fieldSelector`
   have hβ1 := VEnv.IsDefEqU.betaN henv hΓ (As := rhs.lamBinders.map (VExpr.instL (uss i)))
     (as := params' ++ [.lam ((VExpr.const S usS).mkApps params')
       (VExpr.projMotiveBody S usS uss params' fieldTys i), VExpr.fieldSelector fieldTys i] ++ fields)
