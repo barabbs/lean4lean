@@ -741,6 +741,21 @@ theorem Fixes.liftVar_eq {ρ : Lift} (H : ρ.Fixes k) (h2 : i < k) : ρ.liftVar 
     | zero => rfl
     | succ k => exact congrArg Nat.succ <| ih H (Nat.lt_of_succ_lt_succ h2)
 
+/-- A lift shifted under `m` binders fixes those `m` variables. -/
+theorem consN_fixes : ∀ (m : Nat) (ρ : Lift), (ρ.consN m).Fixes m
+  | 0, _ => trivial
+  | m+1, ρ => consN_fixes m ρ
+
+theorem consN_cons (ρ : Lift) : ∀ j : Nat, (cons ρ).consN j = ρ.consN (j+1)
+  | 0 => rfl
+  | j+1 => by rw [consN, consN_cons ρ j]; rfl
+
+theorem liftVar_consN_lt {ρ : Lift} {m i : Nat} (h : i < m) : (ρ.consN m).liftVar i = i :=
+  (consN_fixes m ρ).liftVar_eq h
+
+theorem liftVar_consN_succ (ρ : Lift) (m i : Nat) :
+    (ρ.consN (m+1)).liftVar (i+1) = (ρ.consN m).liftVar i + 1 := rfl
+
 end Lift
 
 namespace VExpr
@@ -907,10 +922,6 @@ theorem lift_r_one (e : VExpr) (ρ : Lift) :
   funext i; simp [Subst.trunc]
   cases i <;> simp [Subst.one, Subst.cons, Subst.lift_r, Subst.id]
 
-theorem lift'_inst_hi (e1 e2 : VExpr) (ρ : Lift) :
-    lift' (e1.inst e2) ρ = (lift' e1 ρ.cons).inst (lift' e2 ρ) := by
-  simp [subst_lift', lift'_subst, lift_r_one, inst_eq]
-
 theorem Subst.tail_eq_lift_l {σ : Subst} : σ.tail = σ.lift_l Lift.refl.skip := rfl
 
 theorem Subst.lift_r_tail {σ : Subst} {ρ : Lift} :
@@ -949,6 +960,87 @@ theorem inst_lift_cons {e : VExpr} {σ : Subst} :
   rw [inst_eq, subst_subst, Subst.one]; congr 1
   funext i; obtain _|i := i <;> simp [Subst.comp, Subst.lift, Subst.cons]
 
+/-! ### Weakening and instantiation as substitutions
+
+`lift'` and `inst` are both `subst` (`lift'_eq_subst`, `instN_eq`), so a lemma about a builder
+need only be proved against `subst`: the weakening and instantiation forms are read off by
+rewriting the substitution, `Lift.consN` matching `Subst.liftN` binder for binder. -/
+
+/-- Weakening is the substitution that renames each variable along `ρ`. -/
+theorem lift'_eq_subst {e : VExpr} {ρ : Lift} : e.lift' ρ = e.subst (.lift_l ρ .id) :=
+  subst_id.symm.trans subst_lift'
+
+theorem Subst.lift_liftN {σ : Subst} : ∀ n, σ.lift.liftN n = σ.liftN (n+1)
+  | 0 => rfl
+  | n+1 => congrArg Subst.lift (Subst.lift_liftN n)
+
+theorem Subst.liftN_liftN {σ : Subst} {k : Nat} : ∀ j, (σ.liftN k).liftN j = σ.liftN (k+j)
+  | 0 => rfl
+  | j+1 => congrArg Subst.lift (Subst.liftN_liftN j)
+
+theorem Subst.lift_lift_l_id {ρ : Lift} : (Subst.lift_l ρ .id).lift = .lift_l ρ.cons .id := by
+  rw [Subst.lift_l_lift, id_lift]
+
+theorem Subst.liftN_lift_l_id {ρ : Lift} :
+    ∀ j, (Subst.lift_l ρ .id).liftN j = .lift_l (ρ.consN j) .id
+  | 0 => rfl
+  | j+1 => by rw [Subst.liftN, Subst.liftN_lift_l_id j, Subst.lift_lift_l_id]; rfl
+
+theorem Subst.Fixes.liftN {σ : Subst} : ∀ n, (σ.liftN n).Fixes n
+  | 0 => .zero
+  | n+1 => (Subst.Fixes.liftN n).lift
+
+theorem Subst.comp_liftN_one {P : VExpr} {σ : Subst} : ∀ n,
+    Subst.comp (Subst.liftN (.one P) n) (σ.liftN n)
+      = Subst.comp (σ.liftN (n+1)) (Subst.liftN (.one (P.subst σ)) n)
+  | 0 => by
+    funext i
+    simp only [Subst.comp, Subst.liftN]
+    obtain _|i := i
+    · rfl
+    · show (VExpr.bvar i).subst σ = ((σ i).lift).subst (Subst.one (P.subst σ))
+      rw [lift_subst_cons, subst_id, subst_bvar]
+  | n+1 => by
+    show Subst.comp (Subst.liftN (.one P) n).lift (σ.liftN n).lift
+      = Subst.comp (σ.liftN (n+1)).lift (Subst.liftN (.one (P.subst σ)) n).lift
+    rw [← Subst.comp_lift, ← Subst.comp_lift, Subst.comp_liftN_one n]
+
+/-- Substituting under `m` binders commutes with instantiation at index `m`. -/
+theorem subst_instN {e a : VExpr} {σ : Subst} {n : Nat} :
+    (e.inst a n).subst (σ.liftN n) = (e.subst (σ.liftN (n+1))).inst (a.subst σ) n := by
+  rw [instN_eq, instN_eq, subst_subst, subst_subst, Subst.comp_liftN_one]
+
+/-- Weakening under `m` binders commutes with instantiation at index `m`. -/
+theorem lift'_instN_hi (e1 e2 : VExpr) (ρ : Lift) (m : Nat) :
+    (e1.inst e2 m).lift' (ρ.consN m) = (e1.lift' (ρ.consN (m+1))).inst (e2.lift' ρ) m := by
+  simp only [lift'_eq_subst, ← Subst.liftN_lift_l_id, subst_instN]
+
+theorem lift'_inst_hi (e1 e2 : VExpr) (ρ : Lift) :
+    lift' (e1.inst e2) ρ = (lift' e1 ρ.cons).inst (lift' e2 ρ) := lift'_instN_hi e1 e2 ρ 0
+
+theorem substVar_liftN_lift {σ : Subst} : ∀ (i k : Nat),
+    (σ.liftN (i+1)) (liftVar 1 k i) = liftN 1 ((σ.liftN i) k) i
+  | 0, k => by rw [show liftVar 1 k 0 = k + 1 from by simp [liftVar, Nat.add_comm]]; rfl
+  | i+1, 0 => by rw [show liftVar 1 0 (i+1) = 0 from by simp [liftVar]]; rfl
+  | i+1, k+1 => by
+    rw [liftVar_succ]
+    show ((σ.liftN (i+1)) (liftVar 1 k i)).lift = liftN 1 (((σ.liftN i) k).lift) (i+1)
+    rw [substVar_liftN_lift i k, lift_liftN']
+
+/-- Inserting a binder at depth `i` commutes with a substitution shifted past it; the `i = 0`
+case is `lift_subst_lift`. -/
+theorem liftN_subst_liftN {σ : Subst} : ∀ (e : VExpr) (i : Nat),
+    (e.liftN 1 i).subst (σ.liftN (i+1)) = (e.subst (σ.liftN i)).liftN 1 i
+  | .bvar k, i => substVar_liftN_lift i k
+  | .sort _, _ | .const .., _ => rfl
+  | .app f a, i => by simp only [liftN, subst, liftN_subst_liftN f i, liftN_subst_liftN a i]
+  | .lam A b, i => by
+    simp only [liftN, subst, liftN_subst_liftN A i]
+    exact congrArg _ (liftN_subst_liftN b (i+1))
+  | .forallE A B, i => by
+    simp only [liftN, subst, liftN_subst_liftN A i]
+    exact congrArg _ (liftN_subst_liftN B (i+1))
+
 /-! ### Syntactic helpers for recursor and constructor shapes
 
 Total functions reading the Π/λ telescope and the application spine of a `VExpr`,
@@ -964,11 +1056,35 @@ def mkApps (f : VExpr) : List VExpr → VExpr := List.foldl .app f
 theorem mkApps_append (f : VExpr) (l₁ l₂ : List VExpr) :
     f.mkApps (l₁ ++ l₂) = (f.mkApps l₁).mkApps l₂ := List.foldl_append ..
 
+theorem mkApps_subst {f : VExpr} {args : List VExpr} {σ : Subst} :
+    (f.mkApps args).subst σ = (f.subst σ).mkApps (args.map (·.subst σ)) := by
+  induction args generalizing f with
+  | nil => rfl
+  | cons a as ih => simp only [mkApps_cons, List.map_cons, ih, subst_app]
+
+theorem mkApps_lift' {f : VExpr} {args : List VExpr} {ρ : Lift} :
+    (f.mkApps args).lift' ρ = (f.lift' ρ).mkApps (args.map (·.lift' ρ)) := by
+  simp only [lift'_eq_subst, mkApps_subst]
+
+theorem mkApps_inst {f : VExpr} {args : List VExpr} {e₀ : VExpr} {k : Nat} :
+    (f.mkApps args).inst e₀ k = (f.inst e₀ k).mkApps (args.map (·.inst e₀ k)) := by
+  simp only [instN_eq, mkApps_subst]
+
+theorem mkApps_instL {f : VExpr} {args : List VExpr} {ls : List VLevel} :
+    (f.mkApps args).instL ls = (f.instL ls).mkApps (args.map (·.instL ls)) := by
+  induction args generalizing f with
+  | nil => rfl
+  | cons a as ih => simp only [mkApps_cons, List.map_cons, ih, instL]
+
 /-- `[bvar (lo+n-1), …, bvar (lo+1), bvar lo]`: `n` consecutive de Bruijn variables,
 descending, as an argument list. -/
 def bvarsDesc (lo n : Nat) : List VExpr := (List.range n).reverse.map fun i => .bvar (lo + i)
 
 @[simp] theorem bvarsDesc_length (lo n : Nat) : (bvarsDesc lo n).length = n := by simp [bvarsDesc]
+
+theorem getElem_bvarsDesc (lo n t : Nat) (h : t < n) :
+    (bvarsDesc lo n)[t]'(by simp [h]) = .bvar (lo + (n - 1 - t)) := by
+  simp [bvarsDesc, List.getElem_reverse]
 
 /-- Number of leading Π-binders. -/
 def piArity : VExpr → Nat
@@ -989,6 +1105,20 @@ def piBinders : VExpr → List VExpr
   | .forallE _ B => by simp [piBinders, piArity, piBinders_length B]
   | .bvar _ | .sort _ | .const .. | .app .. | .lam .. => rfl
 
+theorem piBinders_lift' : ∀ (T : VExpr) (ρ : Lift),
+    (T.lift' ρ).piBinders = T.piBinders.mapIdx fun j A => A.lift' (ρ.consN j)
+  | .forallE A B, ρ => by
+    simp only [lift', piBinders, List.mapIdx_cons, piBinders_lift' B, Lift.consN_cons]; rfl
+  | .bvar _, _ | .sort _, _ | .const .., _ | .app .., _ | .lam .., _ => rfl
+
+theorem piBinders_instL : ∀ (T : VExpr) (ls : List VLevel),
+    (T.instL ls).piBinders = T.piBinders.map (·.instL ls)
+  | .forallE A B, ls => by simp only [instL, piBinders, List.map_cons, piBinders_instL B]
+  | .bvar _, _ | .sort _, _ | .const .., _ | .app .., _ | .lam .., _ => rfl
+
+theorem piArity_instL (T : VExpr) (ls : List VLevel) : (T.instL ls).piArity = T.piArity := by
+  rw [← piBinders_length, piBinders_instL, List.length_map, piBinders_length]
+
 /-- Number of leading λ-binders. -/
 def lamArity : VExpr → Nat
   | .lam _ b => b.lamArity + 1
@@ -998,6 +1128,19 @@ def lamArity : VExpr → Nat
 def lamBody : VExpr → VExpr
   | .lam _ b => b.lamBody
   | e => e
+
+/-- The leading λ-binder types, outermost first. -/
+def lamBinders : VExpr → List VExpr
+  | .lam A b => A :: b.lamBinders
+  | _ => []
+
+@[simp] theorem lamBinders_length : ∀ e : VExpr, e.lamBinders.length = e.lamArity
+  | .lam _ b => by simp [lamBinders, lamArity, lamBinders_length b]
+  | .bvar _ | .sort _ | .const .. | .app .. | .forallE .. => rfl
+
+theorem foldr_lam_lamBinders : ∀ e : VExpr, e.lamBinders.foldr lam e.lamBody = e
+  | .lam _ b => by simp [lamBinders, lamBody, foldr_lam_lamBinders b]
+  | .bvar _ | .sort _ | .const .. | .app .. | .forallE .. => rfl
 
 /-- The head of an application spine. -/
 def getAppFn : VExpr → VExpr
@@ -1090,6 +1233,54 @@ instance {ty : VExpr} : Decidable ty.CtorHeaded := decidable_of_iff _ isConst_if
 head shapes, so the same constant cannot be both. -/
 theorem RecHeaded.not_ctorHeaded {ty : VExpr} (h : ty.RecHeaded) : ¬ ty.CtorHeaded := by
   rintro ⟨I, us, h'⟩; obtain ⟨k, h⟩ := h; rw [h] at h'; cases h'
+
+/-- A `CtorHeaded` type is not a Π-telescope ending in a variable, so instantiation cannot
+create new leading binders. -/
+theorem CtorHeaded.forallE {A B : VExpr} (h : (VExpr.forallE A B).CtorHeaded) : B.CtorHeaded := h
+
+theorem getAppFn_inst_const : ∀ {f : VExpr} {I : Name} {us : List VLevel},
+    f.getAppFn = .const I us → ∀ (e₀ : VExpr) (k : Nat), (f.inst e₀ k).getAppFn = .const I us
+  | .app f _, _, _, h, e₀, k => getAppFn_inst_const (f := f) h e₀ k
+  | .const .., _, _, h, _, _ => h
+  | .bvar _, _, _, h, _, _ | .sort _, _, _, h, _, _ | .lam .., _, _, h, _, _
+  | .forallE .., _, _, h, _, _ => nomatch h
+
+theorem CtorHeaded.inst : ∀ {T : VExpr}, T.CtorHeaded → ∀ (e₀ : VExpr) (k : Nat),
+    (T.inst e₀ k).CtorHeaded
+  | .forallE _ B, h, e₀, k => CtorHeaded.inst (T := B) h e₀ (k+1)
+  | .const .., ⟨I, us, h⟩, _, _ => ⟨I, us, h⟩
+  | .app .., ⟨I, us, h⟩, e₀, k => ⟨I, us, getAppFn_inst_const h e₀ k⟩
+  | .bvar _, ⟨_, _, h⟩, _, _ | .sort _, ⟨_, _, h⟩, _, _ | .lam .., ⟨_, _, h⟩, _, _ => nomatch h
+
+theorem getAppFn_instL_const : ∀ {f : VExpr} {I : Name} {us : List VLevel},
+    f.getAppFn = .const I us → ∀ ls : List VLevel,
+      (f.instL ls).getAppFn = .const I (us.map (VLevel.inst ls))
+  | .app f _, _, _, h, ls => getAppFn_instL_const (f := f) h ls
+  | .const .., _, _, h, _ => by cases h; rfl
+  | .bvar _, _, _, h, _ | .sort _, _, _, h, _ | .lam .., _, _, h, _
+  | .forallE .., _, _, h, _ => nomatch h
+
+theorem CtorHeaded.instL : ∀ {T : VExpr}, T.CtorHeaded → ∀ ls : List VLevel, (T.instL ls).CtorHeaded
+  | .forallE _ B, h, ls => CtorHeaded.instL (T := B) h ls
+  | .const .., _, _ => ⟨_, _, rfl⟩
+  | .app .., ⟨_, _, h⟩, ls => ⟨_, _, getAppFn_instL_const h ls⟩
+  | .bvar _, ⟨_, _, h⟩, _ | .sort _, ⟨_, _, h⟩, _ | .lam .., ⟨_, _, h⟩, _ => nomatch h
+
+theorem piBinders_inst_of_ctorHeaded : ∀ {T : VExpr}, T.CtorHeaded → ∀ (e₀ : VExpr) (k : Nat),
+    (T.inst e₀ k).piBinders = T.piBinders.mapIdx fun j A => A.inst e₀ (k + j)
+  | .forallE A B, h, e₀, k => by
+    simp only [inst, piBinders, List.mapIdx_cons, piBinders_inst_of_ctorHeaded (T := B) h,
+      Nat.add_zero]
+    have e : (fun (j : Nat) (A : VExpr) => A.inst e₀ (k + 1 + j))
+        = fun j A => A.inst e₀ (k + (j + 1)) := by
+      funext j A; rw [Nat.add_right_comm]; rfl
+    rw [e]
+  | .bvar _, ⟨_, _, h⟩, _, _ => nomatch h
+  | .sort _, _, _, _ | .const .., _, _, _ | .app .., _, _, _ | .lam .., _, _, _ => rfl
+
+theorem piArity_inst_of_ctorHeaded {T : VExpr} (h : T.CtorHeaded) (e₀ : VExpr) (k : Nat) :
+    (T.inst e₀ k).piArity = T.piArity := by
+  rw [← piBinders_length, piBinders_inst_of_ctorHeaded h, List.length_mapIdx, piBinders_length]
 
 /-- The head constant of an application spine, if any. -/
 def headConst? (e : VExpr) : Option Name :=

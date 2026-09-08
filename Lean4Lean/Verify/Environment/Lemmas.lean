@@ -1001,7 +1001,7 @@ theorem VEnv.IsDefEqU.betaN {env : VEnv} {U : Nat} {Γ : List VExpr}
     simp only [List.foldr_cons, VExpr.mkApps_cons] at H ⊢
     obtain ⟨_, H'⟩ := H.mkApps_inv_head henv hΓ
     have h2 := IsDefEqU.mkApps_congr henv hΓ (IsDefEqU.beta_app henv hΓ H') H
-    rw [VExpr.foldr_lam_inst_aux] at h2
+    rw [VExpr.foldr_lam_inst] at h2
     simp only [Nat.zero_add] at h2
     obtain ⟨_, H2⟩ := h2
     have h3 := betaN henv hΓ (by simpa using hl) H2.hasType.2

@@ -137,8 +137,8 @@ def binderArity? (ty : VExpr) (k : Nat) : Option Nat := ty.piBinders[k]?.map piA
 
 /-! ### Unfolding facts -/
 
-theorem projFn_eq : projFn S usS uss ps Fs i = projFnOf S usS uss ps Fs i (projFns S usS uss ps Fs i) :=
-  rfl
+theorem projFn_eq :
+    projFn S usS uss ps Fs i = projFnOf S usS uss ps Fs i (projFns S usS uss ps Fs i) := rfl
 
 theorem projFns_succ :
     projFns S usS uss ps Fs (i+1) = projFns S usS uss ps Fs i ++ [projFn S usS uss ps Fs i] := rfl
@@ -152,80 +152,29 @@ theorem projFns_succ :
 @[simp] theorem projMotiveBody_zero :
     projMotiveBody S usS uss ps Fs 0 = (Fs.getD 0 default).lift := rfl
 
-/-! ### Structural lemmas for `mkApps` and `fieldSelector`
+/-! ### The builders under substitution
 
-Weakening / instantiation / level-instantiation distribute over `mkApps` (a left fold of
-`.app`) and over `fieldSelector` (a right fold of `.lam` selecting a bound variable). -/
+`VExpr.lift'` and `VExpr.inst` are both instances of `VExpr.subst` (`lift'_eq_subst`,
+`instN_eq`), and every builder below shifts its pieces by one binder per field. So each is
+proved once against `subst`, with `σ.liftN j` for the piece standing under `j` binders, and
+the weakening and instantiation forms are read off: `Lift.consN j` for the first, `Subst.liftN`
+at `k + j` for the second. Level instantiation substitutes levels, not terms, so the `instL`
+family keeps its own proofs. -/
 
-theorem mkApps_lift' {f : VExpr} {args : List VExpr} {ρ : Lift} :
-    (f.mkApps args).lift' ρ = (f.lift' ρ).mkApps (args.map (·.lift' ρ)) := by
-  induction args generalizing f with
-  | nil => rfl
-  | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
+theorem foldr_lam_subst : ∀ (Fs : List VExpr) (base : VExpr) (σ : Subst),
+    (List.foldr lam base Fs).subst σ =
+      List.foldr lam (base.subst (σ.liftN Fs.length))
+        (Fs.mapIdx fun j F => F.subst (σ.liftN j))
+  | [], _, _ => rfl
+  | F :: Fs, base, σ => by
+    simp only [List.foldr_cons, subst, List.mapIdx_cons, List.length_cons,
+      foldr_lam_subst Fs base σ.lift, Subst.lift_liftN]
+    rfl
 
-theorem mkApps_inst {f : VExpr} {args : List VExpr} {e₀ : VExpr} {k : Nat} :
-    (f.mkApps args).inst e₀ k = (f.inst e₀ k).mkApps (args.map (·.inst e₀ k)) := by
-  induction args generalizing f with
-  | nil => rfl
-  | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
-
-theorem mkApps_instL {f : VExpr} {args : List VExpr} {ls : List VLevel} :
-    (f.mkApps args).instL ls = (f.instL ls).mkApps (args.map (·.instL ls)) := by
-  induction args generalizing f with
-  | nil => rfl
-  | cons a as ih => simp [VExpr.mkApps, List.foldl] at *; rw [ih]; rfl
-
-theorem consN_fixes : ∀ (m : Nat) (ρ : Lift), (ρ.consN m).Fixes m
-  | 0, _ => trivial
-  | m+1, ρ => consN_fixes m ρ
-
-theorem foldr_lam_lift'_aux : ∀ (Fs : List VExpr) (base : VExpr) (ρ : Lift) (d : Nat),
-    (List.foldr lam base Fs).lift' (ρ.consN d) =
-      List.foldr lam (base.lift' (ρ.consN (d + Fs.length)))
-        (Fs.mapIdx fun j F => F.lift' (ρ.consN (d + j))) := by
-  intro Fs; induction Fs with
-  | nil => intro base ρ d; simp
-  | cons F Fs ih =>
-    intro base ρ d
-    simp only [List.foldr_cons, lift', List.mapIdx_cons, List.length_cons, Nat.add_zero]
-    rw [show (ρ.consN d).cons = ρ.consN (d+1) from rfl, ih base ρ (d+1)]
-    have e1 : d + 1 + Fs.length = d + (Fs.length + 1) := by omega
-    have e2 : (fun (j : Nat) (F : VExpr) => F.lift' (ρ.consN (d + 1 + j)))
-            = (fun (j : Nat) (F : VExpr) => F.lift' (ρ.consN (d + (j + 1)))) := by
-      funext j F; rw [show d + 1 + j = d + (j + 1) from by omega]
-    rw [e1, e2]
-
-theorem foldr_lam_lift' (Fs : List VExpr) (base : VExpr) (ρ : Lift) :
-    (List.foldr lam base Fs).lift' ρ =
-      List.foldr lam (base.lift' (ρ.consN Fs.length)) (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) := by
-  have := foldr_lam_lift'_aux Fs base ρ 0; simpa using this
-
-theorem fieldSelector_lift' {Fs : List VExpr} {ρ : Lift} {i : Nat} (hi : i < Fs.length) :
-    (fieldSelector Fs i).lift' ρ = fieldSelector (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i := by
-  rw [fieldSelector, fieldSelector, foldr_lam_lift', List.length_mapIdx, lift',
-      (consN_fixes _ _).liftVar_eq (show Fs.length - 1 - i < Fs.length by omega)]
-
-theorem foldr_lam_inst_aux : ∀ (Fs : List VExpr) (base e₀ : VExpr) (k : Nat),
+theorem foldr_lam_inst {Fs : List VExpr} {base e₀ : VExpr} {k : Nat} :
     (List.foldr lam base Fs).inst e₀ k =
       List.foldr lam (base.inst e₀ (k + Fs.length)) (Fs.mapIdx fun j F => F.inst e₀ (k + j)) := by
-  intro Fs; induction Fs with
-  | nil => intro base e₀ k; simp
-  | cons F Fs ih =>
-    intro base e₀ k
-    simp only [List.foldr_cons, inst, List.mapIdx_cons, List.length_cons, Nat.add_zero]
-    rw [ih base e₀ (k+1)]
-    have e1 : k + 1 + Fs.length = k + (Fs.length + 1) := by omega
-    have e2 : (fun (j : Nat) (F : VExpr) => F.inst e₀ (k + 1 + j))
-            = (fun (j : Nat) (F : VExpr) => F.inst e₀ (k + (j + 1))) := by
-      funext j F; rw [show k + 1 + j = k + (j + 1) from by omega]
-    rw [e1, e2]
-
-theorem fieldSelector_inst {Fs : List VExpr} {e₀ : VExpr} {k i : Nat} (hi : i < Fs.length) :
-    (fieldSelector Fs i).inst e₀ k = fieldSelector (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i := by
-  rw [fieldSelector, fieldSelector, foldr_lam_inst_aux, List.length_mapIdx]
-  have : (bvar (Fs.length - 1 - i)).inst e₀ (k + Fs.length) = bvar (Fs.length - 1 - i) := by
-    simp only [inst, instVar]; rw [if_pos (by omega)]
-  rw [this]
+  simp only [instN_eq, foldr_lam_subst, Subst.liftN_liftN]
 
 theorem foldr_lam_instL {Fs : List VExpr} {base : VExpr} {ls : List VLevel} :
     (List.foldr lam base Fs).instL ls = List.foldr lam (base.instL ls) (Fs.map (·.instL ls)) := by
@@ -233,89 +182,37 @@ theorem foldr_lam_instL {Fs : List VExpr} {base : VExpr} {ls : List VLevel} :
   | nil => rfl
   | cons F Fs ih => simp [List.foldr, instL, ih]
 
+theorem fieldSelector_subst {Fs : List VExpr} {σ : Subst} {i : Nat} (hi : i < Fs.length) :
+    (fieldSelector Fs i).subst σ =
+      fieldSelector (Fs.mapIdx fun j F => F.subst (σ.liftN j)) i := by
+  rw [fieldSelector, fieldSelector, List.length_mapIdx, foldr_lam_subst, subst_bvar,
+    Subst.Fixes.liftN _ _ (show Fs.length - 1 - i < Fs.length by omega)]
+
 theorem fieldSelector_instL {Fs : List VExpr} {ls : List VLevel} {i : Nat} :
     (fieldSelector Fs i).instL ls = fieldSelector (Fs.map (·.instL ls)) i := by
   rw [fieldSelector, fieldSelector, foldr_lam_instL]; simp [instL, List.length_map]
 
-/-- Weakening / instantiation commute with the `.lift` sitting under one extra binder. -/
-theorem lift_lift'_cons {b : VExpr} {ρ : Lift} :
-    (b.lift).lift' ρ.cons = (b.lift' ρ).lift := by
-  rw [lift_eq_lift', lift_eq_lift', ← lift'_comp, ← lift'_comp]
-  simp [Lift.comp, Lift.refl_comp]
+/-! ### `instFields` under substitution and level instantiation
 
-theorem lift_inst_cons {b e₀ : VExpr} {k : Nat} :
-    (b.lift).inst e₀ (k+1) = (b.inst e₀ k).lift := (lift_instN_lo ..).symm
-
-/-! ### Weakening under `k` binders commutes with instantiation -/
-
-theorem _root_.Lean4Lean.Lift.consN_cons (ρ : Lift) : ∀ j : Nat, (Lift.cons ρ).consN j = ρ.consN (j+1)
-  | 0 => rfl
-  | j+1 => by rw [Lift.consN, Lift.consN_cons ρ j]; rfl
-
-theorem _root_.Lean4Lean.Lift.liftVar_consN_lt {ρ : Lift} {m i : Nat} (h : i < m) :
-    (ρ.consN m).liftVar i = i :=
-  (consN_fixes m ρ).liftVar_eq h
-
-theorem _root_.Lean4Lean.Lift.liftVar_consN_succ (ρ : Lift) (m i : Nat) :
-    (ρ.consN (m+1)).liftVar (i+1) = (ρ.consN m).liftVar i + 1 := rfl
-
-/-- `lift'` under `m` binders commutes with `inst` at index `m`; the `m = 0` case is
-`lift'_inst_hi`. -/
-theorem lift'_instN_hi (e1 e2 : VExpr) (ρ : Lift) (m : Nat) :
-    (e1.inst e2 m).lift' (ρ.consN m) = (e1.lift' (ρ.consN (m+1))).inst (e2.lift' ρ) m := by
-  induction e1 generalizing m with
-  | bvar i =>
-    simp only [inst, lift']
-    rcases Nat.lt_trichotomy i m with h | rfl | h
-    · rw [Lift.liftVar_consN_lt (Nat.lt_succ_of_lt h)]
-      simp only [instVar, if_pos h, lift', Lift.liftVar_consN_lt h]
-    · rw [Lift.liftVar_consN_lt (Nat.lt_succ_self i)]
-      simp only [instVar, Nat.lt_irrefl, ite_true, ite_false]
-      rw [← lift'_consN_skipN (n := i) (k := 0) (e := e2),
-        ← lift'_consN_skipN (n := i) (k := 0) (e := e2.lift' ρ)]
-      show (e2.lift' (Lift.skipN .refl i)).lift' (ρ.consN i) = (e2.lift' ρ).lift' (Lift.skipN .refl i)
-      rw [← lift'_comp, ← lift'_comp, Lift.skipN_comp_consN, Lift.comp_skipN, Lift.refl_comp]
-      rfl
-    · obtain ⟨i, rfl⟩ : ∃ i', i = i' + 1 := ⟨i - 1, by omega⟩
-      rw [Lift.liftVar_consN_succ]
-      have hle : m ≤ (ρ.consN m).liftVar i := Nat.le_trans (Nat.le_of_lt_succ h) Lift.le_liftVar
-      simp only [instVar]
-      rw [if_neg (by omega), if_neg (by omega), if_neg (by omega), if_neg (by omega)]
-      simp
-  | sort _ => rfl
-  | const _ _ => rfl
-  | app f a ihf iha => simp only [inst, lift', ihf, iha]
-  | lam A b ihA ihb => simp only [inst, lift', ihA]; exact congrArg _ (ihb (m+1))
-  | forallE A b ihA ihb => simp only [inst, lift', ihA]; exact congrArg _ (ihb (m+1))
-
-/-- `liftN 1 _ i` (inserting a binder at depth `i`) commutes with `lift'` past it; generalises
-`lift_lift'_cons`. -/
-theorem liftN_lift'_consN (e : VExpr) (ρ : Lift) (i : Nat) :
-    (e.liftN 1 i).lift' (ρ.consN (i+1)) = (e.lift' (ρ.consN i)).liftN 1 i := by
-  rw [← lift'_consN_skipN, ← lift'_consN_skipN, ← lift'_comp, ← lift'_comp,
-    ← Lift.consN_cons, ← Lift.consN_comp, ← Lift.consN_comp]
-  simp [Lift.comp]
-
-/-! ### `instFields` under weakening / instantiation / level instantiation -/
+`instFields` and `VExpr.insts` are the two conventions for substituting a telescope, and both
+are kept. `insts` is the β-chain convention: it substitutes at index `0` once per binder, so
+its `j`-th argument must live under the binders still standing when its turn comes.
+`instFields` substitutes at the descending indices `m-1, …, 0`, so all of its arguments live
+over `Γ` alone. The two therefore differ by a relifting of each argument past the binders
+`insts` has not yet consumed, and neither is a special case of the other; the projection
+builders take their `P_j` over `Γ`, so they use `instFields`. -/
 
 @[simp] theorem instFields_nil (F : VExpr) : instFields F [] = F := rfl
 
 theorem instFields_cons (F P : VExpr) (Ps : List VExpr) :
     instFields F (P :: Ps) = instFields (F.inst P Ps.length) Ps := rfl
 
-theorem instFields_inst : ∀ (Ps : List VExpr) (F e₀ : VExpr) (k : Nat),
-    (instFields F Ps).inst e₀ k = instFields (F.inst e₀ (k + Ps.length)) (Ps.map (·.inst e₀ k))
-  | [], _, _, _ => rfl
-  | P :: Ps, F, e₀, k => by
-    simp only [instFields_cons, List.map_cons, List.length_cons, List.length_map]
-    rw [instFields_inst Ps, inst_inst_hi, Nat.add_assoc]
-
-theorem instFields_lift' : ∀ (Ps : List VExpr) (F : VExpr) (ρ : Lift),
-    (instFields F Ps).lift' ρ = instFields (F.lift' (ρ.consN Ps.length)) (Ps.map (·.lift' ρ))
+theorem instFields_subst : ∀ (Ps : List VExpr) (F : VExpr) (σ : Subst),
+    (instFields F Ps).subst σ = instFields (F.subst (σ.liftN Ps.length)) (Ps.map (·.subst σ))
   | [], _, _ => rfl
-  | P :: Ps, F, ρ => by
+  | P :: Ps, F, σ => by
     simp only [instFields_cons, List.map_cons, List.length_cons, List.length_map]
-    rw [instFields_lift' Ps, lift'_instN_hi]
+    rw [instFields_subst Ps, subst_instN]
 
 theorem instFields_instL : ∀ (Ps : List VExpr) (F : VExpr) (ls : List VLevel),
     (instFields F Ps).instL ls = instFields (F.instL ls) (Ps.map (·.instL ls))
@@ -324,87 +221,26 @@ theorem instFields_instL : ∀ (Ps : List VExpr) (F : VExpr) (ls : List VLevel),
     simp only [instFields_cons, List.map_cons, List.length_map]
     rw [instFields_instL Ps, instL_instN]
 
-/-! ### `piBinders`, `piArity` and `instPis` under weakening / instantiation -/
+/-! ### `instPis` under weakening / instantiation / level instantiation -/
 
-theorem piBinders_lift' : ∀ (T : VExpr) (ρ : Lift),
-    (T.lift' ρ).piBinders = T.piBinders.mapIdx fun j A => A.lift' (ρ.consN j)
-  | .forallE A B, ρ => by
-    simp only [lift', piBinders, List.mapIdx_cons, piBinders_lift' B, Lift.consN_cons]; rfl
-  | .bvar _, _ | .sort _, _ | .const .., _ | .app .., _ | .lam .., _ => rfl
-
-/-- A `CtorHeaded` type is not a Π-telescope ending in a variable, so instantiation cannot
-create new leading binders. -/
-theorem CtorHeaded.forallE {A B : VExpr} (h : (VExpr.forallE A B).CtorHeaded) : B.CtorHeaded := h
-
-theorem getAppFn_inst_const : ∀ {f : VExpr} {I : Name} {us : List VLevel},
-    f.getAppFn = .const I us → ∀ (e₀ : VExpr) (k : Nat), (f.inst e₀ k).getAppFn = .const I us
-  | .app f _, _, _, h, e₀, k => getAppFn_inst_const (f := f) h e₀ k
-  | .const .., _, _, h, _, _ => h
-  | .bvar _, _, _, h, _, _ | .sort _, _, _, h, _, _ | .lam .., _, _, h, _, _
-  | .forallE .., _, _, h, _, _ => nomatch h
-
-theorem CtorHeaded.inst : ∀ {T : VExpr}, T.CtorHeaded → ∀ (e₀ : VExpr) (k : Nat),
-    (T.inst e₀ k).CtorHeaded
-  | .forallE _ B, h, e₀, k => CtorHeaded.inst (T := B) h e₀ (k+1)
-  | .const .., ⟨I, us, h⟩, _, _ => ⟨I, us, h⟩
-  | .app .., ⟨I, us, h⟩, e₀, k => ⟨I, us, getAppFn_inst_const h e₀ k⟩
-  | .bvar _, ⟨_, _, h⟩, _, _ | .sort _, ⟨_, _, h⟩, _, _ | .lam .., ⟨_, _, h⟩, _, _ => nomatch h
-
-theorem getAppFn_instL_const : ∀ {f : VExpr} {I : Name} {us : List VLevel},
-    f.getAppFn = .const I us → ∀ ls : List VLevel,
-      (f.instL ls).getAppFn = .const I (us.map (VLevel.inst ls))
-  | .app f _, _, _, h, ls => getAppFn_instL_const (f := f) h ls
-  | .const .., _, _, h, _ => by cases h; rfl
-  | .bvar _, _, _, h, _ | .sort _, _, _, h, _ | .lam .., _, _, h, _
-  | .forallE .., _, _, h, _ => nomatch h
-
-theorem CtorHeaded.instL : ∀ {T : VExpr}, T.CtorHeaded → ∀ ls : List VLevel, (T.instL ls).CtorHeaded
-  | .forallE _ B, h, ls => CtorHeaded.instL (T := B) h ls
-  | .const .., _, _ => ⟨_, _, rfl⟩
-  | .app .., ⟨_, _, h⟩, ls => ⟨_, _, getAppFn_instL_const h ls⟩
-  | .bvar _, ⟨_, _, h⟩, _ | .sort _, ⟨_, _, h⟩, _ | .lam .., ⟨_, _, h⟩, _ => nomatch h
-
-theorem piBinders_inst_of_ctorHeaded : ∀ {T : VExpr}, T.CtorHeaded → ∀ (e₀ : VExpr) (k : Nat),
-    (T.inst e₀ k).piBinders = T.piBinders.mapIdx fun j A => A.inst e₀ (k + j)
-  | .forallE A B, h, e₀, k => by
-    simp only [inst, piBinders, List.mapIdx_cons, piBinders_inst_of_ctorHeaded (T := B) h,
-      Nat.add_zero]
-    have e : (fun (j : Nat) (A : VExpr) => A.inst e₀ (k + 1 + j))
-        = fun j A => A.inst e₀ (k + (j + 1)) := by
-      funext j A; rw [Nat.add_right_comm]; rfl
-    rw [e]
-  | .bvar _, ⟨_, _, h⟩, _, _ => nomatch h
-  | .sort _, _, _, _ | .const .., _, _, _ | .app .., _, _, _ | .lam .., _, _, _ => rfl
-
-theorem piBinders_instL : ∀ (T : VExpr) (ls : List VLevel),
-    (T.instL ls).piBinders = T.piBinders.map (·.instL ls)
-  | .forallE A B, ls => by simp only [instL, piBinders, List.map_cons, piBinders_instL B]
-  | .bvar _, _ | .sort _, _ | .const .., _ | .app .., _ | .lam .., _ => rfl
-
-theorem piArity_inst_of_ctorHeaded {T : VExpr} (h : T.CtorHeaded) (e₀ : VExpr) (k : Nat) :
-    (T.inst e₀ k).piArity = T.piArity := by
-  rw [← piBinders_length, piBinders_inst_of_ctorHeaded h, List.length_mapIdx, piBinders_length]
-
-theorem piArity_instL (T : VExpr) (ls : List VLevel) : (T.instL ls).piArity = T.piArity := by
-  rw [← piBinders_length, piBinders_instL, List.length_map, piBinders_length]
-
-theorem instPis_lift' : ∀ (T : VExpr) (ps : List VExpr) {cty : VExpr} (ρ : Lift),
-    T.instPis ps = some cty → (T.lift' ρ).instPis (ps.map (·.lift' ρ)) = some (cty.lift' ρ)
+theorem instPis_subst : ∀ (T : VExpr) (ps : List VExpr) {cty : VExpr} (σ : Subst),
+    T.instPis ps = some cty → (T.subst σ).instPis (ps.map (·.subst σ)) = some (cty.subst σ)
   | _, [], _, _, h => by cases h; rfl
-  | .forallE _ B, a :: as, _, ρ, h => by
-    simp only [instPis] at h; simp only [lift', List.map_cons, instPis]
-    rw [← lift'_inst_hi]; exact instPis_lift' _ _ ρ h
+  | .forallE _ B, a :: as, _, σ, h => by
+    simp only [instPis] at h; simp only [subst, List.map_cons, instPis]
+    rw [← subst_inst]; exact instPis_subst _ _ σ h
   | .bvar _, _ :: _, _, _, h | .sort _, _ :: _, _, _, h | .const .., _ :: _, _, _, h
   | .app .., _ :: _, _, _, h | .lam .., _ :: _, _, _, h => nomatch h
 
-theorem instPis_inst : ∀ (T : VExpr) (ps : List VExpr) {cty : VExpr} (e₀ : VExpr) (k : Nat),
-    T.instPis ps = some cty → (T.inst e₀ k).instPis (ps.map (·.inst e₀ k)) = some (cty.inst e₀ k)
-  | _, [], _, _, _, h => by cases h; rfl
-  | .forallE _ B, a :: as, _, e₀, k, h => by
-    simp only [instPis] at h; simp only [inst, List.map_cons, instPis]
-    rw [← inst0_inst_hi]; exact instPis_inst _ _ e₀ k h
-  | .bvar _, _ :: _, _, _, _, h | .sort _, _ :: _, _, _, _, h | .const .., _ :: _, _, _, _, h
-  | .app .., _ :: _, _, _, _, h | .lam .., _ :: _, _, _, _, h => nomatch h
+theorem instPis_lift' (T : VExpr) (ps : List VExpr) {cty : VExpr} (ρ : Lift)
+    (h : T.instPis ps = some cty) :
+    (T.lift' ρ).instPis (ps.map (·.lift' ρ)) = some (cty.lift' ρ) := by
+  simpa only [lift'_eq_subst] using instPis_subst T ps _ h
+
+theorem instPis_inst (T : VExpr) (ps : List VExpr) {cty : VExpr} (e₀ : VExpr) (k : Nat)
+    (h : T.instPis ps = some cty) :
+    (T.inst e₀ k).instPis (ps.map (·.inst e₀ k)) = some (cty.inst e₀ k) := by
+  simpa only [instN_eq] using instPis_subst T ps _ h
 
 theorem instPis_instL : ∀ (T : VExpr) (ps : List VExpr) {cty : VExpr} (ls : List VLevel),
     T.instPis ps = some cty → (T.instL ls).instPis (ps.map (·.instL ls)) = some (cty.instL ls)
@@ -435,64 +271,35 @@ theorem instPis_piArity : ∀ (T : VExpr) (ps : List VExpr) {cty : VExpr},
   | .bvar _, _ :: _, _, _, h | .sort _, _ :: _, _, _, h | .const .., _ :: _, _, _, h
   | .app .., _ :: _, _, _, h | .lam .., _ :: _, _, _, h => nomatch h
 
-/-! ### The projection builders under weakening / instantiation / level instantiation -/
+/-! ### The projection builders under substitution and level instantiation -/
 
-theorem getD_mapIdx {f : Nat → VExpr → VExpr} (hf : ∀ i, f i default = default)
-    (Fs : List VExpr) (i : Nat) : (Fs.mapIdx f).getD i default = f i (Fs.getD i default) := by
-  simp only [List.getD_eq_getElem?_getD, List.getElem?_mapIdx]
-  cases Fs[i]? <;> simp [hf]
-
-theorem getD_map {f : VExpr → VExpr} (hf : f default = default) (Fs : List VExpr) (i : Nat) :
-    (Fs.map f).getD i default = f (Fs.getD i default) := by
-  simp only [List.getD_eq_getElem?_getD, List.getElem?_map]
-  cases Fs[i]? <;> simp [hf]
-
-theorem projMotiveBodyOf_lift' {Fs : List VExpr} {i : Nat} {Ps : List VExpr} (ρ : Lift)
+theorem projMotiveBodyOf_subst {Fs : List VExpr} {i : Nat} {Ps : List VExpr} (σ : Subst)
     (hPs : Ps.length = i) :
-    (projMotiveBodyOf Fs i Ps).lift' ρ.cons =
-      projMotiveBodyOf (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i (Ps.map (·.lift' ρ)) := by
+    (projMotiveBodyOf Fs i Ps).subst σ.lift =
+      projMotiveBodyOf (Fs.mapIdx fun j F => F.subst (σ.liftN j)) i (Ps.map (·.subst σ)) := by
   unfold projMotiveBodyOf
-  rw [instFields_lift', List.length_map, hPs, Lift.consN_cons, liftN_lift'_consN,
-    getD_mapIdx (fun _ => rfl)]
+  rw [instFields_subst, List.length_map, hPs, Subst.lift_liftN, liftN_subst_liftN,
+    List.getD_mapIdx (α := VExpr) (β := VExpr) (fun _ => rfl)]
   congr 1
-  simp only [List.map_map, Function.comp_def, lift', lift_lift'_cons, Lift.liftVar]
-
-theorem projMotiveBodyOf_inst {Fs : List VExpr} {i : Nat} {Ps : List VExpr} (e₀ : VExpr) (k : Nat)
-    (hPs : Ps.length = i) :
-    (projMotiveBodyOf Fs i Ps).inst e₀ (k+1) =
-      projMotiveBodyOf (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i (Ps.map (·.inst e₀ k)) := by
-  unfold projMotiveBodyOf
-  rw [instFields_inst, List.length_map, hPs, getD_mapIdx (fun _ => rfl),
-    show k + 1 + i = 1 + (k + i) by omega, ← liftN_instN_lo _ _ _ _ _ (Nat.le_add_left i k)]
-  congr 1
-  simp only [List.map_map, Function.comp_def, inst, lift_inst_cons, instVar_lower]
+  simp only [List.map_map, Function.comp_def, subst_app, subst_bvar, Subst.lift, lift_subst_lift]
 
 theorem projMotiveBodyOf_instL {Fs : List VExpr} {i : Nat} {Ps : List VExpr} (ls : List VLevel) :
     (projMotiveBodyOf Fs i Ps).instL ls =
       projMotiveBodyOf (Fs.map (·.instL ls)) i (Ps.map (·.instL ls)) := by
   unfold projMotiveBodyOf
-  rw [instFields_instL, getD_map rfl, instL_liftN]
+  rw [instFields_instL, List.getD_map (α := VExpr) (β := VExpr) rfl, instL_liftN]
   congr 1
   simp only [List.map_map, Function.comp_def, instL, instL_liftN]
 
-theorem projFnOf_lift' {S usS uss ps Fs i Ps} (ρ : Lift) (hi : i < Fs.length) (hPs : Ps.length = i) :
-    (projFnOf S usS uss ps Fs i Ps).lift' ρ =
-      projFnOf S usS uss (ps.map (·.lift' ρ)) (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i
-        (Ps.map (·.lift' ρ)) := by
-  unfold projFnOf
-  rw [mkApps_lift']
-  simp only [List.map_append, List.map_cons, List.map_nil, lift', mkApps_lift',
-    projMotiveBodyOf_lift' ρ hPs, fieldSelector_lift' hi]
-
-theorem projFnOf_inst {S usS uss ps Fs i Ps} (e₀ : VExpr) (k : Nat) (hi : i < Fs.length)
+theorem projFnOf_subst {S usS uss ps Fs i Ps} (σ : Subst) (hi : i < Fs.length)
     (hPs : Ps.length = i) :
-    (projFnOf S usS uss ps Fs i Ps).inst e₀ k =
-      projFnOf S usS uss (ps.map (·.inst e₀ k)) (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i
-        (Ps.map (·.inst e₀ k)) := by
+    (projFnOf S usS uss ps Fs i Ps).subst σ =
+      projFnOf S usS uss (ps.map (·.subst σ)) (Fs.mapIdx fun j F => F.subst (σ.liftN j)) i
+        (Ps.map (·.subst σ)) := by
   unfold projFnOf
-  rw [mkApps_inst]
-  simp only [List.map_append, List.map_cons, List.map_nil, inst, mkApps_inst,
-    projMotiveBodyOf_inst e₀ k hPs, fieldSelector_inst hi]
+  rw [mkApps_subst]
+  simp only [List.map_append, List.map_cons, List.map_nil, subst, mkApps_subst,
+    projMotiveBodyOf_subst σ hPs, fieldSelector_subst hi]
 
 theorem projFnOf_instL {S usS uss ps Fs i Ps} (ls : List VLevel) :
     (projFnOf S usS uss ps Fs i Ps).instL ls =
@@ -503,24 +310,14 @@ theorem projFnOf_instL {S usS uss ps Fs i Ps} (ls : List VLevel) :
   simp only [List.map_append, List.map_cons, List.map_nil, instL, mkApps_instL,
     projMotiveBodyOf_instL ls, fieldSelector_instL]
 
-theorem projFns_lift' {S usS uss ps Fs} (ρ : Lift) : ∀ {i : Nat}, i ≤ Fs.length →
-    (projFns S usS uss ps Fs i).map (·.lift' ρ) =
-      projFns S usS uss (ps.map (·.lift' ρ)) (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i
+theorem projFns_subst {S usS uss ps Fs} (σ : Subst) : ∀ {i : Nat}, i ≤ Fs.length →
+    (projFns S usS uss ps Fs i).map (·.subst σ) =
+      projFns S usS uss (ps.map (·.subst σ)) (Fs.mapIdx fun j F => F.subst (σ.liftN j)) i
   | 0, _ => rfl
   | i+1, hi => by
-    rw [projFns_succ, List.map_append, projFns_lift' ρ (Nat.le_of_succ_le hi), projFn_eq,
-      List.map_cons, List.map_nil, projFnOf_lift' ρ hi projFns_length,
-      projFns_lift' ρ (Nat.le_of_succ_le hi)]
-    rfl
-
-theorem projFns_inst {S usS uss ps Fs} (e₀ : VExpr) (k : Nat) : ∀ {i : Nat}, i ≤ Fs.length →
-    (projFns S usS uss ps Fs i).map (·.inst e₀ k) =
-      projFns S usS uss (ps.map (·.inst e₀ k)) (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i
-  | 0, _ => rfl
-  | i+1, hi => by
-    rw [projFns_succ, List.map_append, projFns_inst e₀ k (Nat.le_of_succ_le hi), projFn_eq,
-      List.map_cons, List.map_nil, projFnOf_inst e₀ k hi projFns_length,
-      projFns_inst e₀ k (Nat.le_of_succ_le hi)]
+    rw [projFns_succ, List.map_append, projFns_subst σ (Nat.le_of_succ_le hi), projFn_eq,
+      List.map_cons, List.map_nil, projFnOf_subst σ hi projFns_length,
+      projFns_subst σ (Nat.le_of_succ_le hi)]
     rfl
 
 theorem projFns_instL {S usS uss ps Fs} (ls : List VLevel) : ∀ {i : Nat},
@@ -533,16 +330,23 @@ theorem projFns_instL {S usS uss ps Fs} (ls : List VLevel) : ∀ {i : Nat},
       List.map_cons, List.map_nil, projFnOf_instL ls, projFns_instL ls]
     rfl
 
+theorem projFn_subst {S usS uss ps Fs i} (σ : Subst) (hi : i < Fs.length) :
+    (projFn S usS uss ps Fs i).subst σ =
+      projFn S usS uss (ps.map (·.subst σ)) (Fs.mapIdx fun j F => F.subst (σ.liftN j)) i := by
+  rw [projFn_eq, projFn_eq, projFnOf_subst σ hi projFns_length,
+    projFns_subst σ (Nat.le_of_lt hi)]
+
 theorem projFn_lift' {S usS uss ps Fs i} (ρ : Lift) (hi : i < Fs.length) :
     (projFn S usS uss ps Fs i).lift' ρ =
       projFn S usS uss (ps.map (·.lift' ρ)) (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i := by
-  rw [projFn_eq, projFn_eq, projFnOf_lift' ρ hi projFns_length, projFns_lift' ρ (Nat.le_of_lt hi)]
+  rw [lift'_eq_subst, projFn_subst _ hi]
+  simp only [lift'_eq_subst, Subst.liftN_lift_l_id]
 
 theorem projFn_inst {S usS uss ps Fs i} (e₀ : VExpr) (k : Nat) (hi : i < Fs.length) :
     (projFn S usS uss ps Fs i).inst e₀ k =
       projFn S usS uss (ps.map (·.inst e₀ k)) (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i := by
-  rw [projFn_eq, projFn_eq, projFnOf_inst e₀ k hi projFns_length,
-    projFns_inst e₀ k (Nat.le_of_lt hi)]
+  rw [instN_eq, projFn_subst _ hi]
+  simp only [instN_eq, Subst.liftN_liftN]
 
 theorem projFn_instL {S usS uss ps Fs i} (ls : List VLevel) :
     (projFn S usS uss ps Fs i).instL ls =
@@ -550,17 +354,27 @@ theorem projFn_instL {S usS uss ps Fs i} (ls : List VLevel) :
         (ps.map (·.instL ls)) (Fs.map (·.instL ls)) i := by
   rw [projFn_eq, projFn_eq, projFnOf_instL ls, projFns_instL ls]
 
+theorem projMotiveBody_subst {S usS uss ps Fs i} (σ : Subst) (hi : i ≤ Fs.length) :
+    (projMotiveBody S usS uss ps Fs i).subst σ.lift =
+      projMotiveBody S usS uss (ps.map (·.subst σ))
+        (Fs.mapIdx fun j F => F.subst (σ.liftN j)) i := by
+  unfold projMotiveBody
+  rw [projMotiveBodyOf_subst σ projFns_length, projFns_subst σ hi]
+
 theorem projMotiveBody_lift' {S usS uss ps Fs i} (ρ : Lift) (hi : i ≤ Fs.length) :
     (projMotiveBody S usS uss ps Fs i).lift' ρ.cons =
-      projMotiveBody S usS uss (ps.map (·.lift' ρ)) (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i := by
-  unfold projMotiveBody
-  rw [projMotiveBodyOf_lift' ρ projFns_length, projFns_lift' ρ hi]
+      projMotiveBody S usS uss (ps.map (·.lift' ρ))
+        (Fs.mapIdx fun j F => F.lift' (ρ.consN j)) i := by
+  rw [lift'_eq_subst, ← Subst.lift_lift_l_id, projMotiveBody_subst _ hi]
+  simp only [lift'_eq_subst, Subst.liftN_lift_l_id]
 
 theorem projMotiveBody_instN {S usS uss ps Fs i} (e₀ : VExpr) (k : Nat) (hi : i ≤ Fs.length) :
     (projMotiveBody S usS uss ps Fs i).inst e₀ (k+1) =
-      projMotiveBody S usS uss (ps.map (·.inst e₀ k)) (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i := by
-  unfold projMotiveBody
-  rw [projMotiveBodyOf_inst e₀ k projFns_length, projFns_inst e₀ k hi]
+      projMotiveBody S usS uss (ps.map (·.inst e₀ k))
+        (Fs.mapIdx fun j F => F.inst e₀ (k + j)) i := by
+  rw [instN_eq, show Subst.liftN (.one e₀) (k+1) = (Subst.liftN (.one e₀) k).lift from rfl,
+    projMotiveBody_subst _ hi]
+  simp only [instN_eq, Subst.liftN_liftN]
 
 theorem projMotiveBody_instL {S usS uss ps Fs i} (ls : List VLevel) :
     (projMotiveBody S usS uss ps Fs i).instL ls =
@@ -576,19 +390,6 @@ fields` applied to the redex's arguments; `betaN`-style reduction of a λ-telesc
 saturated by its arguments substitutes them outermost first (`instFields`), and on the
 variable spine `minor fields` this selects the minor and the fields
 (`instFields_minor_spine`). -/
-
-/-- The leading λ-binder types, outermost first. -/
-def lamBinders : VExpr → List VExpr
-  | .lam A b => A :: b.lamBinders
-  | _ => []
-
-@[simp] theorem lamBinders_length : ∀ e : VExpr, e.lamBinders.length = e.lamArity
-  | .lam _ b => by simp [lamBinders, lamArity, lamBinders_length b]
-  | .bvar _ | .sort _ | .const .. | .app .. | .forallE .. => rfl
-
-theorem foldr_lam_lamBinders : ∀ e : VExpr, e.lamBinders.foldr lam e.lamBody = e
-  | .lam _ b => by simp [lamBinders, lamBody, foldr_lam_lamBinders b]
-  | .bvar _ | .sort _ | .const .. | .app .. | .forallE .. => rfl
 
 theorem instFields_app : ∀ (Ps : List VExpr) (f a : VExpr),
     instFields (.app f a) Ps = .app (instFields f Ps) (instFields a Ps)
@@ -621,10 +422,6 @@ theorem instFields_bvar : ∀ (Ps : List VExpr) (j : Nat), j < Ps.length →
       · rename_i hj; subst hj
         rw [instFields_liftN, Nat.add_sub_cancel, Nat.sub_self, List.getD_cons_zero]
       · simp only [List.length_cons] at h; omega
-
-theorem getElem_bvarsDesc (lo n t : Nat) (h : t < n) :
-    (bvarsDesc lo n)[t]'(by simp [h]) = .bvar (lo + (n - 1 - t)) := by
-  simp [bvarsDesc, List.getElem_reverse]
 
 /-- The reduct of a structure's ι rule, `λ params motive minor fields, minor fields`, on the
 arguments `pre ++ s :: fs` (with `s` the minor's argument): `s fs`. -/

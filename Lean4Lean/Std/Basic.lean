@@ -170,6 +170,17 @@ theorem List.find?_eq_of_nodup_map [BEq β] [LawfulBEq β] {f : α → β} :
 theorem List.map_id''' {f : α → α} (l : List α) (h : ∀ x ∈ l, f x = x) : map f l = l := by
   induction l <;> simp_all
 
+theorem List.getD_mapIdx [Inhabited α] [Inhabited β] {f : Nat → α → β}
+    (hf : ∀ i, f i default = default) (l : List α) (i : Nat) :
+    (l.mapIdx f).getD i default = f i (l.getD i default) := by
+  simp only [_root_.List.getD_eq_getElem?_getD, _root_.List.getElem?_mapIdx]
+  cases l[i]? <;> simp [hf]
+
+theorem List.getD_map [Inhabited α] [Inhabited β] {f : α → β} (hf : f default = default)
+    (l : List α) (i : Nat) : (l.map f).getD i default = f (l.getD i default) := by
+  simp only [_root_.List.getD_eq_getElem?_getD, _root_.List.getElem?_map]
+  cases l[i]? <;> simp [hf]
+
 theorem List.map_fst_lookup {f : α → β} [BEq β] (l : List α) (b : β) :
     (l.map (fun a => (f a, a))).lookup b = l.find? fun a => b == f a := by
   induction l <;> simp_all [lookup, find?]
