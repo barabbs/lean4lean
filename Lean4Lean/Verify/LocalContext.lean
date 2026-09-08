@@ -194,16 +194,24 @@ theorem toList_empty : ({} : LocalContext).toList = [] := by
 theorem find?_empty (x : FVarId) : ({} : LocalContext).find? x = none := by
   rw [WF.empty.find?_eq_find?_toList, toList_empty]; rfl
 
-/-- Lookup in a context extended by one fresh declaration: the new variable, or the
-lookup in the smaller context. -/
-theorem find?_mkLocalDecl {lctx : LocalContext} (h : lctx.WF)
-    (hfv : lctx.find? fv = none) (x : FVarId) :
+/-- The empty context's map is well formed. -/
+theorem empty_map_wf : ({} : LocalContext).fvarIdToDecl.WF := .empty
+
+/-- Declaring a variable preserves well-formedness of the underlying map, fresh or not. -/
+theorem map_wf_mkLocalDecl {lctx : LocalContext} (h : lctx.fvarIdToDecl.WF) :
+    (lctx.mkLocalDecl fv n ty bi k).fvarIdToDecl.WF := .insert h
+
+/-- Lookup in a context extended by one declaration: the new variable, or the lookup in
+the smaller context. Only the map's well-formedness is needed, so this resolves a lookup
+along a chain of `mkLocalDecl`s without a freshness side condition at each step. -/
+theorem find?_mkLocalDecl {lctx : LocalContext} (h : lctx.fvarIdToDecl.WF) (x : FVarId) :
     (lctx.mkLocalDecl fv n ty bi k).find? x =
       if x = fv then some (.cdecl lctx.decls.size fv n ty bi k) else lctx.find? x := by
-  rw [(h.mkLocalDecl hfv).find?_eq_find?_toList, mkLocalDecl_toList, List.find?_cons,
-    h.find?_eq_find?_toList]
-  simp only [LocalDecl.fvarId]
-  split <;> simp_all
+  show (lctx.fvarIdToDecl.insert fv (.cdecl lctx.decls.size fv n ty bi k)).find? x = _
+  rw [h.find?_insert]
+  by_cases hx : x = fv
+  · subst hx; simp
+  · rw [if_neg (by simp only [beq_iff_eq]; exact fun e => hx e.symm), if_neg hx]; rfl
 
 /-- `mkForall` over declared, distinct variables is the right fold of `mkBindingList1`. -/
 theorem mkForall_eq_fold {lctx : LocalContext} (xs : List FVarId) (b : Expr)

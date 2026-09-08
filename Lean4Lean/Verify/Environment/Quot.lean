@@ -61,10 +61,14 @@ abbrev all_quot : Expr := L4i.mkForall #[.fvar x3] <|
 abbrev T4 : Expr := L5i.mkForall #[.fvar x1, .fvar x2, .fvar x4] <|
   .forallE `mk all_quot (L5i.mkForall #[.fvar x5] (.app (.fvar x4) (.fvar x5))) .default
 
-abbrev q1 : ConstantInfo := .quotInfo { name := ``Quot, kind := .type, levelParams := [`u], type := T1 }
-abbrev q2 : ConstantInfo := .quotInfo { name := ``Quot.mk, kind := .ctor, levelParams := [`u], type := T2 }
-abbrev q3 : ConstantInfo := .quotInfo { name := ``Quot.lift, kind := .lift, levelParams := [`u, `v], type := T3 }
-abbrev q4 : ConstantInfo := .quotInfo { name := ``Quot.ind, kind := .ind, levelParams := [`u], type := T4 }
+abbrev q1 : ConstantInfo :=
+  .quotInfo { name := ``Quot, kind := .type, levelParams := [`u], type := T1 }
+abbrev q2 : ConstantInfo :=
+  .quotInfo { name := ``Quot.mk, kind := .ctor, levelParams := [`u], type := T2 }
+abbrev q3 : ConstantInfo :=
+  .quotInfo { name := ``Quot.lift, kind := .lift, levelParams := [`u, `v], type := T3 }
+abbrev q4 : ConstantInfo :=
+  .quotInfo { name := ``Quot.ind, kind := .ind, levelParams := [`u], type := T4 }
 
 theorem addQuot_eq (env : Environment) (hq : env.quotInit = false) (h1 : checkEqType env = .ok ())
     (h2 : env.checkName ``Quot = .ok ()) (h3 : env.checkName ``Quot.mk = .ok ())
@@ -75,94 +79,83 @@ theorem addQuot_eq (env : Environment) (hq : env.quotInit = false) (h1 : checkEq
   rfl
 
 
-theorem L1_wf : L1.WF := LocalContext.WF.empty.mkLocalDecl (LocalContext.find?_empty _)
+/-! ### The telescope contexts
+
+Each `L*` is the empty context extended by `mkLocalDecl`s at the distinct generated fvars
+`x1`…`x6`, so `LocalContext.find?_mkLocalDecl` — which needs only the underlying map's
+well-formedness — turns a lookup into a chain of decidable fvar comparisons. `quot_simp`
+performs that rewriting, and closes the membership side conditions of
+`LocalContext.mkForall_eq_fold` through `quot_mem`. -/
+
+open LocalContext (empty_map_wf map_wf_mkLocalDecl find?_mkLocalDecl) in
+section
+
+theorem L1_mwf : L1.fvarIdToDecl.WF := map_wf_mkLocalDecl empty_map_wf
 theorem L1_find (x) : L1.find? x =
     if x = x1 then some (.cdecl ({} : LocalContext).decls.size x1 `α (.sort u) .implicit .default)
     else none := by
-  rw [LocalContext.find?_mkLocalDecl LocalContext.WF.empty (LocalContext.find?_empty _),
-    LocalContext.find?_empty]
-theorem L1_fresh2 : L1.find? x2 = none := by rw [L1_find, if_neg (by decide)]
-theorem L2_wf : L2.WF := L1_wf.mkLocalDecl L1_fresh2
+  rw [find?_mkLocalDecl empty_map_wf, LocalContext.find?_empty]
+theorem L2_mwf : L2.fvarIdToDecl.WF := map_wf_mkLocalDecl L1_mwf
 theorem L2_find (x) : L2.find? x =
     if x = x2 then some (.cdecl L1.decls.size x2 `r αr .default .default) else L1.find? x :=
-  LocalContext.find?_mkLocalDecl L1_wf L1_fresh2 x
-theorem L2_fresh3 : L2.find? x3 = none := by
-  rw [L2_find, if_neg (by decide), L1_find, if_neg (by decide)]
+  find?_mkLocalDecl L1_mwf x
 theorem L3_find (x) : L3.find? x =
-    if x = x3 then some (.cdecl L2.decls.size x3 `a (.fvar x1) .default .default) else L2.find? x :=
-  LocalContext.find?_mkLocalDecl L2_wf L2_fresh3 x
+    if x = x3 then some (.cdecl L2.decls.size x3 `a (.fvar x1) .default .default)
+    else L2.find? x :=
+  find?_mkLocalDecl L2_mwf x
 
 -- the second branch (`Quot.lift`, `Quot.ind`): `r` is implicit there
-theorem L2'_wf : L2'.WF := L1_wf.mkLocalDecl L1_fresh2
+theorem L2'_mwf : L2'.fvarIdToDecl.WF := map_wf_mkLocalDecl L1_mwf
 theorem L2'_find (x) : L2'.find? x =
     if x = x2 then some (.cdecl L1.decls.size x2 `r αr .implicit .default) else L1.find? x :=
-  LocalContext.find?_mkLocalDecl L1_wf L1_fresh2 x
-theorem L2'_fresh3 : L2'.find? x3 = none := by
-  rw [L2'_find, if_neg (by decide), L1_find, if_neg (by decide)]
-theorem L3'_wf : L3'.WF := L2'_wf.mkLocalDecl L2'_fresh3
+  find?_mkLocalDecl L1_mwf x
+theorem L3'_mwf : L3'.fvarIdToDecl.WF := map_wf_mkLocalDecl L2'_mwf
 theorem L3'_find (x) : L3'.find? x =
-    if x = x3 then some (.cdecl L2'.decls.size x3 `a (.fvar x1) .default .default) else L2'.find? x :=
-  LocalContext.find?_mkLocalDecl L2'_wf L2'_fresh3 x
-theorem L3'_fresh4 : L3'.find? x4 = none := by
-  rw [L3'_find, if_neg (by decide), L2'_find, if_neg (by decide), L1_find, if_neg (by decide)]
-theorem L4_wf : L4.WF := L3'_wf.mkLocalDecl L3'_fresh4
+    if x = x3 then some (.cdecl L2'.decls.size x3 `a (.fvar x1) .default .default)
+    else L2'.find? x :=
+  find?_mkLocalDecl L2'_mwf x
+theorem L4_mwf : L4.fvarIdToDecl.WF := map_wf_mkLocalDecl L3'_mwf
 theorem L4_find (x) : L4.find? x =
-    if x = x4 then some (.cdecl L3'.decls.size x4 `β (.sort v) .implicit .default) else L3'.find? x :=
-  LocalContext.find?_mkLocalDecl L3'_wf L3'_fresh4 x
-theorem L4_fresh5 : L4.find? x5 = none := by
-  rw [L4_find, if_neg (by decide), L3'_find, if_neg (by decide), L2'_find, if_neg (by decide),
-    L1_find, if_neg (by decide)]
-theorem L5_wf : L5.WF := L4_wf.mkLocalDecl L4_fresh5
+    if x = x4 then some (.cdecl L3'.decls.size x4 `β (.sort v) .implicit .default)
+    else L3'.find? x :=
+  find?_mkLocalDecl L3'_mwf x
+theorem L5_mwf : L5.fvarIdToDecl.WF := map_wf_mkLocalDecl L4_mwf
 theorem L5_find (x) : L5.find? x =
-    if x = x5 then some (.cdecl L4.decls.size x5 `f (.arrow (.fvar x1) (.fvar x4)) .default .default)
+    if x = x5 then
+      some (.cdecl L4.decls.size x5 `f (.arrow (.fvar x1) (.fvar x4)) .default .default)
     else L4.find? x :=
-  LocalContext.find?_mkLocalDecl L4_wf L4_fresh5 x
-theorem L5_fresh6 : L5.find? x6 = none := by
-  rw [L5_find, if_neg (by decide), L4_find, if_neg (by decide), L3'_find, if_neg (by decide),
-    L2'_find, if_neg (by decide), L1_find, if_neg (by decide)]
+  find?_mkLocalDecl L4_mwf x
 theorem L6_find (x) : L6.find? x =
-    if x = x6 then some (.cdecl L5.decls.size x6 `b (.fvar x1) .default .default) else L5.find? x :=
-  LocalContext.find?_mkLocalDecl L5_wf L5_fresh6 x
-theorem L4i_wf : L4i.WF := L3'_wf.mkLocalDecl L3'_fresh4
+    if x = x6 then some (.cdecl L5.decls.size x6 `b (.fvar x1) .default .default)
+    else L5.find? x :=
+  find?_mkLocalDecl L5_mwf x
+theorem L4i_mwf : L4i.fvarIdToDecl.WF := map_wf_mkLocalDecl L3'_mwf
 theorem L4i_find (x) : L4i.find? x =
     if x = x4 then some (.cdecl L3'.decls.size x4 `β (.arrow quot_r .prop) .implicit .default)
     else L3'.find? x :=
-  LocalContext.find?_mkLocalDecl L3'_wf L3'_fresh4 x
-theorem L4i_fresh5 : L4i.find? x5 = none := by
-  rw [L4i_find, if_neg (by decide), L3'_find, if_neg (by decide), L2'_find, if_neg (by decide),
-    L1_find, if_neg (by decide)]
+  find?_mkLocalDecl L3'_mwf x
 theorem L5i_find (x) : L5i.find? x =
     if x = x5 then some (.cdecl L4i.decls.size x5 `q quot_r .implicit .default) else L4i.find? x :=
-  LocalContext.find?_mkLocalDecl L4i_wf L4i_fresh5 x
+  find?_mkLocalDecl L4i_mwf x
 
-macro "quot_find" : tactic => `(tactic| first
-  | exact ⟨_, by rw [L2_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L2_find, if_neg (by decide), L1_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L3_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L3_find, if_neg (by decide), L2_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L3_find, if_neg (by decide), L2_find, if_neg (by decide), L1_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L6_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L6_find, if_neg (by decide), L5_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L6_find, if_neg (by decide), L5_find, if_neg (by decide), L4_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L6_find, if_neg (by decide), L5_find, if_neg (by decide), L4_find, if_neg (by decide), L3'_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L6_find, if_neg (by decide), L5_find, if_neg (by decide), L4_find, if_neg (by decide), L3'_find, if_neg (by decide), L2'_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L6_find, if_neg (by decide), L5_find, if_neg (by decide), L4_find, if_neg (by decide), L3'_find, if_neg (by decide), L2'_find, if_neg (by decide), L1_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L4i_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L4i_find, if_neg (by decide), L3'_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L5i_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L5i_find, if_neg (by decide), L4i_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L5i_find, if_neg (by decide), L4i_find, if_neg (by decide), L3'_find, if_neg (by decide), L2'_find, if_pos rfl]⟩
-  | exact ⟨_, by rw [L5i_find, if_neg (by decide), L4i_find, if_neg (by decide), L3'_find, if_neg (by decide), L2'_find, if_neg (by decide), L1_find, if_pos rfl]⟩)
+end
 
-macro "quot_mem" : tactic => `(tactic|
-  (simp only [List.forall_mem_cons, List.forall_mem_nil, and_true];
-   repeat' (first | (refine And.intro ?_ ?_) | quot_find | (intro _ h; cases h))))
-
+/-- Resolve lookups and bindings along the telescope contexts: rewrite with the `L*_find`
+ladder, decide the fvar comparisons, and unfold the binder construction. -/
 macro "quot_simp" : tactic => `(tactic|
   simp +decide only [List.foldr, LocalContext.mkBindingList1,
     L1_find, L2_find, L3_find, L2'_find, L3'_find, L4_find, L5_find, L6_find, L4i_find, L5i_find,
     ↓reduceIte, Expr.abstractList, Expr.abstract1, Expr.arrow, Expr.prop, mkApp2, mkApp3, mkApp,
     Nat.zero_add, Nat.reduceAdd])
+
+/-- Every variable of a telescope is declared in its context: the side condition of
+`LocalContext.mkForall_eq_fold`. -/
+macro "quot_mem" : tactic => `(tactic|
+  (simp only [List.forall_mem_cons, List.forall_mem_nil, and_true];
+   repeat' (first
+     | refine And.intro ?_ ?_
+     | (quot_simp; exact ⟨_, rfl⟩)
+     | (intro _ h; cases h))))
 
 theorem T1_eq : T1 = .forallE `α (.sort u) (.forallE `r
     (.forallE `a (.bvar 0) (.forallE `a (.bvar 1) .prop .default) .default) (.sort u) .default)
@@ -238,14 +231,14 @@ theorem LE1_find (u : Name) (x) : (LE1 u).find? x =
     if x = x1 then
       some (.cdecl ({} : LocalContext).decls.size x1 `α (.sort (.param u)) .implicit .default)
     else none := by
-  rw [LocalContext.find?_mkLocalDecl LocalContext.WF.empty (LocalContext.find?_empty _),
-    LocalContext.find?_empty]
+  rw [LocalContext.find?_mkLocalDecl LocalContext.empty_map_wf, LocalContext.find?_empty]
 
 theorem TE_eq (u : Name) : TE u = .forallE `α (.sort (.param u))
     (.forallE `a (.bvar 0) (.forallE `a (.bvar 1) (.sort .zero) .default) .default) .implicit := by
   show LocalContext.mkForall (LE1 u) ⟨[x1].map .fvar⟩ _ = _
   rw [LocalContext.mkForall_eq_fold [x1] _ (fun x hx => by
-    simp only [List.mem_singleton] at hx; subst hx; exact ⟨_, by rw [LE1_find, if_pos rfl]⟩) (by simp)]
+    simp only [List.mem_singleton] at hx; subst hx
+    exact ⟨_, by rw [LE1_find, if_pos rfl]⟩) (by simp)]
   simp +decide only [List.foldr, LocalContext.mkBindingList1, LE1_find,
     ↓reduceIte, Expr.abstractList, Expr.abstract1, Expr.arrow, Expr.prop, Nat.zero_add]
 
@@ -443,7 +436,8 @@ theorem exists_addQuot {safety} {env : Environment} {venv : VEnv} (H : TrEnv saf
     (h3 : env.find? ``Quot.lift = none) (h4 : env.find? ``Quot.ind = none) :
     ∃ v1 v2 v3 v4 : VEnv,
       venv.addConst ``Quot quotConst = some v1 ∧ v1.addConst ``Quot.mk quotMkConst = some v2 ∧
-      v2.addConst ``Quot.lift quotLiftConst = some v3 ∧ v3.addConst ``Quot.ind quotIndConst = some v4 ∧
+      v2.addConst ``Quot.lift quotLiftConst = some v3 ∧
+      v3.addConst ``Quot.ind quotIndConst = some v4 ∧
       AddQuot env.constants (C' env.constants) venv (v4.addDefEq quotDefEq) := by
   have mapWF := H.map_wf
   have h1' : env.constants.find? ``Quot = none := by rwa [← mapWF.find?'_eq_find?]
@@ -455,14 +449,20 @@ theorem exists_addQuot {safety} {env : Environment} {venv : VEnv} (H : TrEnv saf
   have n3 := H.constants_eq_none h3
   have n4 := H.constants_eq_none h4
   obtain ⟨v1, e1⟩ := VEnv.addConst_eq_none (ci := quotConst) n1
-  have n2 : v1.constants ``Quot.mk = none := by rw [VEnv.addConst_eq_of_ne e1 (by decide)]; exact n2
-  have n3 : v1.constants ``Quot.lift = none := by rw [VEnv.addConst_eq_of_ne e1 (by decide)]; exact n3
-  have n4 : v1.constants ``Quot.ind = none := by rw [VEnv.addConst_eq_of_ne e1 (by decide)]; exact n4
+  have n2 : v1.constants ``Quot.mk = none := by
+    rw [VEnv.addConst_eq_of_ne e1 (by decide)]; exact n2
+  have n3 : v1.constants ``Quot.lift = none := by
+    rw [VEnv.addConst_eq_of_ne e1 (by decide)]; exact n3
+  have n4 : v1.constants ``Quot.ind = none := by
+    rw [VEnv.addConst_eq_of_ne e1 (by decide)]; exact n4
   obtain ⟨v2, e2⟩ := VEnv.addConst_eq_none (ci := quotMkConst) n2
-  have n3 : v2.constants ``Quot.lift = none := by rw [VEnv.addConst_eq_of_ne e2 (by decide)]; exact n3
-  have n4 : v2.constants ``Quot.ind = none := by rw [VEnv.addConst_eq_of_ne e2 (by decide)]; exact n4
+  have n3 : v2.constants ``Quot.lift = none := by
+    rw [VEnv.addConst_eq_of_ne e2 (by decide)]; exact n3
+  have n4 : v2.constants ``Quot.ind = none := by
+    rw [VEnv.addConst_eq_of_ne e2 (by decide)]; exact n4
   obtain ⟨v3, e3⟩ := VEnv.addConst_eq_none (ci := quotLiftConst) n3
-  have n4 : v3.constants ``Quot.ind = none := by rw [VEnv.addConst_eq_of_ne e3 (by decide)]; exact n4
+  have n4 : v3.constants ``Quot.ind = none := by
+    rw [VEnv.addConst_eq_of_ne e3 (by decide)]; exact n4
   obtain ⟨v4, e4⟩ := VEnv.addConst_eq_none (ci := quotIndConst) n4
   have hQuot1 : v1.constants ``Quot = some quotConst := VEnv.addConst_self e1
   have hQuot2 : v2.constants ``Quot = some quotConst := (VEnv.addConst_le e2).constants hQuot1
@@ -597,12 +597,17 @@ theorem addQuot.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env)
         (SMap.find?_insert_none m1.map₂ (by decide) (by rwa [← m1.find?'_eq_find?]))
       have m4 := m3.insert ``Quot.lift q3 (SMap.find?_insert_none m2.map₂ (by decide)
         (SMap.find?_insert_none m1.map₂ (by decide) (by rwa [← m1.find?'_eq_find?])))
-      refine safePrimitives_add' m4 (fun h hp => ?_) q4 ?_ (fun h => nomatch p4.symm.trans h) hfind hp
-      · refine safePrimitives_add' m3 (fun h hp => ?_) q3 ?_ (fun h => nomatch p3.symm.trans h) h hp
-        · refine safePrimitives_add' m2 (fun h hp => ?_) q2 ?_ (fun h => nomatch p2.symm.trans h) h hp
-          · exact safePrimitives_add' m1 wf.safePrimitives q1 f1 (fun h => nomatch p1.symm.trans h) h hp
+      refine safePrimitives_add' m4 (fun h hp => ?_) q4 ?_
+        (fun h => nomatch p4.symm.trans h) hfind hp
+      · refine safePrimitives_add' m3 (fun h hp => ?_) q3 ?_
+          (fun h => nomatch p3.symm.trans h) h hp
+        · refine safePrimitives_add' m2 (fun h hp => ?_) q2 ?_
+            (fun h => nomatch p2.symm.trans h) h hp
+          · exact safePrimitives_add' m1 wf.safePrimitives q1 f1
+              (fun h => nomatch p1.symm.trans h) h hp
           · exact Environment.find?_add_of_ne m1 q1 f1 (by decide) f2
-        · exact Environment.find?_add_of_ne m2 q2 (Environment.find?_add_of_ne m1 q1 f1 (by decide) f2)
+        · exact Environment.find?_add_of_ne m2 q2
+            (Environment.find?_add_of_ne m1 q1 f1 (by decide) f2)
             (by decide) (Environment.find?_add_of_ne m1 q1 f1 (by decide) f3)
       · exact Environment.find?_add_of_ne m3 q3
           (Environment.find?_add_of_ne m2 q2 (Environment.find?_add_of_ne m1 q1 f1 (by decide) f2)
