@@ -192,12 +192,9 @@ theorem addMutual.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env)
   · obtain ⟨v, -, h⟩ := hbody.forall_exists_r ci hc; exact h.2
 
 /-- Successful checked addition preserves well-formedness and extends every safety-indexed
-abstract environment. Quotient initialization needs `Environment.EqSafe` (`addQuot.WF`): the
-kernel does not check that `Eq` is safe, and with an unsafe `Eq` the safe quotient constants
-would have no `.safe` model. Still outstanding: inductives, which need the `AddInduct` witness
-to be constructed from `Environment.addInductive`. -/
-theorem addDecl.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env) (decl : Declaration)
-    (hEq : decl = .quotDecl → Environment.EqSafe env) :
+abstract environment. Still outstanding: inductives, which need the `AddInduct` witness to be
+constructed from `Environment.addInductive`. -/
+theorem addDecl.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env) (decl : Declaration) :
     (addDecl env decl (check := true) (fuel := {})).WF fun env' =>
       ∃ ves' : VEnvs, ves'.WF env' ∧ ∀ safety, ves.venv safety ≤ ves'.venv safety := by
   cases decl with
@@ -206,6 +203,6 @@ theorem addDecl.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env) (decl : D
   | defnDecl v => exact (addDefinition.WF wf v).mono fun _ ⟨ves', hwf, h, _⟩ => ⟨ves', hwf, h⟩
   | opaqueDecl v =>
     exact (addOpaque.WF wf v).mono fun _ ⟨ves', hwf, _, h⟩ => ⟨ves', hwf, (h · |>.le)⟩
-  | quotDecl => exact addQuot.WF wf (hEq rfl)
+  | quotDecl => exact addQuot.WF wf
   | mutualDefnDecl vs => exact addMutual.WF wf vs
   | inductDecl _ _ _ _ => sorry

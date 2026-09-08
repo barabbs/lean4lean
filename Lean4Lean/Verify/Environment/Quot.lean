@@ -3,9 +3,8 @@ import Lean4Lean.Verify.Environment.Extension
 /-!
 # Quotient initialization
 
-`addQuot.WF`: `Environment.addQuot` keeps the environment well-formed, provided its `Eq` is
-safe (`Environment.EqSafe`, the one precondition the kernel does not check). The kernel side
-is computed: `checkEqType` establishes that `Eq` is an inductive type of the expected shape
+`addQuot.WF`: `Environment.addQuot` keeps the environment well-formed. The kernel side
+is computed: `checkEqType` establishes that `Eq` is a safe inductive type of the expected shape
 (`checkEqType_ok`), and `addQuot` then inserts the four `quotInfo` constants with concrete
 types (`addQuot_eq`, with the `mkForall` telescopes evaluated in `T1_eq`…`T4_eq` through
 `LocalContext.mkBindingList`). On the model side the `Eq` of the environment translates to
@@ -249,11 +248,10 @@ theorem Environment.get_ok {env : Environment} {n : Name} {ci : ConstantInfo}
   | none => simp [hfind] at h
   | some ci' => simp only [hfind] at h; cases h; rfl
 
-/-- What a successful `checkEqType` establishes: `Eq` is an inductive type with one universe
-parameter whose type is (up to binder names) `∀ {α : Sort u}, α → α → Prop`. As in the
-kernel's `check_eq_type`, nothing is checked about its safety. -/
+/-- What a successful `checkEqType` establishes: `Eq` is a safe inductive type with one
+universe parameter whose type is (up to binder names) `∀ {α : Sort u}, α → α → Prop`. -/
 theorem checkEqType_ok (env : Environment) (h : checkEqType env = .ok ()) :
-    ∃ info : InductiveVal, env.find? ``Eq = some (.inductInfo info) ∧
+    ∃ info : InductiveVal, env.find? ``Eq = some (.inductInfo info) ∧ info.isUnsafe = false ∧
       ∃ u, info.levelParams = [u] ∧ (info.type == TE u) = true := by
   unfold checkEqType at h
   generalize hg : env.get ``Eq = g at h
@@ -264,6 +262,11 @@ theorem checkEqType_ok (env : Environment) (h : checkEqType env = .ok ()) :
     cases ci with
     | inductInfo info =>
       simp only [bind, Except.bind] at h
+      cases hu : info.isUnsafe with
+      | true => rw [hu] at h; cases h
+      | false =>
+      rw [hu] at h
+      simp only [Bool.false_eq_true, ite_false, bind, Except.bind] at h
       cases hlp : info.levelParams with
       | nil => rw [hlp] at h; cases h
       | cons u rest =>
@@ -278,7 +281,7 @@ theorem checkEqType_ok (env : Environment) (h : checkEqType env = .ok ()) :
             | cons _ _ => rw [hctors] at h; cases h
             | nil =>
               rw [hctors] at h
-              refine ⟨info, hfind, u, hlp, ?_⟩
+              refine ⟨info, hfind, hu, u, hlp, ?_⟩
               cases hb : (info.type == TE u)
               · exfalso
                 have hb' : (info.type != TE u) = true := by simp [bne, hb]
@@ -489,24 +492,12 @@ theorem exists_addQuot {safety} {env : Environment} {venv : VEnv} (H : TrEnv saf
 
 end AddQuotAux
 
-/-- `Eq`, if declared as an inductive type, is safe. This is the precondition of quotient
-initialization that the kernel does not check: `checkEqType` (like `quot.cpp`'s
-`check_eq_type`) pins the shape of `Eq` but not its safety, and the quotient constants it then
-adds are safe (`quotInfo` carries no safety flag) while `Quot.lift`'s type mentions `Eq` — so
-after `addQuot` on an environment with an `unsafe inductive Eq`, a safe constant would depend
-on an unsafe one and the environment would have no model at the `.safe` level (`TrEnv'.quot`
-needs `Eq` in the model at every level, `VEnv.QuotReady`). The prelude's `Eq` is safe. -/
-def Environment.EqSafe (env : Environment) : Prop :=
-  ∀ info : InductiveVal, env.find? ``Eq = some (.inductInfo info) → info.isUnsafe = false
-
 open AddQuotAux in
 /-- Quotient initialization keeps the environment well-formed and extends every safety-indexed
-model, given `Environment.EqSafe`. The initialized branch is immediate; otherwise `checkEqType`
-has established that `Eq` is an inductive type of the expected shape, safe by `hsafe`, which is
-`eqConst` in the model at every level (`quotReady`), and the four quotient constants are
-added by `TrEnv'.quot`. -/
-theorem addQuot.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env)
-    (hsafe : Environment.EqSafe env) :
+model. The initialized branch is immediate; otherwise `checkEqType` has established that `Eq`
+is a safe inductive type of the expected shape, which is `eqConst` in the model at every level
+(`quotReady`), and the four quotient constants are added by `TrEnv'.quot`. -/
+theorem addQuot.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env) :
     (Environment.addQuot env).WF fun env' =>
       ∃ ves' : VEnvs, ves'.WF env' ∧ ∀ safety, ves.venv safety ≤ ves'.venv safety := by
   intro env' henv'
@@ -556,9 +547,9 @@ theorem addQuot.WF {env : Environment} {ves : VEnvs} (wf : ves.WF env)
     | ok x => cases x; rfl
   rw [addQuot_eq env hq hce hn1 hn2 hn3 hn4] at henv'
   cases henv'
-  obtain ⟨info, hfind, u, hlp, hty⟩ := checkEqType_ok env hce
+  obtain ⟨info, hfind, hsafe, u, hlp, hty⟩ := checkEqType_ok env hce
   have hEq {safety} : (ves.venv safety).QuotReady :=
-    quotReady wf.tr hfind (hsafe info hfind) hlp hty
+    quotReady wf.tr hfind hsafe hlp hty
   obtain ⟨f1, p1⟩ := hn _ hn1; obtain ⟨f2, p2⟩ := hn _ hn2
   obtain ⟨f3, p3⟩ := hn _ hn3; obtain ⟨f4, p4⟩ := hn _ hn4
   have hex := fun safety => exists_addQuot (wf.tr (safety := safety)) hEq f1 f2 f3 f4
