@@ -1156,3 +1156,23 @@ theorem TrEnv.proj_defeq {safety : DefinitionSafety} {kenv : Lean.Kernel.Environ
     List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (hflen ▸ hi),
     Option.getD_some] at hβ2
   exact (h1.trans henv hΓ ⟨_, hι⟩).trans henv hΓ (VEnv.IsDefEqU.trans henv hΓ ⟨_, Hβ1⟩ hβ2)
+
+/-! ### Rebuilding an application spine in the translation
+
+A head and arguments that translate assemble into a translation of the spine, provided the
+model spine is well-typed: each application node needs the typing of its function and
+argument, which `HasType.mkApps_inv_head` and `HasType.app_inv` read off the whole spine. -/
+
+theorem TrExpr.mkAppList {env : VEnv} {Us : List Name} {Δ : VLCtx}
+    (henv : env.WF) (hΔ : OnCtx Δ.toCtx (env.IsType Us.length))
+    {as : List Expr} {as' : List VExpr} (has : List.Forall₂ (TrExpr env Us Δ) as as') :
+    ∀ {f f' V}, TrExpr env Us Δ f f' → env.HasType Us.length Δ.toCtx (f'.mkApps as') V →
+      TrExpr env Us Δ (f.mkAppList as) (f'.mkApps as') := by
+  induction has with
+  | nil => exact fun hf _ => hf
+  | cons ha _ ih =>
+    intro f f' V hf hty
+    rw [VExpr.mkApps_cons] at hty ⊢
+    obtain ⟨_, hty'⟩ := hty.mkApps_inv_head henv hΔ
+    obtain ⟨_, _, h1, h2⟩ := hty'.app_inv henv hΔ
+    exact ih (.app henv hΔ h1 h2 hf ha) hty
