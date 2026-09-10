@@ -177,7 +177,7 @@ theorem TrEnv'.map_wf (H : TrEnv' safety C Q venv) : C.WF := H.aligned.map_wf
 
 /-! ### Lookups across the quotient constants
 
-`pats_iota` and `structure_rec` (below) pull a `recInfo`, `inductInfo` or `ctorInfo` lookup
+`pats_iota'` and `structure_rec` (below) pull a `recInfo`, `inductInfo` or `ctorInfo` lookup
 back across a `quot` step: `addQuot` registers only `quotInfo` constants. -/
 
 /-- Pull a lookup back across one fresh insertion of a different constant. -/
