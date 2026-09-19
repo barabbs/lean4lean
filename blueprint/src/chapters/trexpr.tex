@@ -1,0 +1,1794 @@
+\chapter{Translating expressions}
+\label{chap:trexpr}
+
+This chapter covers the layer that relates Lean's real kernel data structures, \texttt{Lean.Expr},
+\texttt{Lean.LocalContext}, \texttt{Lean.Name} and \texttt{Lean.NameGenerator}, to the model syntax
+\texttt{VExpr}/\texttt{VEnv} of Chapter \ref{chap:syntax}. Its job is to say precisely which real
+expressions denote which model terms, and to prove that this correspondence survives every
+operation the checker performs on a context: weakening by free or bound variables, instantiation of
+a binder, abstraction of a free variable, universe substitution, environment growth and passage to a
+definitionally equal context. The central relations are \texttt{TrExprS} (syntax-directed
+translation, Definition \ref{ind:trexprs}), \texttt{TrExpr} (translation up to definitional
+equality, Definition \ref{def:trexpr}) and, for structure projections, \texttt{TrProj}
+(Definition \ref{def:trproj}).
+
+Ten files are in scope.
+\srcloc{Lean4Lean/Verify/Expr.lean}{1} (1219 lines) proves that the cached header bits of an
+\texttt{Expr} agree with structural traversal, characterises application spines as lists, and
+develops the lift/instantiate/abstract calculus.
+\srcloc{Lean4Lean/Verify/Name.lean}{1} (90 lines) and
+\srcloc{Lean4Lean/Verify/NameGenerator.lean}{1} (28 lines) supply the order properties of
+\texttt{Name.quickCmp} and the freshness discipline.
+\srcloc{Lean4Lean/Verify/LocalContext.lean}{1} (373 lines) models \texttt{mkBinding} as a fold and
+translates a real local context.
+\srcloc{Lean4Lean/Verify/VLCtx.lean}{1} (116 lines) defines the translation context.
+\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{1} (463 lines) holds the vocabulary: \texttt{Closed},
+\texttt{FVarsIn}, \texttt{VLCtx.WF}, \texttt{TrProjCtor}/\texttt{TrProj}, \texttt{TrExprS}, the model
+spellings of the literals and the primitive invariant \texttt{VEnv.HasPrimitives}.
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1} (2357 lines) is essentially all of the metatheory of
+the translation. The three consumers are
+\srcloc{Lean4Lean/Verify/Typing/TrTerm.lean}{1} (204 lines, a bundled builder used by the primitive
+proofs), \srcloc{Lean4Lean/Verify/Typing/ConditionallyTyped.lean}{1} (144 lines, the conditional
+invariants the checker's monadic specifications are stated with) and
+\srcloc{Lean4Lean/Verify/Typing/PrimSpec.lean}{1} (126 lines, environment extension for the
+primitive invariant).
+
+Nothing in this group is a thesis theorem: the thesis axiomatises the model, and this layer is the
+bridge to the implementation, which the thesis does not discuss. Where the thesis does speak it
+speaks about the model, and the master lemma families here are the translation-level shadows of its
+results: \texttt{Closed}/\texttt{FVarsIn} and \texttt{TrExprS.closed}/\texttt{fvarsIn} of Regularity
+(typesys.tex, \texttt{thm:reg}); the \texttt{FVLift'}/\texttt{BVLift} families and
+\texttt{TrExprS.weakFV}/\texttt{weakBV} of Weakening (typesys.tex, \texttt{thm:weak}), including its
+strengthening direction, which is exactly where the remaining holes sit; \texttt{InstN}/\texttt{InstLet}
+and \texttt{TrExprS.instN}/\texttt{instN\_let} of Substitution (typesys.tex, \texttt{thm:subst});
+and \texttt{TrExprS.uniq} of Unique typing (unique.tex, \texttt{thm:utype}).
+
+The branches contributed 269 lines here. The \texttt{trproj} branch added 215: the whole of
+\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{69} to 135, which replaces master's one-line
+\texttt{def TrProj ... := sorry} by \texttt{TrProjCtor}/\texttt{TrProj} (70 changed lines including
+the two new parameters of the \texttt{TrExprS.proj} rule); 131 lines in
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{641}, namely the seven \texttt{TrProj} transport
+lemmas, of which five are now proved and two remain \texttt{sorry}, the new \texttt{TrProj.mono},
+\texttt{TrExprS.mkAppList\_inv}, and the one-line \texttt{proj} case of each master induction;
+and 14 lines of spine lemmas in
+\srcloc{Lean4Lean/Verify/Expr.lean}{745}. The \texttt{iota} branch added 54: a self-contained block
+of lookup lemmas about the empty local context at
+\srcloc{Lean4Lean/Verify/LocalContext.lean}{181} (42 lines), and ten lines of hypothesis
+strengthening, eight signatures plus two call sites, from \texttt{env.Ordered} to
+\texttt{env.OrderedStrong} in \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1856}, with two more
+signatures in \srcloc{Lean4Lean/Verify/Typing/TrTerm.lean}{104}.
+
+Assessment. The \texttt{trproj} work in this group is substantial and well judged: modelling a
+projection as the recursor expansion of the thesis's \texttt{inv\_x}, carrying the expansion's
+typing as a field rather than deriving it, and hiding the expansion data existentially, is the right
+choice given that \texttt{VExpr} has no projection node, and it makes five of master's seven
+\texttt{sorry} stubs go through with short, structured proofs while making \texttt{TrProj.wf}
+unconditional. The two holes that remain, \texttt{TrProj.weak'\_inv} and \texttt{TrProj.uniq}, are
+documented with precise statements of what is missing, and the first of them is blocked on a master
+lemma. Two caveats should be carried forward: \texttt{TrProj} pins a pattern key rather than a
+reduction rule, so it is weaker than it looks, and it has no general inhabitation theorem, since
+\texttt{inferProj.WF\_struct} is \texttt{sorry}; and the \texttt{iota} hypothesis strengthening
+quietly routes every \emph{use} of the literal lemmas, and hence the checker's literal handling,
+through the admitted \texttt{VEnv.WF.patsStrong}.
+
+Throughout, $\Gamma$ is a model typing context (a \texttt{List VExpr}), $\Delta$ a translation
+context (\texttt{VLCtx}), $U$ a universe-parameter count, and we write $\Gamma \vdash e : A$ for
+\texttt{VEnv.HasType} and $e_1 \equiv e_2$ for \texttt{VEnv.IsDefEqU} in the ambient environment.
+
+\section{Real expressions}
+
+\begin{lemma}[The cached \texttt{Expr} header bits agree with structural traversal]
+\label{family:expr-flags}
+\lean{Lean.Expr.hasFVar', Lean.Expr.containsFVar', Lean.Expr.hasFVar_eq, Lean.Expr.containsFVar_eq, Lean.Expr.hasExprMVar', Lean.Expr.hasExprMVar_eq, Lean.Expr.hasLevelMVar', Lean.Expr.hasLevelMVar_eq, Lean.Expr.hasLevelParam', Lean.Expr.hasLevelParam_eq, Lean.Expr.Data.looseBVarRange_le, Lean.Expr.mkData_looseBVarRange, Lean.Expr.mkAppData_looseBVarRange, Lean.Expr.hasFVar'_of_containsFVar'}
+\leanok
+Lean packs \texttt{hasFVar}, \texttt{hasExprMVar}, \texttt{hasLevelMVar}, \texttt{hasLevelParam} and
+\texttt{looseBVarRange} into one machine word carried on every \texttt{Expr} node. Each is here
+proved equal to the obvious structural recursion (the primed names), which is the form the rest of
+the verification reasons with. Unglamorous but load-bearing: without it the verification could not
+use the constant-time tests the real kernel uses.
+\end{lemma}
+\begin{proof}
+\leanok
+Structural inductions on the expression, with the bit-level facts about \texttt{Expr.Data}
+(\texttt{mkData\_looseBVarRange}, \texttt{mkAppData\_looseBVarRange},
+\texttt{Data.looseBVarRange\_le}) discharged by \texttt{bv\_decide}, whose native LRAT
+certificates appear as extra axioms in the footprint.
+\end{proof}
+\axfoot{no sorryAx; bv\_decide LRAT certificates (Lean.Expr.mkData\_looseBVarRange.\_native.bv\_decide.ax\_1\_9 and siblings), plus Lean.Expr.mkData\_eq and Lean.Expr.mkAppData\_eq}
+
+\begin{lemma}[Lawfulness of the \texttt{BEq}/\texttt{Ord} instances the kernel relies on]
+\label{family:expr-beq}
+\lean{Lean.Expr.eqv_refl, Lean.Expr.eqv_euc, Lean.Expr.eqv_sort, Lean.Expr.eqv_const, Lean.Expr.data_eq, Lean.Expr.instantiate1_eqv, Lean.Expr.instantiateList_eqv, Lean.Syntax.structEq_refl, Lean.Syntax.structEq_trans, Lean.Literal.beq_iff_eq, Lean.DefinitionSafety.compare, Lean.DefinitionSafety.le_antisymm, Lean.instLawfulBEqFVarId_lean4Lean, Lean.instLawfulBEqMVarId_lean4Lean, Lean.Expr.instEquivBEq_lean4Lean, Lean.Expr.instLawfulHashable_lean4Lean}
+\leanok
+\uses{family:expr-flags}
+\texttt{FVarId}, \texttt{MVarId}, \texttt{LBool}, \texttt{DefinitionSafety}, \texttt{Substring.Raw},
+\texttt{Syntax}, \texttt{DataValue}, \texttt{Literal} and \texttt{Expr} are given
+\texttt{LawfulBEq}/\texttt{EquivBEq}/\texttt{TransOrd}/\texttt{LawfulHashable} instances, so that the
+hash-map and comparison reasoning of the environment layer is sound. For \texttt{Expr} only
+\texttt{EquivBEq} is available, since its \texttt{==} ignores binder names and binder information;
+\texttt{LawfulHashable} then rests on \texttt{data\_eq}, which says equivalent expressions carry
+equal header words.
+\end{lemma}
+\begin{proof}
+\leanok
+Simultaneous structural inductions over the two expressions; \texttt{eqv\_euc} (Euclidean
+transitivity) is the shape the \texttt{EquivBEq} instance wants, and \texttt{data\_eq} then
+follows by reading off the header word of each node.
+\end{proof}
+
+\begin{lemma}[Application spines as lists]
+\label{family:expr-spine}
+\lean{Lean.Expr.getAppArgsList, Lean.Expr.getAppArgsRevList, Lean.Expr.getAppArgsRevList_reverse, Lean.Expr.getAppNumArgs_eq, Lean.Expr.getAppArgs_eq, Lean.Expr.getAppRevArgs_eq, Lean.Expr.withApp_eq, Lean.Expr.withRevApp_eq, Lean.Expr.mkAppList, Lean.Expr.mkAppRevList, Lean.Expr.mkAppList_eq_foldl, Lean.Expr.mkAppRevList_eq_foldr, Lean.Expr.mkAppList_reverse, Lean.Expr.mkAppRevList_getAppArgsRevList, Lean.Expr.mkAppList_getAppArgsList, Lean.Expr.mkAppRange_eq, Lean.Expr.mkAppRange_eq_rev, Lean.Expr.mkAppRevRange_eq, Lean.Expr.mkAppRevRange_eq_rev}
+\leanok
+The array-based spine operations of \texttt{Lean.Expr} (\texttt{getAppArgs},
+\texttt{getAppRevArgs}, \texttt{withApp}, \texttt{mkAppRange}) are characterised in terms of the
+list-based \texttt{getAppArgsList}/\texttt{mkAppList}, which is the form the proofs use;
+\texttt{mkAppList\_getAppArgsList} rebuilds an expression from its head and argument list.
+\end{lemma}
+\begin{proof}
+\leanok
+Structural inductions along the application spine, converting each array operation into its
+list form and then commuting \texttt{reverse} through with
+\texttt{getAppArgsRevList\_reverse}.
+\end{proof}
+
+\begin{theorem}[Reading back a spine built with \texttt{mkAppList}]
+\label{thm:mkapplist-spine}
+\lean{Lean.Expr.getAppFn_mkAppList, Lean.Expr.getAppArgsRevList_mkAppList, Lean.Expr.getAppArgsList_mkAppList}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Expr.lean}{745}
+\thesisref{no counterpart; this is implementation-level bookkeeping}
+For every list of arguments \texttt{es} and every expression \texttt{e}:
+\texttt{(mkAppList e es).getAppFn = e.getAppFn}, and
+\texttt{getAppArgsList (mkAppList e es) = getAppArgsList e ++ es}, with the reversed variant
+\texttt{getAppArgsRevList (mkAppList e es) = es.reverse ++ getAppArgsRevList e} in between.
+\end{theorem}
+\begin{proof}
+\uses{family:expr-spine}
+\leanok
+Induction on the argument list for the first two; the third rewrites through
+\texttt{getAppArgsRevList\_reverse}. Three or four lines each.
+\end{proof}
+
+\begin{remark}
+These three lemmas fill a real gap in master's spine API, which had only the
+\texttt{mkAppList\_getAppArgsList} direction. Only one of the three has an external consumer:
+\texttt{getAppArgsList\_mkAppList} is rewritten with at
+\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{50} in the projection and $\iota$ reduction proof.
+\texttt{getAppFn\_mkAppList} is \texttt{@[simp]} and has no explicit call site, but it fires inside
+the \texttt{simp} at \texttt{WHNF.lean:52}, where the argument list is not a literal.
+\texttt{getAppArgsRevList\_mkAppList} has no consumer at all outside
+\srcloc{Lean4Lean/Verify/Expr.lean}{749}, where it serves only to prove the forward form.
+\end{remark}
+
+\begin{lemma}[The substitution calculus of real Lean expressions]
+\label{family:expr-subst}
+\lean{Lean.Expr.liftLooseBVars_eq_self, Lean.Expr.liftLooseBVars_liftLooseBVars, Lean.Expr.liftLooseBVars_add, Lean.Expr.liftLooseBVars_comm, Lean.Expr.instantiate1'_looseBVarRange, Lean.Expr.instantiate1'_eq_self, Lean.Expr.instantiateList_eq_self, Lean.Expr.instantiate1'_liftLooseBVars, Lean.Expr.instantiate1'_instantiate1', Lean.Expr.instantiateList_eq_foldl, Lean.Expr.instantiateRevList_eq_foldr, Lean.Expr.instantiateList_instantiate1_comm, Lean.Expr.instantiateRev_eq_instantiateList, Lean.Expr.abstractList_eq_foldl, Lean.Expr.abstract1_comm, Lean.Expr.abstract1_abstractList, Lean.Expr.abstract1_hasLooseBVar, Lean.Expr.abstract1_eq_liftLooseBVars, Lean.Expr.abstract1_eq_self, Lean.Expr.abstractList_eq_self, Lean.Expr.lowerLooseBVars_eq_instantiate, Lean.Expr.abstract1_lower}
+\leanok
+Lifting, instantiation, abstraction and lowering of loose bound variables commute in the expected
+ways, are the identity when the relevant range is empty, and can be written as folds over lists.
+This is the source-side counterpart of the model's substitution calculus
+(Chapter \ref{chap:syntax}), and the thesis's Substitution lemma (typesys.tex,
+\texttt{thm:subst}) is its model-side analogue.
+\end{lemma}
+\begin{proof}
+\uses{def:inst, def:liftn}
+\leanok
+Structural inductions on the expression with arithmetic side conditions on the indices; the
+list-valued forms follow by a second induction on the substitution list. Of the family only
+\texttt{instantiateRev\_eq\_instantiateList} reaches outside Lean's public API: it consumes the two
+\texttt{Lean.Expr} implementation axioms \texttt{instantiateRev\_eq} and \texttt{instantiate\_eq}
+of \srcloc{Lean4Lean/Verify/Axioms.lean}{1}.
+\end{proof}
+
+\begin{lemma}[Universe-parameter substitution on real expressions]
+\label{family:expr-instlevel}
+\lean{Lean.Expr.instantiateLevelParamsCore', Lean.Expr.instantiateLevelParamsCore_eq_self, Lean.Expr.instantiateLevelParamsCore_id, Lean.Expr.instantiateLevelParamsCore_eq, Lean.Expr.instantiateLevelParams_eq}
+\leanok
+\uses{family:expr-flags}
+Lean's cached, short-circuiting \texttt{instantiateLevelParamsCore} agrees with the naive structural
+substitution \texttt{instantiateLevelParamsCore'}, and is the identity on expressions with no level
+parameter.
+\end{lemma}
+\begin{proof}
+\uses{family:expr-flags}
+\leanok
+Induction on the expression, tracking the \texttt{hasLevelParam} bit: where the cached flag is
+false the real implementation short-circuits and the naive recursion is the identity, which is
+exactly \texttt{instantiateLevelParamsCore\_eq\_self}.
+\end{proof}
+
+\section{Names and the freshness discipline}
+
+\begin{lemma}[Order properties of \texttt{Name.cmp} and \texttt{Name.quickCmp}]
+\label{family:name-cmp}
+\lean{Lean.Name.cmp_eq_swap, Lean.NameSet.contains_insert, Lean.NameSet.contains_empty, Lean.Name.instTransCmpCmp_lean4Lean, Lean.Name.instLawfulBEqCmpCmp_lean4Lean, Lean.Name.instTransCmpQuickCmp_lean4Lean, Lean.Name.instLawfulBEqCmpQuickCmp_lean4Lean}
+\leanok
+\texttt{Name.cmp} and the hash-accelerated \texttt{Name.quickCmp} are transitive and antisymmetric
+comparators compatible with \texttt{==}, so that \texttt{NameMap}/\texttt{NameSet} (that is,
+\texttt{Std.TreeSet}) reasoning is sound; \texttt{NameSet.contains\_insert} is the consequence
+actually used downstream.
+\end{lemma}
+\begin{proof}
+\leanok
+\texttt{quickCmp} compares hashes before names, so transitivity is not obvious: the proof is a
+simultaneous induction on the two names, reduced to \texttt{cmp\_eq\_swap} and an auxiliary
+fact about the lexicographic \texttt{Ordering.then}.
+\end{proof}
+
+\begin{definition}[Freshness discipline of the name generator]
+\label{def:ngen-reserves}
+\lean{Lean.NameGenerator.Reserves, Lean.NameGenerator.next_reserves_self, Lean.NameGenerator.not_reserves_self, Lean.NameGenerator.LE, Lean.NameGenerator.LE.rfl, Lean.NameGenerator.LE.trans, Lean.NameGenerator.Reserves.mono, Lean.NameGenerator.LE.next}
+\leanok
+\texttt{ngen.Reserves fv} says that whenever \texttt{fv} is \texttt{ngen.namePrefix} numbered $i$,
+then $i <$ \texttt{ngen.idx}: the generator has already handed that name out. Generators with the
+same prefix are ordered by their index; \texttt{Reserves} is monotone along that order, the next
+name is reserved by the successor generator and not by the current one. Small but structurally
+important: this is the only thing that keeps the checker's fresh variables fresh, and
+\texttt{ConditionallyTyped} (Definition \ref{def:conditionallytyped}) is stated in terms of it.
+\end{definition}
+
+\section{Real local contexts}
+
+\begin{definition}[A list-based model of \texttt{LocalContext.mkBinding}]
+\label{def:mkbindinglist}
+\lean{Lean.LocalContext.mkBindingList1, Lean.LocalContext.mkBindingList, Lean.LocalContext.mkBinding_eq, Lean.LocalContext.mkBindingList1_abstract, Lean.LocalContext.mkBindingList_core_cons, Lean.LocalContext.mkBindingList_nil, Lean.LocalContext.mkBindingList_cons, Lean.LocalContext.mkBindingList_eq_fold, Lean.LocalContext.mkBindingList1_congr, Lean.LocalContext.mkBindingList_congr}
+\leanok
+Lean's \texttt{mkBinding} builds a lambda or pi telescope by abstracting an array of free variables,
+using an internal loop and a cache. \texttt{mkBindingList} re-expresses it as a right fold of the
+single-step \texttt{mkBindingList1}, which looks the variable up in the context and emits one
+\texttt{lam}, \texttt{forallE} or \texttt{letE} binder (dropping an unused \texttt{let}).
+\texttt{mkBinding\_eq} proves the two agree, and \texttt{mkBindingList\_congr} shows that only the
+declarations actually looked up matter. The proofs are inductions on the variable list, unfolding
+the real implementation's loop.
+\end{definition}
+
+\begin{definition}[Well-formed local contexts]
+\label{ind:lctx-wf}
+\lean{Lean.LocalContext.WF, Lean.LocalContext.WF.map_wf, Lean.LocalContext.WF.decls_wf, Lean.LocalContext.WF.map_toList, Lean.LocalContext.WF.find?_eq_find?_toList, Lean.LocalContext.WF.nodup, Lean.LocalContext.WF.mkLocalDecl, Lean.LocalContext.WF.mkLetDecl, Lean.LocalContext.mkLocalDecl_toList, Lean.LocalContext.mkLetDecl_toList}
+\leanok
+\texttt{LocalContext.WF} is the inductive predicate saying that a context is the empty one extended
+by steps that insert a declaration under a variable absent from the map, with index equal to the
+current array size. From it: the \texttt{PersistentArray} of declarations and the
+\texttt{fvarIdToDecl} map agree as lists, \texttt{find?} equals lookup in \texttt{toList}, the
+declared variables are pairwise distinct, and both \texttt{mkLocalDecl} and \texttt{mkLetDecl}
+preserve well-formedness given freshness. The proofs are inductions on the construction, and they
+consume the \texttt{PersistentArray}/\texttt{PersistentHashMap} axioms of
+\srcloc{Lean4Lean/Verify/Axioms.lean}{1}.
+\end{definition}
+
+\begin{lemma}[Lookup in an explicitly built chain of local declarations]
+\label{family:lctx-empty-decl}
+\lean{Lean.LocalContext.WF.empty, Lean.LocalContext.toList_empty, Lean.LocalContext.find?_empty, Lean.LocalContext.empty_map_wf, Lean.LocalContext.map_wf_mkLocalDecl, Lean.LocalContext.find?_mkLocalDecl, Lean.LocalContext.instDecidableEqFVarId_lean4Lean}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Verify/LocalContext.lean}{181}
+\thesisref{no counterpart; support for the quotient axiom shapes}
+The empty context is well formed, has empty \texttt{toList}, always-failing \texttt{find?} and a
+well-formed \texttt{fvarIdToDecl}; declaring a variable preserves well-formedness of that map
+\emph{whether or not} the variable is fresh; and
+\texttt{(lctx.mkLocalDecl fv n ty bi k).find? x} is the new declaration if \texttt{x = fv} and
+\texttt{lctx.find? x} otherwise, assuming only that the map is well formed. A
+\texttt{DecidableEq FVarId} instance is declared alongside.
+\end{lemma}
+\begin{proof}
+\uses{ind:lctx-wf}
+\leanok
+\texttt{find?\_mkLocalDecl} unfolds \texttt{find?} to a \texttt{PersistentHashMap.find?} on an
+\texttt{insert}, applies \texttt{WF.find?\_insert} and splits on \texttt{x = fv};
+\texttt{find?\_empty} goes through \texttt{WF.empty.find?\_eq\_find?\_toList} and
+\texttt{toList\_empty}.
+\end{proof}
+
+\begin{remark}
+The design point is real and is stated in the source: dropping the freshness side condition is what
+makes a chain of six \texttt{mkLocalDecl} steps resolvable without discharging six freshness
+obligations. Four of the seven declarations (\texttt{empty\_map\_wf},
+\texttt{map\_wf\_mkLocalDecl}, \texttt{find?\_mkLocalDecl}, \texttt{find?\_empty}) are used,
+heavily, in \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1}, where the \texttt{Quot} axiom
+shapes are built by hand, and the \texttt{DecidableEq FVarId} instance is what makes the
+\texttt{if x = fv} of \texttt{find?\_mkLocalDecl} reducible there; \texttt{WF.empty} and
+\texttt{toList\_empty} serve only \texttt{find?\_empty} inside the block itself.
+\end{remark}
+
+\begin{theorem}[\texttt{mkForall} over declared distinct variables is a right fold]
+\label{thm:mkforall-eq-fold}
+\lean{Lean.LocalContext.mkForall_eq_fold}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Verify/LocalContext.lean}{217}
+\thesisref{no counterpart}
+For a list \texttt{xs} of pairwise distinct free variables, all declared in \texttt{lctx}, and any
+body \texttt{b}, \texttt{lctx.mkForall (xs.map .fvar) b} equals the right fold over \texttt{xs} of
+\texttt{fun a e => mkBindingList1 false lctx [] a (e.abstract1 a)}, that is, one binder abstracted
+at a time.
+\end{theorem}
+\begin{proof}
+\uses{def:mkbindinglist}
+\leanok
+One line: \texttt{mkBinding\_eq} reduces \texttt{mkForall} to \texttt{mkBindingList} and master's
+\texttt{mkBindingList\_eq\_fold} to the fold; the hypotheses are exactly the latter's. Thin, but it
+is rewritten with eight times in \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{163} to
+\texttt{:238}, to compute the shapes of the \texttt{Quot} axioms.
+\end{proof}
+
+\section{Translation contexts}
+
+\begin{definition}[Translated local declarations]
+\label{ind:vt-vlocaldecl}
+\lean{Lean4Lean.VLocalDecl, Lean4Lean.VLocalDecl.depth, Lean4Lean.VLocalDecl.value, Lean4Lean.VLocalDecl.type, Lean4Lean.VLocalDecl.type', Lean4Lean.VLocalDecl.lift', Lean4Lean.VLocalDecl.liftN, Lean4Lean.VLocalDecl.inst, Lean4Lean.VLocalDecl.instL}
+\leanok
+\uses{ind:vexpr}
+A \texttt{VLocalDecl} is either \texttt{vlam type}, a real binder, or \texttt{vlet type value}, a
+let-binding. Its \texttt{depth} is $1$ for \texttt{vlam} and $0$ for \texttt{vlet}; its
+\texttt{value} is \texttt{bvar 0} for \texttt{vlam} and the definition for \texttt{vlet}; its
+\texttt{type} lifts in the \texttt{vlam} case. Lifting, instantiation and level instantiation act
+componentwise. The \texttt{depth} field is the device that lets a \texttt{let} occupy a slot in the
+source context while vanishing from the model context.
+\end{definition}
+
+\begin{definition}[The translation context and variable lookup]
+\label{def:vt-vlctx}
+\lean{Lean4Lean.VLCtx, Lean4Lean.VLCtx.bvars, Lean4Lean.VLCtx.NoBV, Lean4Lean.VLCtx.next, Lean4Lean.VLCtx.find?, Lean4Lean.VLCtx.liftVar, Lean4Lean.VLCtx.varToExpr, Lean4Lean.VLCtx.vlamName, Lean4Lean.VLCtx.fvars, Lean4Lean.VLCtx.toCtx, Lean4Lean.VLCtx.instL}
+\leanok
+\uses{ind:vt-vlocaldecl}
+A \texttt{VLCtx} is a list of pairs of an optional name (an \texttt{FVarId} with the list of free
+variables its declaration depends on) and a \texttt{VLocalDecl}.
+\texttt{find? $\Delta$ v} resolves a source variable \texttt{v}, either a de Bruijn index or a free
+variable, to a pair (model term, model type), lifting by the accumulated \texttt{depth} as it walks
+outwards; \texttt{toCtx} is the model typing context, which drops \texttt{vlet} entries;
+\texttt{fvars} lists the named entries and \texttt{bvars} counts the anonymous ones. This is the
+pivot of the whole \texttt{Verify} layer: it is simultaneously a source-side scope and a model-side
+context, and the mismatch between the two is what the lift and instantiation relations below manage.
+\end{definition}
+
+\begin{lemma}[Basic lookup lemmas for translation contexts]
+\label{family:vt-vlctx-basic}
+\lean{Lean4Lean.VLCtx.fvars_nil, Lean4Lean.VLCtx.fvars_cons_none, Lean4Lean.VLCtx.fvars_cons_some, Lean4Lean.VLCtx.find?_eq_some, Lean4Lean.VLCtx.vlamName_mem_fvars}
+\leanok
+\texttt{fvars} computes on the two \texttt{cons} shapes; a free variable has a successful
+\texttt{find?} if and only if it is in \texttt{fvars}; and a \texttt{vlamName} hit at index $i$ is a
+member of \texttt{fvars}. Structural inductions on the context.
+\end{lemma}
+\begin{proof}
+\uses{def:vt-vlctx}
+\leanok
+Induction on $\Delta$, unfolding \texttt{find?} and \texttt{next} at each step and splitting on
+whether the head entry's name is the one sought.
+\end{proof}
+
+\section{Closedness and free variables}
+
+\begin{definition}[Closedness of a real Lean expression]
+\label{def:vt-closed}
+\lean{Lean4Lean.Closed, Lean.Expr.Closed}
+\leanok
+\texttt{Closed e k} says that the loose de Bruijn indices of \texttt{e} are all below \texttt{k},
+incrementing \texttt{k} at each binder, \emph{and} that \texttt{e} contains no expression
+metavariable: the \texttt{.mvar} case is \texttt{False}, not \texttt{True}. The asymmetry is
+deliberate and makes \texttt{Closed} strictly stronger than a bound on the loose-variable range;
+\texttt{Closed.of\_looseBVarRange} is where the difference has to be paid for. It is the syntactic
+side of the thesis's Regularity lemma (typesys.tex, \texttt{thm:reg}), clause
+$FV(e) \subseteq \Gamma$.
+\end{definition}
+
+\begin{definition}[Specification-level list of free variables]
+\label{def:vt-fvarslist}
+\lean{Lean.Expr.fvarsList}
+\leanok
+\texttt{e.fvarsList} collects every \texttt{FVarId} occurring in \texttt{e}, in traversal order and
+with duplicates. Its docstring marks it as a specification-only device: it is quadratic and is never
+run.
+\end{definition}
+
+\begin{definition}[Free variables of an expression lie in a predicate]
+\label{def:vt-fvarsin}
+\lean{Lean4Lean.FVarsIn, Lean.Expr.FVarsIn}
+\leanok
+\uses{def:vt-fvarslist}
+\texttt{FVarsIn P e} says that every free variable of \texttt{e} satisfies \texttt{P}, that
+\texttt{e} has no expression metavariable, and that it has no \emph{level} metavariable either: the
+\texttt{sort} and \texttt{const} cases require \texttt{hasMVar' = false} on the levels they carry.
+It is the invariant the checker carries about which variables a term may mention. Bundling three
+different conditions into one predicate is convenient at the call sites but makes \texttt{FVarsIn}
+do double duty; \texttt{fvarsIn\_iff} splits it again.
+\end{definition}
+
+\begin{lemma}[Calculus of closedness]
+\label{family:vt-closed-lemmas}
+\lean{Lean4Lean.Closed.mono, Lean4Lean.Closed.natLitToConstructor, Lean4Lean.Closed.strLitToConstructor, Lean4Lean.Closed.toConstructor, Lean4Lean.Closed.litType, Lean4Lean.Closed.abstract1, Lean4Lean.Closed.getAppFn, Lean4Lean.Closed.getAppArgsRevList, Lean4Lean.Closed.getAppArgsList, Lean4Lean.Closed.looseBVarRange_le, Lean4Lean.Closed.looseBVarRange_zero, Lean4Lean.Closed.of_looseBVarRange, Lean4Lean.Closed.of_looseBVarRange_zero}
+\leanok
+\texttt{Closed} is monotone in the bound, holds of the constructor forms of literals, is preserved
+by abstraction and by taking the head or the arguments of an application spine, and is
+interconvertible with the cached \texttt{looseBVarRange} provided the term has no expression
+metavariable.
+\end{lemma}
+\begin{proof}
+\uses{def:vt-closed, family:expr-flags}
+\leanok
+Structural inductions on the expression. The direction from \texttt{looseBVarRange} back to
+\texttt{Closed} is the one that needs the metavariable hypothesis, as its docstring notes.
+\end{proof}
+
+\begin{lemma}[Calculus of the free-variable predicate]
+\label{family:vt-fvarsin-lemmas}
+\lean{Lean4Lean.fvarsIn_iff, Lean4Lean.fvarsIn_iff_hasMVar, Lean4Lean.fvarsList_eq_nil, Lean4Lean.FVarsIn.mp, Lean4Lean.FVarsIn.mono, Lean4Lean.FVarsIn.fvars_cons, Lean4Lean.FVarsIn.default, Lean4Lean.FVarsIn.getRevArg!, Lean4Lean.FVarsIn.getArg!, Lean4Lean.FVarsIn.abstract_instantiate1, Lean4Lean.FVarsIn.abstract_eq_self, Lean4Lean.FVarsIn.of_abstract1, Lean4Lean.FVarsIn.of_abstractList, Lean4Lean.FVarsIn.liftLooseBVars, Lean4Lean.FVarsIn.instantiate1, Lean4Lean.FVarsIn.instantiateList, Lean4Lean.FVarsIn.abstract1, Lean4Lean.FVarsIn.appRevList, Lean4Lean.FVarsIn.abstract1_erase, Lean4Lean.FVarsIn.of_hasFVar, Lean4Lean.FVarsIn.of_containsFVar', Lean4Lean.FVarsIn.natLitToConstructor, Lean4Lean.FVarsIn.strLitToConstructor, Lean4Lean.FVarsIn.toConstructor, Lean4Lean.FVarsIn.litType}
+\leanok
+\texttt{FVarsIn} is characterised by \texttt{fvarsList} together with the two metavariable flags, is
+monotone and closed under pointwise implication, is preserved by lifting, instantiation, abstraction
+and spine building, and can be established from the cached \texttt{hasFVar}, \texttt{hasExprMVar}
+and \texttt{hasLevelMVar} bits.
+\end{lemma}
+\begin{proof}
+\uses{def:vt-fvarsin, def:vt-fvarslist, family:expr-flags, family:expr-subst}
+\leanok
+Structural inductions on the expression, with \texttt{simp} and \texttt{grind} closing the routine
+cases; the flag-based lemmas go through the header-bit characterisations.
+\end{proof}
+
+\section{Well-formed translation contexts}
+
+\begin{definition}[Well-formedness of a single translated local declaration]
+\label{def:vt-vlocaldecl-wf}
+\lean{Lean4Lean.VLocalDecl.WF}
+\leanok
+\uses{ind:vt-vlocaldecl, def:hastype-istype}
+A \texttt{vlam type} entry is well formed over $\Gamma$ when \texttt{type} is a type there, and a
+\texttt{vlet type value} entry when $\Gamma \vdash \texttt{value} : \texttt{type}$.
+\end{definition}
+
+\begin{definition}[Well-formedness of a translation context]
+\label{def:vt-vlctx-wf}
+\lean{Lean4Lean.VLCtx.FVWF, Lean4Lean.VLCtx.WF, Lean4Lean.VLCtx.WF.fvwf}
+\leanok
+\uses{def:vt-vlocaldecl-wf, def:vt-vlctx}
+\texttt{VLCtx.FVWF} requires of every named entry that its \texttt{FVarId} is absent from the tail's
+\texttt{fvars} and that its recorded dependencies are contained in them.
+\texttt{VLCtx.WF env U} requires the same plus well-formedness of each declaration over the tail's
+\texttt{toCtx}; \texttt{WF.fvwf} forgets the typing half. The name condition alone is what most
+scope lemmas need, which is why the two are separated.
+\end{definition}
+
+\begin{lemma}[Structural lemmas for translated local declarations]
+\label{family:vt-vlocaldecl-wf-lemmas}
+\lean{Lean4Lean.VLocalDecl.lift'_consN_skipN, Lean4Lean.VLocalDecl.WF.hasType, Lean4Lean.VLocalDecl.WF.weakN, Lean4Lean.VLocalDecl.WF.instN, Lean4Lean.VLocalDecl.WF.instL, Lean4Lean.VLocalDecl.is_liftN, Lean4Lean.VLocalDecl.IsDefEq, Lean4Lean.VLocalDecl.lift'_depth, Lean4Lean.VLocalDecl.lift'_comp, Lean4Lean.VLocalDecl.weak'_iff, Lean4Lean.VLocalDecl.weakN_iff}
+\leanok
+A well-formed declaration types its \texttt{value} at its \texttt{type} in the extended context;
+well-formedness is preserved by weakening, instantiation and level instantiation, and, given unique
+typing, reflected by weakening (\texttt{weak'\_iff}, \texttt{weakN\_iff}).
+\texttt{VLocalDecl.IsDefEq} is the pointwise definitional-equality relation on declarations.
+\end{lemma}
+\begin{proof}
+\uses{def:vt-vlocaldecl-wf, thm:isdefeq-weakn, thm:isdefeq-instn, thm:isdefeq-instl, thm:isdefequ-weakn-iff}
+\leanok
+Case split on \texttt{vlam}/\texttt{vlet} and appeal to the corresponding model lemma.
+\end{proof}
+\axfoot{sorryAx in VLocalDecl.weak'\_iff and VLocalDecl.weakN\_iff only, inherited from VEnv.IsDefEqU.weakN\_iff (Theory/Typing/UniqueTyping.lean:172, master)}
+
+\begin{lemma}[Well-formed translation contexts]
+\label{family:vt-vlctx-wf-lemmas}
+\lean{Lean4Lean.VLCtx.WF.find?_wf, Lean4Lean.VLCtx.WF.toCtx, Lean4Lean.VLCtx.WF.fvars_nodup, Lean4Lean.VLCtx.liftVar_zero, Lean4Lean.VLCtx.instL_eq_map, Lean4Lean.VLCtx.instL_toCtx, Lean4Lean.VLCtx.WF.instL, Lean4Lean.VLCtx.find?_instL, Lean4Lean.VLCtx.SortList}
+\leanok
+In a well-formed context every successful \texttt{find?} yields a typing derivation for the pair it
+returns, \texttt{toCtx} is a well-formed model context, the free variables are pairwise distinct,
+and both well-formedness and lookup commute with level instantiation. \texttt{SortList} records a
+list of levels sorting the types of the outermost named binders.
+\end{lemma}
+\begin{proof}
+\uses{def:vt-vlctx-wf}
+\leanok
+Inductions on the context; \texttt{find?\_wf} lifts the declaration's typing by the accumulated
+depth at each step.
+\end{proof}
+
+\begin{definition}[Definitional equality of translation contexts]
+\label{ind:vt-vlctx-isdefeq}
+\lean{Lean4Lean.VLCtx.IsDefEq, Lean4Lean.VLocalDecl.IsDefEq.refl, Lean4Lean.VLCtx.IsDefEq.refl, Lean4Lean.VLCtx.IsDefEq.defeqCtx, Lean4Lean.VLCtx.IsDefEq.fvars, Lean4Lean.VLocalDecl.IsDefEq.wf, Lean4Lean.VLCtx.IsDefEq.wf, Lean4Lean.VLocalDecl.IsDefEq.symm, Lean4Lean.VLocalDecl.IsDefEq.defeqDFC, Lean4Lean.VLCtx.IsDefEq.symm, Lean4Lean.VLCtx.IsDefEq.find?_uniq, Lean4Lean.VLCtx.IsDefEq.find?_defeqDFC}
+\leanok
+\uses{def:vt-vlctx-wf, fam:defeqdfc}
+Two translation contexts are definitionally equal when they have the same shape, the same names, and
+pointwise definitionally equal declarations. Such a pair induces an \texttt{IsDefEqCtx} on the model
+contexts, has the same \texttt{fvars}, is symmetric, is well formed on both sides, and makes
+\texttt{find?} return definitionally equal answers on the two sides
+(\texttt{find?\_uniq}, \texttt{find?\_defeqDFC}). Inductions on the relation and on \texttt{find?}.
+\end{definition}
+
+\section{The projection translation}
+
+\begin{definition}[Projection as a recursor expansion, \texttt{TrProjCtor}]
+\label{struct:trprojctor}
+\lean{Lean4Lean.TrProjCtor}
+\leanok
+\uses{def:proj-fn, def:proj-motive-body, def:proj-inst-pis, def:pi-telescope, def:ctorheaded, def:proj-binder-arity, inductive:simple-pattern, def:hastype-istype, def:mkapps}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{90}
+\thesisref{typesys.tex, undecidability of definitional equality, the \texttt{inv\_x} construction; Wtypes.tex for the dependent motive of $\pi_2$; axioms.tex 2.6.3--2.6.4 for the recursor and its $\iota$ rule}
+\texttt{TrProjCtor env U $\Gamma$ S i e e' ctorName usS uss params np fieldTys} relates a model term
+\texttt{e} of type \texttt{S usS params} to the translation \texttt{e'} of the source projection
+\texttt{.proj S i e}. Since \texttt{VExpr} has no projection node, \texttt{e'} is required to be
+\texttt{.app (VExpr.projFn S usS uss params fieldTys i) e}. Its eight fields require, in
+order:
+some reduct is registered in \texttt{env.pats} for the $\iota$ key
+\texttt{SimplePattern.iota (mkRecName S) (np+1+1+0) ctorName (np + fieldTys.length)};
+\texttt{params.length = np}; the constructor \texttt{ctorName} exists, its recorded type is
+\texttt{CtorHeaded}, and \texttt{fieldTys} is the $\Pi$-binder telescope of that type instantiated at
+\texttt{usS} and \texttt{params}; \texttt{i < fieldTys.length}; the recursor constant exists and its binder number
+\texttt{np+1} has arity \texttt{fieldTys.length}; $\Gamma \vdash e : $ \texttt{S usS params}; the
+expansion has type \texttt{forallE (S usS params) (projMotiveBody S usS uss params fieldTys i)};
+and \texttt{e'} is that expansion applied to \texttt{e}.
+\end{definition}
+
+\begin{remark}
+Three points about the interface. (1) The \texttt{pat} field asserts only that \emph{some} reduct is
+registered under that key: the reduct itself is not pinned, so \texttt{TrProjCtor} alone does not
+determine reduction behaviour, and the key, being a sum, does not by itself exclude reading a
+two-minor recursor as \texttt{(np+1)+1+1+0}. The docstring says so and defers to
+\texttt{TrEnv.proj\_defeq} (Theorem \ref{thm:tr-env-proj-defeq}) for the kernel-side facts.
+(2) \texttt{uss} is a total function \texttt{Nat} to \texttt{List VLevel}, so the relation quantifies
+over a whole level assignment of which only the first \texttt{i+1} values matter; this is what makes
+\texttt{TrProj.uniq} hard. (3) The scope paragraph, which restricts the relation to single
+constructor, non-recursive, non-indexed, non-mutual structures and declares reflexive, indexed and
+nested structures a completeness rather than a soundness boundary, makes precise claims about the
+kernel's \texttt{inferProj} that are prose only; nothing in the repository formalizes them.
+Documentation density is otherwise unusually high, with a per-field docstring naming the kernel fact
+each field stands in for.
+\end{remark}
+
+\begin{definition}[The projection-translation relation \texttt{TrProj}]
+\label{def:trproj}
+\lean{Lean4Lean.TrProj}
+\leanok
+\uses{struct:trprojctor}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{133}
+\thesisref{as for Definition \ref{struct:trprojctor}}
+\texttt{TrProj env U $\Gamma$ S i e e'} existentially quantifies the constructor name, the
+structure's level list \texttt{usS}, the per-field level assignment \texttt{uss} (a function, not a
+list), the parameters, the parameter count and the field telescope of
+Definition \ref{struct:trprojctor}: there is \emph{some} single-constructor reading of \texttt{S}
+under which \texttt{e'} is the recursor expansion of the \texttt{i}-th projection of \texttt{e}. On
+master this was \texttt{def TrProj : ... := sorry}; the branch keeps the stub's argument order and
+adds the two parameters \texttt{env} and \texttt{U} that the typing fields need, which is what forces
+the new \texttt{TrProj.mono} (Theorem \ref{thm:trproj-mono}) and the extra arguments in the
+\texttt{TrExprS.proj} rule.
+\end{definition}
+
+\begin{remark}
+Two of the six existentials are pinned by other fields: \texttt{np} is \texttt{params.length} by
+\texttt{params\_length}, and \texttt{fieldTys} is determined by \texttt{ctorName}, \texttt{usS} and
+\texttt{params} by \texttt{ctor}. Replacing them by definitions would shrink the relation and remove
+an obligation from each of the three proofs that rebuild the record
+(\texttt{weak'}, \texttt{instN}, \texttt{instL}), where they reappear as
+\texttt{params\_length := by simpa} and \texttt{field\_lt := by rw [hlen]};
+\texttt{defeqDFC} and \texttt{mono}, which reuse the old record with \texttt{\{H with \ldots\}},
+pay nothing.
+\end{remark}
+
+\section{The translation relation}
+
+\begin{definition}[Environment support needed by a literal]
+\label{def:vt-containslits}
+\lean{Lean4Lean.VEnv.ContainsLits}
+\leanok
+A \texttt{Nat} literal needs \texttt{Nat} in the environment; a string literal needs
+\texttt{Char.ofNat} and \texttt{String.ofList}. This is the side condition of the \texttt{lit} rule
+below, and the reason literals do not silently translate in an environment that cannot express them.
+\end{definition}
+
+\begin{definition}[Strict translation of a Lean expression, \texttt{TrExprS}]
+\label{ind:trexprs}
+\lean{Lean4Lean.TrExprS}
+\leanok
+\uses{def:trproj, def:vt-vlctx, def:vt-containslits, def:vlevel-oflevel, def:hastype-istype}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{142}
+\thesisref{no counterpart; the thesis does not model the implementation's expressions}
+\texttt{TrExprS env Us $\Delta$ e e'} is the syntax-directed relation translating a real
+\texttt{Lean.Expr} into a \texttt{VExpr} over $\Delta$: variables of either kind go through
+\texttt{VLCtx.find?}, sorts and constant levels through \texttt{VLevel.ofLevel Us},
+\texttt{mdata} is erased, \texttt{letE} is substituted away by translating the body in the context
+extended with a \texttt{vlet} entry, a literal is translated through its constructor form, and
+\texttt{.proj s i e} is translated by \texttt{TrProj} applied to the translation of \texttt{e}. The
+\texttt{app}, \texttt{lam}, \texttt{forallE} and \texttt{letE} rules carry the model typing side
+conditions needed to rebuild typing derivations.
+\end{definition}
+
+\begin{remark}
+Master's inductive; the \texttt{trproj} branch changed the \texttt{proj} rule's premise from
+\texttt{TrProj $\Delta$.toCtx s i e' e''} to
+\texttt{TrProj env Us.length $\Delta$.toCtx s i e' e''}. The change is forced by \texttt{TrProj}
+now carrying typing premises, and it means that in the projection case \texttt{TrExprS} is no longer
+environment-independent, which is what creates the obligation \texttt{TrProj.mono}.
+\end{remark}
+
+\begin{definition}[Translation up to definitional equality, \texttt{TrExpr}]
+\label{def:trexpr}
+\lean{Lean4Lean.TrExpr}
+\leanok
+\uses{ind:trexprs, def:isdefeq}
+\texttt{TrExpr env Us $\Delta$ e e'} holds when there is an \texttt{e2} with
+\texttt{TrExprS env Us $\Delta$ e e2} and $\texttt{e2} \equiv \texttt{e'}$ over
+$\Delta$\texttt{.toCtx}. This is the relation the checker's specifications are stated with, since a
+checker is entitled to return any definitionally equal answer.
+\end{definition}
+
+\begin{definition}[Translating a real local context to a \texttt{VLCtx}]
+\label{ind:trlctx}
+\lean{Lean4Lean.TrLocalDecl, Lean4Lean.TrLocalDecl.wf, Lean.LocalDecl.deps, Lean4Lean.TrLocalDecl.deps_wf, Lean4Lean.TrLCtx', Lean4Lean.TrLCtx, Lean4Lean.TrLCtx.nil, Lean4Lean.TrLCtx'.noBV, Lean4Lean.TrLCtx'.fvars_eq, Lean4Lean.TrLCtx.fvars_eq, Lean4Lean.TrLCtx'.find?_eq_some, Lean4Lean.TrLCtx.find?_eq_some, Lean4Lean.TrLCtx.find?_eq_none, Lean4Lean.TrLCtx.contains, Lean4Lean.TrLCtx'.wf, Lean4Lean.TrLCtx.wf, Lean.LocalDecl.value', Lean4Lean.TrLCtx'.find?_of_mem, Lean4Lean.TrLCtx.find?_of_mem, Lean4Lean.TrLCtx.mkLocalDecl, Lean4Lean.TrLCtx.mkLetDecl, Lean4Lean.TrLCtx'.forall₂}
+\leanok
+\uses{ind:lctx-wf, def:vt-vlctx-wf, ind:trexprs}
+\texttt{TrLCtx env Us lctx $\Delta$} says that \texttt{lctx} is well formed and that its declaration
+list translates entry by entry to $\Delta$: a \texttt{cdecl} to a \texttt{vlam}, an \texttt{ldecl}
+to a \texttt{vlet}, each named entry recording the declaration's \texttt{deps}, the free variables of
+its type (and value). Consequences: the \texttt{fvars} agree as lists, lookups correspond, $\Delta$
+has no bound variables, $\Delta$ is well formed, and \texttt{mkLocalDecl}/\texttt{mkLetDecl} extend
+the two sides in step. This is the bridge between the checker's real \texttt{LocalContext} and the
+model context. Inductions on the declaration list.
+\end{definition}
+
+\begin{theorem}[A translatable expression is scoped by its context]
+\label{thm:trexprs-closed-fvars}
+\lean{Lean4Lean.TrExprS.closed, Lean4Lean.TrExprS.fvarsIn, Lean4Lean.TrExprS.fvarsList, Lean4Lean.TrExpr.closed, Lean4Lean.TrExpr.fvarsIn, Lean4Lean.TrExpr.fvarsList, Lean4Lean.ofLevel_hasMVar}
+\leanok
+\uses{ind:trexprs, def:vt-closed, def:vt-fvarsin}
+If \texttt{TrExprS env Us $\Delta$ e e'} then \texttt{e} is \texttt{Closed} under
+$\Delta$\texttt{.bvars}, and \texttt{FVarsIn} the membership predicate of $\Delta$\texttt{.fvars},
+so in particular \texttt{e} has no metavariable of either kind. The same holds for \texttt{TrExpr}.
+This is the translation-level form of the thesis's Regularity lemma
+(typesys.tex, \texttt{thm:reg}).
+\end{theorem}
+\begin{proof}
+\uses{family:vt-vlctx-basic, family:vt-fvarsin-lemmas}
+\leanok
+Induction on the translation. The bound-variable case is an inner induction on the context showing
+that a successful \texttt{find?} at index $i$ forces $i < \Delta$\texttt{.bvars}; the level cases
+use \texttt{ofLevel\_hasMVar}.
+\end{proof}
+
+\section{Weakening, instantiation and abstraction of translation contexts}
+
+\begin{definition}[Weakening a translation context by free variables]
+\label{ind:vt-fvlift}
+\lean{Lean4Lean.VLCtx.FVLift', Lean4Lean.VLCtx.FVLift'.toCtx, Lean4Lean.VLCtx.FVLift'.comp, Lean4Lean.VLCtx.FVLift'.from_nil, Lean4Lean.VLCtx.FVLift'.fvars_sublist, Lean4Lean.VLCtx.FVLift'.bvars_eq, Lean4Lean.VLCtx.FVLift'.wf, Lean4Lean.VLCtx.FVLift'.find?, Lean4Lean.VLCtx.FVLift, Lean4Lean.VLCtx.FVLift.toFVLift', Lean4Lean.VLCtx.FVLift.toCtx, Lean4Lean.VLCtx.FVLift.from_nil, Lean4Lean.VLCtx.FVLift.wf, Lean4Lean.VLCtx.FVLift.fvars_suffix, Lean4Lean.VLCtx.FVLift.find?}
+\leanok
+\uses{def:vt-vlctx-wf, fam:ctx-lift}
+\texttt{FVLift' $\Delta$ $\Delta'$ dk n k} records that $\Delta'$ is obtained from $\Delta$ by
+inserting named declarations (\texttt{skip\_fvar}), keeping named ones (\texttt{cons\_fvar}) and
+keeping anonymous ones (\texttt{cons\_bvar}), while tracking the induced lift \texttt{n} of the model
+context; \texttt{FVLift} is the simpler variant in which no anonymous entry is crossed. The
+accompanying lemmas transport the relation to a \texttt{Ctx.Lift'} on \texttt{toCtx}, compose two
+lifts, show \texttt{fvars} is a sublist and \texttt{bvars} unchanged, push well-formedness downwards,
+and send a successful \texttt{find?} in $\Delta$ to the lifted answer in $\Delta'$. This is the
+translation-level form of Weakening (typesys.tex, \texttt{thm:weak}). Inductions on the relation
+with a \texttt{vlam}/\texttt{vlet} case split at each step.
+\end{definition}
+
+\begin{definition}[Weakening a translation context by bound variables]
+\label{ind:vt-bvlift}
+\lean{Lean4Lean.VLCtx.BVLift, Lean4Lean.VLCtx.BVLift.toCtx, Lean4Lean.VLCtx.BVLift.wf, Lean4Lean.VLCtx.BVLift.fvars_eq, Lean4Lean.VLCtx.BVLift.find?}
+\leanok
+\uses{ind:vt-fvlift}
+\texttt{BVLift} is the analogue that inserts anonymous (bound-variable) entries: the source term must
+then be lifted with \texttt{liftLooseBVars'} while the model term is lifted with \texttt{liftN}, and
+\texttt{find?} commutes with \texttt{liftVar}. The \texttt{fvars} are unchanged. Induction on the
+relation.
+\end{definition}
+
+\begin{definition}[Instantiating a binder of a translation context]
+\label{ind:vt-instn}
+\lean{Lean4Lean.VLCtx.InstN, Lean4Lean.VLCtx.InstN.toCtx, Lean4Lean.VLCtx.InstN.wf, Lean4Lean.VLCtx.InstN.fvars_eq, Lean4Lean.VLCtx.InstLet, Lean4Lean.VLCtx.InstLet.toCtx, Lean4Lean.VLCtx.InstLet.wf, Lean4Lean.VLCtx.InstLet.fvars_eq}
+\leanok
+\uses{ind:vt-fvlift, fam:ctx-lift}
+\texttt{InstN $\Delta_0$ e$_0$ A$_0$ dk k $\Delta_1$ $\Delta$} says that $\Delta$ arises from
+$\Delta_1$ by substituting \texttt{e}$_0$ for the anonymous \texttt{vlam} binder at depth \texttt{dk},
+with \texttt{k} the corresponding model position; \texttt{InstLet} is the analogue for a
+\texttt{vlet} binder, which leaves \texttt{toCtx} unchanged. Both preserve well-formedness (given a
+typing of \texttt{e}$_0$) and the free-variable list, and both map to \texttt{Ctx.InstN} on
+\texttt{toCtx}. This is the translation-level form of Substitution
+(typesys.tex, \texttt{thm:subst}).
+\end{definition}
+
+\begin{definition}[Turning a free variable of a translation context back into a binder]
+\label{ind:vt-abstract}
+\lean{Lean4Lean.VLCtx.Abstract, Lean4Lean.VLCtx.Abstract.toCtx, Lean4Lean.VLCtx.Abstract.wf, Lean4Lean.VLCtx.Abstract.fvars_eq, Lean4Lean.VLCtx.Abstract.find?_self, Lean4Lean.VLCtx.Abstract.find?}
+\leanok
+\uses{ind:vt-instn}
+\texttt{Abstract $\Delta_0$ v$_0$ d$_0$ dk k $\Delta_1$ $\Delta$} relates a context whose relevant
+entry is the named declaration \texttt{v}$_0$ to the same context with that entry made anonymous.
+The model context is unchanged, the free variables lose exactly \texttt{v}$_0$, \texttt{find?}
+agrees away from \texttt{v}$_0$, and \texttt{v}$_0$ itself now resolves to the new bound variable.
+Induction on the relation.
+\end{definition}
+
+\section{Transport of the projection translation}
+
+The seven lemmas of this section were all \texttt{sorry} on master; five are proved here, two remain
+open, and \texttt{TrProj.mono} is a new obligation created by the design.
+
+\begin{theorem}[Weakening of the projection translation]
+\label{thm:trproj-weak}
+\lean{Lean4Lean.TrProj.weak', Lean4Lean.TrProj.weakN}
+\leanok
+\uses{def:trproj, fam:ctx-lift}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{641}
+\thesisref{Weakening (typesys.tex, \texttt{thm:weak}), at the level of the translation}
+If \texttt{env} is \texttt{Ordered}, \texttt{W : Ctx.Lift' n $\Gamma$ $\Gamma'$} and
+\texttt{TrProj env U $\Gamma$ s i e e'}, then
+\texttt{TrProj env U $\Gamma'$ s i (e.lift' n) (e'.lift' n)}; \texttt{weakN} is the
+\texttt{Ctx.LiftN} form, obtained by specialising the general lift. The \texttt{Ordered}
+hypothesis is new relative to master's stub, which took none.
+\end{theorem}
+\begin{proof}
+\uses{fam:proj-fn-subst, fam:proj-motivebody-subst, fam:pibinders-stability, fam:proj-instpis-subst, thm:isdefeq-weakn, thm:isdefeq-closedn}
+\leanok
+One \texttt{refine} over a record literal: \texttt{params} is lifted and the field telescope lifted
+pointwise by \texttt{piBinders\_lift'}. The key, the field index and the minor arity survive
+because they mention \texttt{fieldTys} only through its length, so \texttt{List.length\_mapIdx}
+discharges them, and the parameter count by \texttt{List.length\_map}; the two typings are weakened
+by \texttt{HasType.weak'} and realigned by \texttt{projFn\_lift'} and
+\texttt{projMotiveBody\_lift'}; and the constructor-instantiation equation is transported by
+\texttt{instPis\_lift'} together with closedness of the recorded constant type
+(\texttt{Ordered.closedC}); the \texttt{Ordered} hypothesis is consumed there and by the two
+weakenings, \texttt{HasType.weak'} itself requiring it.
+\end{proof}
+
+\begin{theorem}[Strengthening of the projection translation (open)]
+\label{thm:trproj-weak-inv}
+\lean{Lean4Lean.TrProj.weak'_inv}
+\leanok
+\uses{def:trproj, fam:ctx-lift}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{745}
+\thesisref{Weakening (typesys.tex, \texttt{thm:weak}), item 3, the strengthening direction}
+For \texttt{env} well formed, $\Gamma'$ pointwise a type, and
+\texttt{W : Ctx.Lift' l $\Gamma$ $\Gamma'$}: if the lifted term \texttt{e.lift' l} has a projection
+translation over $\Gamma'$, then \texttt{e} has one (to some target) over $\Gamma$.
+\end{theorem}
+\begin{proof}
+\uses{thm:isdefequ-weakn-iff}
+\textbf{Not proved in Lean.} The declaration is \texttt{sorry}, as it was on master, but it now
+carries a docstring saying why: the type of \texttt{e.lift' l} is only \emph{definitionally equal}
+to a lifted type, so recovering the parameters over $\Gamma$ needs
+\texttt{VEnv.IsDefEqU.weakN\_iff}, itself an admitted master lemma
+(\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{172}). The consequence is that
+\texttt{TrExprS.weakFV'\_inv} (Theorem \ref{thm:trexprs-weakfv-inv}) and the three
+\texttt{Conditionally*.weakN\_inv} lemmas remain sorry-dependent; they were on master too, so this
+is not a regression.
+\end{proof}
+\axfoot{sorryAx: the declaration is itself sorry; blocked on VEnv.IsDefEqU.weakN\_iff (master)}
+
+\begin{theorem}[The projection translation transports along defeq contexts and defeq sources]
+\label{thm:trproj-defeqdfc}
+\lean{Lean4Lean.TrProj.defeqDFC}
+\leanok
+\uses{def:trproj, fam:defeqdfc}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{749}
+\thesisref{no direct counterpart; the model-side analogue is \texttt{IsDefEq.defeqDFC}}
+For \texttt{env} well formed, a definitional equality of contexts
+\texttt{IsDefEqCtx U [] $\Gamma_1$ $\Gamma_2$} and of sources
+$\texttt{e}_1 \equiv \texttt{e}_2$ over $\Gamma_1$: a projection translation of \texttt{e}$_1$ over
+$\Gamma_1$ yields one of \texttt{e}$_2$ over $\Gamma_2$, to a possibly different target.
+\end{theorem}
+\begin{proof}
+\uses{fam:defeq-mixing}
+\leanok
+Four lines. The source occurs exactly once, as the argument of the expansion, whose own typing does
+not mention it: transport \texttt{major\_ty} and \texttt{fn\_ty} along \texttt{HasType.defeqDFC},
+replace the major by the definitionally equal one with \texttt{HasType.defeqU\_l}, and rebuild the
+application. The statement deliberately produces only \emph{some} target; callers recover the
+relation to a given target with the still-open \texttt{TrProj.uniq}.
+\end{proof}
+\axfoot{sorryAx via VEnv.HasType.defeqU\_l, i.e. unique typing (VEnv.IsDefEq.uniq), which rests on master's admitted injectivity lemmas (Theory/Typing/Injectivity.lean, e.g. IsDefEqU.forallE\_inv\_stratified) and, on this branch, additionally on VEnv.WF.patsStrong (Theory/Typing/EnvLemmas.lean:334, iota)}
+
+\begin{theorem}[The projection translation is monotone in the environment]
+\label{thm:trproj-mono}
+\lean{Lean4Lean.TrProj.mono}
+\leanok
+\uses{def:trproj, struct:venv-le}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{767}
+\thesisref{no counterpart}
+If \texttt{env} $\le$ \texttt{env'} then \texttt{TrProj env U $\Gamma$ s i e e'} implies
+\texttt{TrProj env' U $\Gamma$ s i e e'}.
+\end{theorem}
+\begin{proof}
+\uses{thm:isdefeq-mono}
+\leanok
+Every field is monotone: \texttt{pat} by the \texttt{pats} component of \texttt{VEnv.LE},
+\texttt{ctor} and \texttt{minor\_arity} by its \texttt{constants} component, and the two typings by
+\texttt{HasType.mono}. The lemma has no master counterpart; it exists only because \texttt{TrProj}
+now mentions \texttt{env}, and it rests on the \texttt{iota} branch's monotonicity of the pattern
+registry, a neat cross-branch fit.
+\end{proof}
+
+\begin{theorem}[The expansion of a projection is well typed]
+\label{thm:trproj-wf}
+\lean{Lean4Lean.TrProj.wf}
+\leanok
+\uses{def:trproj}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{939}
+\thesisref{Regularity (typesys.tex, \texttt{thm:reg}), at the level of the translation}
+\texttt{TrProj env U $\Gamma$ s i e e'} implies \texttt{VExpr.WF env U $\Gamma$ e'}, with no
+hypothesis on \texttt{e}.
+\end{theorem}
+\begin{proof}
+\uses{def:hastype-istype}
+\leanok
+Unfold \texttt{e'} to the expansion applied to \texttt{e} and apply \texttt{fn\_ty} to
+\texttt{major\_ty}. This is stronger than master's stub, which additionally assumed
+\texttt{VExpr.WF env U $\Gamma$ e}: well-typedness of the major is now a field of the relation.
+Master's stub was in fact mis-stated, its \texttt{TrProj} hypothesis being taken over an
+auto-bound context variable unrelated to the $\Gamma$ of its conclusion. The
+corresponding case of \texttt{TrExprS.wf} shrinks accordingly, from \texttt{h2.wf (ih h$\Delta$)} to
+\texttt{h2.wf}.
+\end{proof}
+
+\begin{theorem}[Uniqueness of the projection translation (open)]
+\label{thm:trproj-uniq}
+\lean{Lean4Lean.TrProj.uniq}
+\leanok
+\uses{def:trproj, def:isdefeq}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{992}
+\thesisref{Unique typing (unique.tex, \texttt{thm:utype}), at the level of the translation}
+For \texttt{env} well formed and \texttt{IsDefEqCtx U [] $\Gamma_1$ $\Gamma_2$}: if
+\texttt{TrProj env U $\Gamma_1$ s$_1$ i e$_1$ e$_1'$} and
+\texttt{TrProj env U $\Gamma_2$ s$_2$ i e$_2$ e$_2'$} with
+$\texttt{e}_1 \equiv \texttt{e}_2$ over $\Gamma_1$, then
+$\texttt{e}_1' \equiv \texttt{e}_2'$ over $\Gamma_1$. Note that the two structure names are
+separate variables: only the field index is shared, because the \texttt{proj} case of the model's
+congruence compares two projections up to the index alone.
+\end{theorem}
+\begin{proof}
+\uses{thm:unique-typing, def:proj-fn}
+\textbf{Not proved in Lean.} The declaration is \texttt{sorry}, as on master, but it now carries an
+eight-line docstring listing what a proof would need: unique typing of the projection function,
+type-former injectivity for \texttt{usS}, \texttt{params} and the head names, and functionality of
+the $\iota$ registry for \texttt{np} and the field count, since the key \texttt{np+1+1+0} does not
+by itself exclude reading a two-minor recursor as \texttt{(np+1)+1+1+0} nor a second constructor for
+\texttt{s}; then a congruence for \texttt{instPis} under pointwise definitional equality of
+\texttt{params}, one for \texttt{projFn} by induction on \texttt{i}, and \texttt{appDF}.
+\end{proof}
+\axfoot{sorryAx: the declaration is itself sorry; TrExprS.uniq and TrExpr.proj inherit it}
+
+\begin{remark}
+The sketch does not say how the per-field level list \texttt{uss} is pinned. Two
+\texttt{TrProjCtor} witnesses for the same projection may in principle choose different
+\texttt{uss}, in which case the two expansions are syntactically different recursor applications at
+different universe instances, and a definitional equality between them is not obviously available.
+Either the sketch is incomplete or \texttt{TrProjCtor} needs a further field tying \texttt{uss i} to
+the sort of the field type \texttt{F}$_i$.
+\end{remark}
+
+\begin{theorem}[Instantiation of the projection translation]
+\label{thm:trproj-instn}
+\lean{Lean4Lean.TrProj.instN}
+\leanok
+\uses{def:trproj, fam:ctx-lift}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1296}
+\thesisref{Substitution (typesys.tex, \texttt{thm:subst}), at the level of the translation}
+If \texttt{env} is \texttt{Ordered}, \texttt{W : Ctx.InstN $\Gamma_0$ e$_0$ A$_0$ k $\Gamma_1$
+$\Gamma$}, \texttt{TrProj env U $\Gamma_1$ s i e e'} and
+$\Gamma_0 \vdash \texttt{e}_0 : \texttt{A}_0$, then
+\texttt{TrProj env U $\Gamma$ s i (e.inst e$_0$ k) (e'.inst e$_0$ k)}.
+\end{theorem}
+\begin{proof}
+\uses{fam:ctorheaded-stability, thm:proj-instpis-ctorheaded, fam:proj-fn-subst, fam:proj-motivebody-subst, fam:proj-instpis-subst, thm:isdefeq-instn, thm:isdefeq-closedn}
+\leanok
+The same record rebuild as \texttt{weak'}, with \texttt{params} and the field telescope instantiated
+pointwise. The key ingredient is \texttt{piBinders\_inst\_of\_ctorHeaded}, which needs the
+constructor type to be \texttt{CtorHeaded} (obtained from \texttt{instPis\_ctorHeaded}), since
+instantiating inside a telescope could otherwise create new binders; the two typings go by
+\texttt{HasType.instN} and the instantiation equation by \texttt{instPis\_inst} plus closedness of
+the constant's recorded type. The \texttt{CtorHeaded} field of \texttt{TrProjCtor} exists precisely
+for this lemma. Both the \texttt{Ordered} hypothesis and
+$\Gamma_0 \vdash \texttt{e}_0 : \texttt{A}_0$ are new relative to master's stub; both are available
+at the single call site inside \texttt{TrExprS.instN}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1343}).
+\end{proof}
+
+\begin{theorem}[Level instantiation of the projection translation]
+\label{thm:trproj-instl}
+\lean{Lean4Lean.TrProj.instL}
+\leanok
+\uses{def:trproj, def:vlevel-inst}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1588}
+\thesisref{no separate counterpart; universe substitution is implicit in the thesis}
+If every level of \texttt{ls} is well formed over \texttt{U'}, then
+\texttt{TrProj env U $\Gamma$ s i e e'} implies
+\texttt{TrProj env U' ($\Gamma$.map (VExpr.instL ls)) s i (e.instL ls) (e'.instL ls)}, with the
+structure's level list, every per-field level list, the parameters and the field telescope
+instantiated pointwise.
+\end{theorem}
+\begin{proof}
+\uses{fam:pibinders-stability, fam:proj-fn-subst, fam:proj-motivebody-subst, fam:proj-instpis-subst, thm:isdefeq-instl}
+\leanok
+The same shape as \texttt{weak'} and \texttt{instN}, using \texttt{piBinders\_instL},
+\texttt{projFn\_instL}, \texttt{projMotiveBody\_instL}, \texttt{HasType.instL} and
+\texttt{instPis\_instL} with \texttt{instL\_instL}. This is the one place where the function-valued
+\texttt{uss} really has to be transported, as
+\texttt{fun j => (uss j).map (VLevel.inst ls)}, and it goes through cleanly, which is mild evidence
+that the design is workable. Master's stub already carried \texttt{hls}, so unlike
+\texttt{weak'} and \texttt{instN} this signature is unchanged.
+\end{proof}
+
+\section{Transport of the translation}
+
+The lemmas of this section are the translation-level shadows of the thesis's structural lemmas.
+All of them are master's. The \texttt{trproj} branch touched the \texttt{proj} case of five of the
+inductions, \texttt{weakFV'}, \texttt{weakBV}, \texttt{mono}, \texttt{wf} and \texttt{instN}, plus
+the signature of the \texttt{TrExpr.proj} builder, which is where the corresponding \texttt{TrProj}
+lemma of the previous section is applied; the \texttt{proj} cases of \texttt{uniq},
+\texttt{defeqDFC}, \texttt{weakFV'\_inv}, \texttt{instN\_let} and \texttt{abstract} needed no edit,
+since the shape of the argument they pass did not change. The \texttt{iota} branch touched none of
+them.
+
+\begin{theorem}[Translation is preserved by free-variable weakening]
+\label{thm:trexprs-weakfv}
+\lean{Lean4Lean.TrExprS.weakFV', Lean4Lean.TrExpr.weakFV', Lean4Lean.TrExprS.weakFV, Lean4Lean.TrExpr.weakFV}
+\leanok
+\uses{ind:trexprs, ind:vt-fvlift, def:trexpr}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{669}
+\thesisref{Weakening (typesys.tex, \texttt{thm:weak}), at the level of the translation}
+For \texttt{env} \texttt{Ordered}, a lift \texttt{W : VLCtx.FVLift'} from $\Delta$ to $\Delta'$ and
+$\Delta'$ well formed: \texttt{TrExprS env Us $\Delta$ e e'} implies
+\texttt{TrExprS env Us $\Delta'$ e (e'.lift' (n.consN k))}, the source term being unchanged since
+free variables are named. \texttt{weakFV} is the \texttt{FVLift}/\texttt{liftN} specialisation, and
+both have \texttt{TrExpr} variants, which need \texttt{env} well formed because they also weaken
+the definitional equality.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-weak, thm:isdefeq-weakn, family:vt-vlctx-wf-lemmas}
+\leanok
+Induction on the translation. Both variable cases go through \texttt{FVLift'.find?}; the
+\texttt{app}, \texttt{lam}, \texttt{forallE} and \texttt{letE} rules weaken their typing side
+conditions with \texttt{HasType.weak'} and recurse, extending the lift by \texttt{cons\_bvar} and
+the context well-formedness by the weakened binder type at each binder. The \texttt{proj} case is
+the only one the branch changed: it now passes the environment hypothesis on to
+\texttt{TrProj.weak'} (Theorem \ref{thm:trproj-weak}).
+\end{proof}
+
+\begin{theorem}[Translation is preserved by bound-variable weakening]
+\label{thm:trexprs-weakbv}
+\lean{Lean4Lean.TrExprS.weakBV, Lean4Lean.TrExpr.weakBV}
+\leanok
+\uses{ind:trexprs, ind:vt-bvlift, def:trexpr}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{710}
+\thesisref{Weakening (typesys.tex, \texttt{thm:weak}), at the level of the translation}
+For \texttt{env} \texttt{Ordered} and a \texttt{VLCtx.BVLift} from $\Delta$ to $\Delta'$:
+\texttt{TrExprS env Us $\Delta$ e e'} implies
+\texttt{TrExprS env Us $\Delta'$ (e.liftLooseBVars' dk dn) (e'.liftN n k)}. Here the source term
+does move, because the inserted entries are anonymous.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-weak, thm:isdefeq-weakn, family:vt-closed-lemmas}
+\leanok
+Induction on the translation, weakening each typing side condition with \texttt{HasType.weakN} and
+each binder by \texttt{BVLift.cons}. The literal case is the only non-routine one: the constructor
+form of a literal is closed, so \texttt{liftLooseBVars} is the identity on it, which is
+\texttt{Closed.toConstructor.looseBVarRange\_le}. The \texttt{proj} case was updated on
+\texttt{trproj} to pass the environment hypothesis to \texttt{TrProj.weakN}.
+\end{proof}
+
+\begin{theorem}[Translation is monotone in the environment]
+\label{thm:trexprs-mono}
+\lean{Lean4Lean.TrExprS.mono, Lean4Lean.TrExpr.mono, Lean4Lean.VEnv.ContainsLits.mono}
+\leanok
+\uses{ind:trexprs, struct:venv-le, def:vt-containslits}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{781}
+\thesisref{no counterpart}
+If \texttt{env} $\le$ \texttt{env'} then \texttt{TrExprS env Us $\Delta$ e e'} implies
+\texttt{TrExprS env' Us $\Delta$ e e'}, and likewise for \texttt{TrExpr} and for the literal side
+condition \texttt{ContainsLits}.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-mono, thm:isdefeq-mono}
+\leanok
+Induction on the translation: the \texttt{const} case uses the \texttt{constants} component of
+\texttt{VEnv.LE} and the typing side conditions use \texttt{HasType.mono}. The \texttt{proj} case
+changed on \texttt{trproj} from \texttt{exact .proj ih h2}, where there was nothing to do because
+\texttt{TrProj} did not mention \texttt{env}, to \texttt{exact .proj ih (h2.mono henv)}; this is
+the obligation that forced Theorem \ref{thm:trproj-mono} into existence.
+\end{proof}
+
+\begin{theorem}[A translation produces a well-formed model term]
+\label{thm:trexprs-wf}
+\lean{Lean4Lean.TrExprS.wf, Lean4Lean.TrExpr.wf, Lean4Lean.TrExprS.trExpr}
+\leanok
+\uses{ind:trexprs, def:vt-vlctx-wf, def:hastype-istype}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{947}
+\thesisref{Regularity (typesys.tex, \texttt{thm:reg}), at the level of the translation}
+Over an \texttt{Ordered} environment and a well-formed $\Delta$, \texttt{TrExprS env Us $\Delta$ e e'}
+implies that \texttt{e'} has some type over $\Delta$\texttt{.toCtx}; \texttt{trExpr} packages that
+into a \texttt{TrExpr} by reflexivity. The \texttt{TrExpr} form needs no hypotheses at all, since
+the witness carries its own typing.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-wf, family:vt-vlctx-wf-lemmas, def:vlevel-oflevel}
+\leanok
+Induction on the translation, reading the typing off the side conditions of each rule: variables
+use \texttt{VLCtx.WF.find?\_wf}, and the \texttt{sort} and \texttt{const} cases rebuild the model's
+own rules from the level translation. On \texttt{trproj} the projection case simplified from an
+application of the stub to the recursive call to a bare \texttt{h2.wf}, because \texttt{TrProj}
+now carries the major premise's typing itself (Theorem \ref{thm:trproj-wf}).
+\end{proof}
+
+\begin{theorem}[Uniqueness of translation up to definitional equality]
+\label{thm:trexprs-uniq}
+\lean{Lean4Lean.TrExprS.uniq, Lean4Lean.TrExpr.uniq}
+\leanok
+\uses{ind:trexprs, ind:vt-vlctx-isdefeq, def:isdefeq}
+For \texttt{env} well formed and $\Delta_1$, $\Delta_2$ definitionally equal translation contexts:
+two translations of the \emph{same} source expression, one over $\Delta_1$ and one over $\Delta_2$,
+have definitionally equal targets over $\Delta_1$\texttt{.toCtx}. This is the translation-level
+form of Unique typing (unique.tex, \texttt{thm:utype}).
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-uniq, fam:defeq-mixing, thm:trexprs-wf}
+\leanok
+Induction on the first translation, inverting the second at each node. The variable cases are
+\texttt{VLCtx.IsDefEq.find?\_uniq}; \texttt{appDF}, \texttt{lamDF} and \texttt{forallEDF} assemble
+the congruences, each preceded by an \texttt{of\_l} that re-types the recursive equality at the
+left-hand side's type. The projection case delegates to \texttt{TrProj.uniq}
+(Theorem \ref{thm:trproj-uniq}), which is \texttt{sorry}, so this theorem is sorry-dependent; it
+already was on master.
+\end{proof}
+\axfoot{sorryAx via TrProj.uniq (Verify/Typing/Lemmas.lean:992)}
+
+\begin{theorem}[Translation transports along definitionally equal contexts]
+\label{thm:trexprs-defeqdfc}
+\lean{Lean4Lean.TrExprS.defeqDFC, Lean4Lean.TrExprS.defeqDFC'}
+\leanok
+\uses{ind:trexprs, ind:vt-vlctx-isdefeq}
+If \texttt{e} translates over $\Delta_1$ and $\Delta_1$ is definitionally equal to $\Delta_2$, then
+\texttt{e} translates over $\Delta_2$ to \emph{some} target; the primed form packages the original
+target back in as a \texttt{TrExpr} over $\Delta_2$.
+\end{theorem}
+\begin{proof}
+\uses{thm:trexprs-uniq, thm:trproj-defeqdfc, fam:defeqdfc}
+\leanok
+Induction on the translation: at each node the typing side conditions are moved across with
+\texttt{HasType.defeqDFC} and then repaired by \texttt{defeqU\_l} against the uniqueness of the
+recursive results (Theorem \ref{thm:trexprs-uniq}); the projection case is
+Theorem \ref{thm:trproj-defeqdfc}, which is why it produces only an existential target.
+\end{proof}
+\axfoot{sorryAx inherited from TrExprS.uniq, hence TrProj.uniq}
+
+\begin{lemma}[Introduction rules for the up-to-defeq translation]
+\label{family:trexpr-builders}
+\lean{Lean4Lean.TrExpr.defeq, Lean4Lean.TrExpr.app, Lean4Lean.TrExpr.lam, Lean4Lean.TrExpr.forallE, Lean4Lean.TrExpr.letE, Lean4Lean.TrExpr.lit, Lean4Lean.TrExpr.mdata, Lean4Lean.TrExpr.proj}
+\leanok
+\uses{def:trexpr}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{967}
+\thesisref{no counterpart}
+One introduction rule per expression former, lifting the strict rules of \texttt{TrExprS} to
+\texttt{TrExpr}, together with \texttt{TrExpr.defeq}, which post-composes a target with a
+definitional equality. The binder rules carry the content: the body has been translated in a
+context whose binder type is only definitionally equal to the one the rule is asked for.
+\end{lemma}
+\begin{proof}
+\uses{thm:trexprs-uniq, thm:trexprs-defeqdfc}
+\leanok
+The three binder rules unpack their \texttt{TrExpr} witnesses, transport the body's strict
+translation along the induced definitional equality of contexts with \texttt{TrExprS.defeqDFC},
+realign the two targets with \texttt{TrExprS.uniq}, and rebuild the strict rule; \texttt{app},
+\texttt{lit} and \texttt{mdata} only re-type the recursive equalities (\texttt{of\_r},
+\texttt{appDF}) and rebuild. \texttt{TrExpr.proj}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1162}) changed on \texttt{trproj} only in that its
+\texttt{TrProj} argument gained the \texttt{env} and \texttt{Us.length} parameters; its proof
+still routes through the admitted \texttt{TrProj.uniq}.
+\end{proof}
+\axfoot{sorryAx in defeq, app, lam, forallE, letE and proj, not in lit or mdata: defeq and app through the model's admitted unique typing alone, the binder rules and proj additionally through TrExprS.uniq, hence TrProj.uniq (Verify/Typing/Lemmas.lean:992)}
+
+\begin{theorem}[Strengthening: a translation that does not use the extra variables descends]
+\label{thm:trexprs-weakfv-inv}
+\lean{Lean4Lean.TrExprS.weakFV'_inv, Lean4Lean.TrExprS.weakFV_inv}
+\leanok
+\uses{ind:trexprs, ind:vt-fvlift, def:vt-closed, def:vt-fvarsin}
+For \texttt{env} well formed, a lift \texttt{W} from $\Delta$ to $\Delta_2$ and $\Delta_1$
+definitionally equal to $\Delta_2$: if \texttt{e} translates over $\Delta_1$, is \texttt{Closed} at
+the bound-variable depth and has all its free variables in $\Delta$\texttt{.fvars}, then \texttt{e}
+translates over the smaller $\Delta$. This is the strengthening direction of Weakening
+(typesys.tex, \texttt{thm:weak}, item 3), and the only place in the chapter where that direction
+is needed.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-weak-inv, thm:trexprs-uniq, thm:trexprs-weakfv, fam:weakening-iff}
+\leanok
+Induction on the translation. At each node the recursive results are weakened back up with
+Theorem \ref{thm:trexprs-weakfv}, realigned with Theorem \ref{thm:trexprs-uniq}, and the typing
+side conditions then pushed down by \texttt{VExpr.WF.weak'\_iff} and \texttt{HasType.weak'\_iff},
+both consequences of unique typing. The bound-variable case is an inner induction on the lift.
+The projection case calls the admitted \texttt{TrProj.weak'\_inv}
+(Theorem \ref{thm:trproj-weak-inv}); that is the reason this theorem, and with it the three
+\texttt{Conditionally} strengthening lemmas of the last section of this chapter, stay
+sorry-dependent.
+\end{proof}
+\axfoot{sorryAx via TrProj.weak'\_inv, itself blocked on VEnv.IsDefEqU.weakN\_iff (Theory/Typing/UniqueTyping.lean:172, master)}
+
+\begin{theorem}[Translation commutes with instantiating a lambda binder]
+\label{thm:trexprs-instn}
+\lean{Lean4Lean.TrExprS.instN_var, Lean4Lean.TrExprS.instN, Lean4Lean.TrExprS.inst, Lean4Lean.TrExpr.inst}
+\leanok
+\uses{ind:trexprs, ind:vt-instn}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1251}
+\thesisref{Substitution (typesys.tex, \texttt{thm:subst}), at the level of the translation}
+Let \texttt{env} be \texttt{Ordered}, let \texttt{e0} translate to \texttt{e0'} over $\Delta_0$
+with $\Delta_0 \vdash \texttt{e0'} : \texttt{A0}$, and let \texttt{W} be a \texttt{VLCtx.InstN}
+substituting \texttt{e0'} for the binder at depth \texttt{dk} of $\Delta_1$, giving $\Delta$. Then
+\texttt{TrExprS env Us $\Delta_1$ e e'} implies
+\texttt{TrExprS env Us $\Delta$ (e.instantiate1' e0 dk) (e'.inst e0' k)}. \texttt{inst} is the
+outermost-binder case and \texttt{TrExpr.inst} its up-to-defeq form.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-instn, thm:isdefeq-instn, thm:trexprs-weakbv}
+\leanok
+The variable case is a separate induction on \texttt{W} (\texttt{instN\_var}), splitting on whether
+the variable is the one being substituted, a bound variable inside or outside the substituted
+position, or a free variable; when the substituted value has to cross a binder it is re-lifted by
+Theorem \ref{thm:trexprs-weakbv}. The rest is an induction on the translation, instantiating each
+typing side condition by \texttt{HasType.instN}, with the literal case again using closedness of
+the constructor form. The projection case reads \texttt{h2.instN henv W.toCtx t0} on
+\texttt{trproj}, where master's stub took no typing argument; the new hypothesis is available at
+this single call site.
+\end{proof}
+\axfoot{sorryAx: the TrExpr form routes through the TrExpr builders and TrExprS.uniq, hence TrProj.uniq}
+
+\begin{theorem}[Translation commutes with unfolding a let binder]
+\label{thm:trexprs-instlet}
+\lean{Lean4Lean.TrExprS.instN_let_var, Lean4Lean.TrExprS.instN_let, Lean4Lean.TrExprS.inst_let, Lean4Lean.TrExpr.inst_let}
+\leanok
+\uses{ind:trexprs, ind:vt-instn}
+The analogue of Theorem \ref{thm:trexprs-instn} for a \texttt{vlet} entry: the source term is
+substituted but the model term and the model context are unchanged, since a \texttt{vlet} occupies
+no slot in \texttt{toCtx}. The thesis's counterpart is $\zeta$ reduction (axioms.tex, let binders).
+\end{theorem}
+\begin{proof}
+\uses{thm:trexprs-weakbv}
+\leanok
+The same two-step shape as Theorem \ref{thm:trexprs-instn}: a variable lemma by induction on
+\texttt{InstLet}, then an induction on the translation. Because \texttt{InstLet.toCtx} says the
+model context does not move, no typing side condition has to be transported at all.
+\end{proof}
+\axfoot{sorryAx: the TrExpr form routes through the TrExpr builders and TrExprS.uniq}
+
+\begin{theorem}[Translation commutes with abstracting a free variable]
+\label{thm:trexprs-abstract}
+\lean{Lean4Lean.TrExprS.abstract, Lean4Lean.TrExpr.abstract}
+\leanok
+\uses{ind:trexprs, ind:vt-abstract}
+For an \texttt{Abstract} relation turning the named entry \texttt{v0} of $\Delta_1$ into an
+anonymous one, giving $\Delta$: if \texttt{e} translates over $\Delta_1$ to \texttt{e'}, then
+\texttt{e.abstract1 v0 dk} translates over $\Delta$ to the \emph{same} \texttt{e'}. The model side
+does not move, which is the point of the relation.
+\end{theorem}
+\begin{proof}
+\uses{family:vt-fvarsin-lemmas}
+\leanok
+Induction on the translation; the two variable cases carry the content.
+\texttt{Abstract.find?} handles every variable other than \texttt{v0}, and
+\texttt{Abstract.find?\_self} turns an occurrence of \texttt{v0} itself into the new bound
+variable. The literal case uses \texttt{FVarsIn.abstract\_eq\_self}, and the typing side conditions
+are transported by a rewrite along \texttt{Abstract.toCtx}.
+\end{proof}
+
+\begin{lemma}[Opening and closing binders with fresh free variables]
+\label{family:trexprs-uninstantiate}
+\lean{Lean4Lean.TrExprS.uninstantiateN, Lean4Lean.TrExpr.uninstantiateN, Lean4Lean.TrExprS.uninstantiate, Lean4Lean.TrExpr.uninstantiate, Lean4Lean.TrExprS.inst_fvar, Lean4Lean.TrExpr.rebuild_mkAppRevList, Lean4Lean.TrExpr.rebuild_mkAppList}
+\leanok
+\uses{ind:trexprs, ind:vt-abstract, def:mkapps}
+Translating a body that has been opened with a fresh free variable is interchangeable with
+translating it under an anonymous binder: \texttt{uninstantiate} closes the binder again, provided
+the body does not already mention that variable, and \texttt{inst\_fvar} is the opposite
+direction. \texttt{rebuild\_mkAppList} re-applies an already translated argument spine to a
+definitionally equal head. These are the lemmas the checker uses around each
+\texttt{withLocalDecl}.
+\end{lemma}
+\begin{proof}
+\uses{thm:trexprs-abstract, thm:trexprs-instn, thm:trexprs-weakfv}
+\leanok
+The \texttt{uninstantiate} family is Theorem \ref{thm:trexprs-abstract} composed with
+\texttt{FVarsIn.abstract\_instantiate1}, which cancels an abstraction against an instantiation at a
+variable not occurring in the term. \texttt{inst\_fvar} weakens past the new named entry and then
+instantiates, splitting on \texttt{vlam} versus \texttt{vlet}.
+\texttt{rebuild\_mkAppRevList} is an induction on the argument list using the \texttt{app} builder
+of Lemma \ref{family:trexpr-builders}, with \texttt{TrExprS.uniq} closing the empty case, and
+\texttt{rebuild\_mkAppList} is a one-line rewrite through \texttt{mkAppRevList\_reverse}.
+\end{proof}
+\axfoot{sorryAx in the two rebuild lemmas only, via the TrExpr app builder and TrExprS.uniq, hence TrProj.uniq; the uninstantiate family itself is clean}
+
+\begin{definition}[Syntactic (on-the-nose) uniqueness of translation]
+\label{def:trexprs-isunique}
+\lean{Lean4Lean.TrExprS.IsUnique, Lean4Lean.TrExprS.IsUnique.natLitToConstructor, Lean4Lean.TrExprS.IsUnique.strLitToConstructor, Lean4Lean.TrExprS.IsUnique.toConstructor, Lean4Lean.TrExprS.IsUniqueDecl, Lean4Lean.TrExprS.IsUniqueCtx, Lean4Lean.TrExprS.IsUniqueCtx.find?_uniq, Lean4Lean.TrExprS.unique', Lean4Lean.TrExprS.unique}
+\leanok
+\uses{ind:trexprs}
+\texttt{IsUnique e} is the structural predicate marking the expressions whose translation is
+determined up to \emph{syntactic} equality. Every clause is \texttt{True} or the conjunction of
+the subterms' clauses, with one exception: the projection clause is \texttt{False}.
+\texttt{IsUniqueCtx} relates two contexts differing only in the \emph{types} of their declarations,
+and \texttt{TrExprS.unique'} says that over such a pair an \texttt{IsUnique} expression has
+literally equal targets. The proof is an induction on the first translation inverting the second,
+the variable cases being \texttt{IsUniqueCtx.find?\_uniq}.
+\end{definition}
+
+\begin{remark}
+The \texttt{proj} clause being \texttt{False} is where the absence of a projection node in
+\texttt{VExpr} becomes visible: a projection has no canonical target, only a
+definitional-equality class. The \texttt{trproj} work does not change this and arguably could
+not, since \texttt{TrProjCtor} leaves the per-field level list \texttt{uss} free
+(Definition \ref{struct:trprojctor}).
+\end{remark}
+
+\section{Universe substitution}
+
+\begin{lemma}[Level translation and the smart level constructors]
+\label{family:vt-oflevel}
+\lean{Lean4Lean.ofLevel_mkLevelMax', Lean4Lean.ofLevel_isNeverZero, Lean4Lean.ofLevel_isAlwaysZero, Lean4Lean.ofLevel_mkLevelIMax', Lean4Lean.substParams_wf, Lean4Lean.substParams_wf_list}
+\leanok
+\uses{def:vlevel-oflevel, def:vlevel-le-equiv}
+\texttt{VLevel.ofLevel} commutes, up to the model's level equivalence, with Lean's normalising
+constructors \texttt{mkLevelMax'} and \texttt{mkLevelIMax'}, and it respects the
+\texttt{isNeverZero} and \texttt{isAlwaysZero} tests those constructors branch on.
+\texttt{substParams\_wf} lifts this to universe-parameter substitution: if \texttt{u} translates
+over the parameter list \texttt{ps}, then \texttt{u.substParams'} translates over \texttt{Us} to
+something equivalent to the instantiated translation. \texttt{substParams\_wf\_list} is the list
+form. Equivalence rather than equality is unavoidable, since the real constructors normalise.
+\end{lemma}
+\begin{proof}
+\uses{fam:vlevel-lattice}
+\leanok
+Case analysis on the level shapes, every branch of the real implementation's \texttt{subsumes}
+test discharged by a lattice fact about \texttt{VLevel} (\texttt{le\_max\_left},
+\texttt{max\_self}, \texttt{succ\_le\_succ}). \texttt{substParams\_wf} is then an induction on the
+level whose parameter case reduces to a lookup in the substitution list, the \texttt{max} and
+\texttt{imax} cases splitting on whether the smart constructor fired.
+\end{proof}
+
+\begin{theorem}[Translation commutes with universe-parameter substitution]
+\label{thm:trexprs-instl}
+\lean{Lean4Lean.TrExprS.instL, Lean4Lean.TrExpr.instL}
+\leanok
+\uses{ind:trexprs, def:instl, def:trexpr}
+For \texttt{env} well formed and $\Delta$ well formed, if the levels \texttt{ls} translate to
+\texttt{ls'} over \texttt{Us} and \texttt{ps.length = ls.length}, then a
+translation over the parameter list \texttt{ps} and $\Delta$ yields
+\texttt{TrExpr env Us ($\Delta$.instL ls') (e.instantiateLevelParams ps ls) (e'.instL ls')}. The
+conclusion is a \texttt{TrExpr} and not a \texttt{TrExprS}: because Lean's level substitution
+normalises, the substituted source translates only to something definitionally equal to the
+substituted target.
+\end{theorem}
+\begin{proof}
+\uses{family:vt-oflevel, thm:trproj-instl, thm:isdefeq-instl, family:trexpr-builders}
+\leanok
+Induction on the translation. The \texttt{sort} and \texttt{const} cases are where the equivalence
+enters, through \texttt{substParams\_wf} and \texttt{substParams\_wf\_list} followed by the model's
+\texttt{sortDF} and \texttt{constDF}; every other case applies the corresponding \texttt{TrExpr}
+builder of Lemma \ref{family:trexpr-builders} to the level-instantiated side conditions. The
+projection case is Theorem \ref{thm:trproj-instl}.
+\end{proof}
+\axfoot{sorryAx via the TrExpr builders and TrExprS.uniq, hence TrProj.uniq}
+
+\section{Scopes, beta reduction and spines}
+
+\begin{definition}[Upward-closed sets of free variables, and the typing bundle]
+\label{def:isfvarupset}
+\lean{Lean4Lean.VLocalDecl.ClosedN, Lean4Lean.VLCtx.Closed, Lean4Lean.IsFVarUpSet, Lean4Lean.IsFVarUpSet.congr, Lean4Lean.IsFVarUpSet.and_fvars, Lean4Lean.IsFVarUpSet.trivial, Lean4Lean.IsFVarUpSet.fvars, Lean4Lean.AllAbove, Lean4Lean.AllAbove.wf, Lean4Lean.FVarsBelow, Lean4Lean.FVarsBelow.rfl, Lean4Lean.FVarsBelow.trans, Lean4Lean.TrTyping}
+\leanok
+\uses{def:vt-fvarsin, def:vt-vlctx, ind:trexprs}
+\texttt{IsFVarUpSet P $\Delta$} says that \texttt{P} is closed under the dependency edges recorded
+in $\Delta$: if it holds of a named entry, it holds of every variable that entry's declaration
+depends on. \texttt{FVarsBelow $\Delta$ e e'} says that \texttt{e'} satisfies every up-set that
+\texttt{e} satisfies; this is the precise form of ``the computed type does not escape the scope of
+the term''. \texttt{AllAbove} is the relativisation that makes an arbitrary predicate into one,
+and \texttt{TrTyping} bundles \texttt{FVarsBelow} with the translations of a term and of its type
+and the model typing relating them. It is the postcondition of the checker's \texttt{inferType},
+and the syntactic half of Regularity (typesys.tex, \texttt{thm:reg}).
+\texttt{VLCtx.Closed} and \texttt{VLocalDecl.ClosedN} are the auxiliary closedness predicates on
+the context itself.
+\end{definition}
+
+\begin{definition}[Source-level beta reduction and \texttt{cheapBetaReduce}]
+\label{ind:betareduce}
+\lean{Lean4Lean.LambdaBodyN, Lean4Lean.LambdaBodyN.closed, Lean4Lean.LambdaBodyN.add, Lean4Lean.LambdaBodyN.instantiateList, Lean4Lean.LambdaBodyN.instantiateRevList, Lean4Lean.BetaReduce, Lean4Lean.BetaReduce.mkAppRevList, Lean4Lean.BetaReduce.mkAppList, Lean4Lean.BetaReduce.instantiateList, Lean4Lean.BetaReduce.instantiateRevList, Lean4Lean.FVarsBelow.betaReduce, Lean4Lean.BetaReduce.inst_reduce, Lean4Lean.BetaReduce.cheapBetaReduce, Lean4Lean.FVarsBelow.cheapBetaReduce}
+\leanok
+\uses{def:isfvarupset, def:kernel-cheap-beta, family:expr-subst}
+\texttt{LambdaBodyN n e b} peels \texttt{n} lambda binders off \texttt{e}; \texttt{BetaReduce} is
+the reflexive-transitive congruence closure, along the function side of an application, of a
+single $\beta$ step whose argument is closed (\texttt{looseBVarRange' = 0}). Two results matter:
+\texttt{BetaReduce.cheapBetaReduce} says that Lean's substitution-free
+\texttt{Expr.cheapBetaReduce} is such a reduction on closed terms, and
+\texttt{FVarsBelow.betaReduce} says that $\beta$ never enlarges the free-variable set. The first is
+one of the larger master proofs in the file: the real implementation's \texttt{loop} is analysed
+by an invariant producing a \texttt{LambdaBodyN} witness, after which its \texttt{cont} branches
+are matched against an \texttt{inst\_reduce} of the spine. Together they let the checker's
+\texttt{whnfCore} call \texttt{cheapBetaReduce} without losing its specification. The thesis's
+counterpart is the $\beta$ rule (axioms.tex, Reduction).
+\end{definition}
+
+\begin{theorem}[Beta reduction preserves the translation]
+\label{thm:trexpr-beta}
+\lean{Lean4Lean.TrExpr.beta, Lean4Lean.TrExpr.cheapBetaReduce}
+\leanok
+\uses{ind:betareduce, def:trexpr}
+For \texttt{env} well formed and $\Delta$ well formed: if \texttt{TrExpr env Us $\Delta$ e e'}
+and \texttt{BetaReduce e e2}, then \texttt{TrExpr env Us $\Delta$ e2 e'}: the model target is unchanged, the source reduct being
+definitionally equal on the nose. \texttt{cheapBetaReduce} is the instance the checker uses, with
+the closedness hypothesis supplied by Theorem \ref{thm:trexprs-closed-fvars} together with
+$\Delta$\texttt{.NoBV}.
+\end{theorem}
+\begin{proof}
+\uses{thm:trexprs-instn, thm:trexprs-uniq, thm:trexprs-defeqdfc, thm:isdefeq-instdf, thm:isdefeq-foralle-inv, fam:strong-inversions, family:trexpr-builders}
+\leanok
+Induction on the beta derivation. The congruence case is the \texttt{app} builder; the base case
+inverts the application and the lambda, recovers the binder type with \texttt{lam\_inv} and
+\texttt{forallE\_inv}, realigns the body's translation across the resulting definitional equality
+of contexts with Theorems \ref{thm:trexprs-defeqdfc} and \ref{thm:trexprs-uniq}, and closes with
+the model's \texttt{beta} rule and \texttt{instDF}.
+\end{proof}
+\axfoot{sorryAx via TrExprS.uniq, hence TrProj.uniq}
+
+\begin{lemma}[Transport along Lean's structural equality]
+\label{family:trexprs-eqv}
+\lean{Lean4Lean.TrExprS.eqv, Lean4Lean.TrExpr.eqv, Lean4Lean.fvarsList_eqv, Lean4Lean.FVarsIn.eqv, Lean4Lean.FVarsBelow.eqv, Lean4Lean.TrTyping.eqv}
+\leanok
+\uses{ind:trexprs, def:isfvarupset, def:vt-fvarsin}
+Everything this layer states is invariant under \texttt{Expr.eqv'}, the relation underlying
+\texttt{==}, which differs from propositional equality only in binder names and
+\texttt{BinderInfo}: the two translation relations, \texttt{fvarsList}, \texttt{FVarsIn},
+\texttt{FVarsBelow} and the \texttt{TrTyping} bundle all transport along it. This is what makes
+the checker's use of \texttt{==} on expressions sound at the specification level.
+\end{lemma}
+\begin{proof}
+\uses{family:expr-beq}
+\leanok
+Simultaneous induction on the two expressions, discarding the mismatched shapes by
+\texttt{rintro}, unfolding \texttt{Expr.eqv'} and closing the remaining cases with
+\texttt{grind}.
+\end{proof}
+
+\begin{definition}[Application spines with their typing data]
+\label{ind:appstack}
+\lean{Lean4Lean.AppStack, Lean4Lean.AppStack.build_rev, Lean4Lean.AppStack.tr, Lean4Lean.AppStack.append, Lean4Lean.AppStack.build}
+\leanok
+\uses{ind:trexprs, def:mkapps}
+\texttt{AppStack env Us $\Delta$ f f' as} records that the head \texttt{f} translates to
+\texttt{f'} and that applying it to the arguments \texttt{as} one at a time stays translatable,
+keeping the function and argument typings of every partial application along the way.
+\texttt{build} produces one from a translation of the saturated spine \texttt{f.mkAppList as}, by
+an induction on the argument list through \texttt{build\_rev}; \texttt{tr} projects the head's
+translation back out.
+\end{definition}
+
+\begin{theorem}[Inversion for the translation of an application spine]
+\label{thm:trexprs-mkapplist-inv}
+\lean{Lean4Lean.TrExprS.mkAppList_inv}
+\leanok
+\uses{ind:trexprs, def:mkapps}
+\contrib{trproj} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{2349}
+\thesisref{no counterpart; implementation-level inversion}
+If \texttt{f.mkAppList as} translates to \texttt{e'}, then there are \texttt{f'} and \texttt{as'}
+with \texttt{TrExprS env Us $\Delta$ f f'}, a pointwise \texttt{List.Forall}$_2$ of translations
+between \texttt{as} and \texttt{as'}, and \texttt{e' = f'.mkApps as'}.
+\end{theorem}
+\begin{proof}
+\leanok
+Structural recursion on \texttt{as}. The recursive call at head \texttt{.app f a} returns the
+decomposition of the shorter spine, and inverting the \texttt{app} rule of \texttt{TrExprS} peels
+the outermost argument off. Eight lines, with no side conditions.
+\end{proof}
+
+\begin{remark}
+It is used five times in the projection and $\iota$ WHNF proof,
+\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{87} to \texttt{:93}. It partly duplicates
+\texttt{AppStack.build} (Definition \ref{ind:appstack}), which sits immediately above it at
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{2344} and gives the same decomposition in a different
+shape; the pointwise-list form is the one the WHNF proof needs, so the duplication is defensible,
+but it leaves two spine-inversion idioms side by side.
+\end{remark}
+
+\section{Literals and the primitive invariant}
+
+\begin{definition}[Model-side spellings of the literal constants]
+\label{family:vt-model-literals}
+\lean{Lean4Lean.VExpr.bool, Lean4Lean.VExpr.boolTrue, Lean4Lean.VExpr.boolFalse, Lean4Lean.VExpr.boolLit, Lean4Lean.VExpr.nat, Lean4Lean.VExpr.natZero, Lean4Lean.VExpr.natSucc, Lean4Lean.VExpr.natLit, Lean4Lean.VExpr.char, Lean4Lean.VExpr.string, Lean4Lean.VExpr.stringOfList, Lean4Lean.VExpr.listChar, Lean4Lean.VExpr.listCharNil, Lean4Lean.VExpr.listCharCons, Lean4Lean.VExpr.charOfNat, Lean4Lean.VExpr.listCharLit, Lean4Lean.VExpr.trLiteral, Lean4Lean.VExpr.boolOp2, Lean4Lean.VExpr.natOp2, Lean4Lean.VExpr.inst_natLit, Lean4Lean.VExpr.liftN_natLit, Lean4Lean.VExpr.insts_natLit, Lean4Lean.VExpr.subst_natLit, Lean4Lean.VExpr.inst_boolLit, Lean4Lean.VExpr.insts_boolLit, Lean4Lean.VExpr.subst_boolLit}
+\leanok
+\uses{ind:vexpr, def:vt-containslits}
+Abbreviations naming the model terms the literal translation targets: \texttt{bool} with its two
+constructors and \texttt{boolLit}; \texttt{nat}, \texttt{natZero}, \texttt{natSucc} and the
+\emph{unary} numeral \texttt{natLit n}; \texttt{char}, \texttt{string}, \texttt{listChar} with its
+two constructors, \texttt{charOfNat}, \texttt{stringOfList} and the character-list literal; and
+\texttt{trLiteral}, which sends a \texttt{Lean.Literal} to the corresponding model term.
+\texttt{boolOp2} and \texttt{natOp2} name the two halves of \texttt{Nat.bitwise}'s recorded type.
+Alongside them are the \texttt{simp} lemmas saying that lifting, single and telescope
+instantiation, and general substitution leave these closed terms alone; each is \texttt{rfl} or a
+one-line induction on the numeral.
+\end{definition}
+
+\begin{definition}[Reflection of a metatheoretic function by a model term]
+\label{family:vt-reflects}
+\lean{Lean4Lean.VEnv.ReflectsNatNat', Lean4Lean.VEnv.ReflectsNatNatNat', Lean4Lean.VEnv.ReflectsNatNatBool', Lean4Lean.VEnv.ReflectsBoolBoolBool', Lean4Lean.VEnv.ReflectsNatNat, Lean4Lean.VEnv.ReflectsNatNatNat, Lean4Lean.VEnv.ReflectsNatNatBool}
+\leanok
+\uses{family:vt-model-literals, def:hastype-istype}
+A term \texttt{e} \emph{reflects} a function \texttt{f} when two things hold: \texttt{e} has the
+corresponding arrow type in the empty context, and applied to literals it is definitionally equal
+to the literal answer. The primed forms speak of an arbitrary term, so that a partial application
+such as \texttt{Nat.bitwise f} is covered; the unprimed forms specialise to \texttt{const fc []}
+and are guarded by the constant's presence in the environment.
+\end{definition}
+
+\begin{remark}
+The docstrings explain carefully why the typing clause cannot be dropped: a \texttt{Nat} primitive
+is consumed as an \emph{operator} inside another primitive's recurrence, and congruence under an
+application needs the codomain to be known non-dependent, which inverting an application does not
+give. For \texttt{ReflectsBoolBoolBool'} there is a second reason, spelled out in the source: a
+term of type \texttt{(x : Bool)} to \texttt{(if x then Bool else Bool)} satisfies the evaluation
+clause but is not a \texttt{boolOp2}. This is good documentation of a non-obvious design choice.
+\end{remark}
+
+\begin{definition}[Reflection specification for \texttt{Nat.bitwise}]
+\label{def:vt-reflects-bitwise}
+\lean{Lean4Lean.VEnv.ReflectsNatBitwise}
+\leanok
+\uses{family:vt-reflects}
+\texttt{Nat.bitwise} must be declared with exactly the recorded type
+\texttt{boolOp2} to \texttt{natOp2}, and for \emph{every} larger well-formed environment and every
+term reflecting a boolean binary operation \texttt{g}, the application \texttt{Nat.bitwise f} must
+reflect \texttt{Nat.bitwise g}. The quantification over the larger environment is load-bearing and
+documented as such: the hypothesis on \texttt{f} is an \texttt{IsDefEqU}, which is monotone, so in
+hypothesis position it makes the statement anti-monotone; without the quantifier the fact could
+not be carried from the environment where \texttt{Nat.bitwise} is checked to the one where
+\texttt{Nat.land} supplies its operator.
+\end{definition}
+
+\begin{definition}[The primitive invariant as a name-keyed table of specification shapes]
+\label{ind:primspec}
+\lean{Lean4Lean.PrimSpec, Lean4Lean.PrimSpec.Holds, Lean4Lean.primSpecs, Lean4Lean.VEnv.HasPrimitives}
+\leanok
+\uses{family:vt-reflects, def:vt-reflects-bitwise, def:kernel-primitives}
+\texttt{PrimSpec} enumerates the seven shapes a primitive specification can take: presence implies
+presence, exact recorded type, the three \texttt{Reflects} shapes, the bitwise shape, and the
+\texttt{String.ofList} shape. \texttt{PrimSpec.Holds env n} interprets one at a name;
+\texttt{primSpecs} is the table of twenty-four entries, keyed by name in the same order as
+\texttt{Environment.primitives}; and \texttt{VEnv.HasPrimitives env} says every entry of the table
+holds. The design rationale is in the section docstring: each spec looks up exactly one name and
+everything else it asserts is monotone in the environment, so environment extension becomes a
+single theorem whose case analysis ranges over seven shapes rather than twenty-odd primitives.
+\end{definition}
+
+\begin{lemma}[Named accessors for the primitive table]
+\label{family:hasprimitives-accessors}
+\lean{Lean4Lean.VEnv.HasPrimitives.bool, Lean4Lean.VEnv.HasPrimitives.nat, Lean4Lean.VEnv.HasPrimitives.boolFalse, Lean4Lean.VEnv.HasPrimitives.boolTrue, Lean4Lean.VEnv.HasPrimitives.natZero, Lean4Lean.VEnv.HasPrimitives.natSucc, Lean4Lean.VEnv.HasPrimitives.charOfNat, Lean4Lean.VEnv.HasPrimitives.stringOfList, Lean4Lean.VEnv.HasPrimitives.natPred, Lean4Lean.VEnv.HasPrimitives.natAdd, Lean4Lean.VEnv.HasPrimitives.natSub, Lean4Lean.VEnv.HasPrimitives.natMul, Lean4Lean.VEnv.HasPrimitives.natPow, Lean4Lean.VEnv.HasPrimitives.natGcd, Lean4Lean.VEnv.HasPrimitives.natMod, Lean4Lean.VEnv.HasPrimitives.natDiv, Lean4Lean.VEnv.HasPrimitives.natBEq, Lean4Lean.VEnv.HasPrimitives.natBLE, Lean4Lean.VEnv.HasPrimitives.natBitwise, Lean4Lean.VEnv.HasPrimitives.natLAnd, Lean4Lean.VEnv.HasPrimitives.natLOr, Lean4Lean.VEnv.HasPrimitives.natXor, Lean4Lean.VEnv.HasPrimitives.natShiftLeft, Lean4Lean.VEnv.HasPrimitives.natShiftRight}
+\leanok
+\uses{ind:primspec}
+One projection per entry of \texttt{primSpecs}, so that call sites keep naming the primitive rather
+than the table index.
+\end{lemma}
+\begin{proof}
+\leanok
+Each is the invariant applied to the entry, with membership discharged by
+\texttt{simp [primSpecs]}; the two \texttt{containsImplies} entries additionally project the two
+names out of the resulting list.
+\end{proof}
+
+\begin{lemma}[Translation and typing of the literal constants]
+\label{family:trexprs-literals}
+\lean{Lean4Lean.TrExprS.boolFalse, Lean4Lean.TrExprS.boolTrue, Lean4Lean.TrExprS.boolLit, Lean4Lean.VExpr.WF.boolLit_has_type, Lean4Lean.TrExprS.lit_has_type, Lean4Lean.TrExprS.nat_of_natZero, Lean4Lean.TrExprS.natZero, Lean4Lean.TrExprS.natSucc, Lean4Lean.TrExprS.natLit, Lean4Lean.TrExprS.stringOfList, Lean4Lean.TrExprS.charOfNat, Lean4Lean.VEnv.HasPrimitives.nat_of_charOfNat, Lean4Lean.TrExprS.listChar, Lean4Lean.TrExprS.listCharNil, Lean4Lean.TrExprS.listCharCons, Lean4Lean.TrExprS.listCharLit, Lean4Lean.TrExprS.trLiteral, Lean4Lean.VExpr.instL_boolFalse, Lean4Lean.VExpr.instL_boolTrue, Lean4Lean.VExpr.instL_boolLit, Lean4Lean.VExpr.instL_natZero, Lean4Lean.VExpr.instL_natSucc, Lean4Lean.VExpr.instL_natLit, Lean4Lean.FVarsIn.boolLit}
+\leanok
+\uses{ind:trexprs, ind:primspec, family:vt-model-literals}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1824}
+\thesisref{no counterpart; the thesis does not model literals}
+Given the primitive invariant and the presence of the relevant constants, each literal-related
+source expression translates to the model term of
+Definition \ref{family:vt-model-literals} and is well typed at the expected type: the two
+\texttt{Bool} constructors and \texttt{boolLit}, the \texttt{Nat} numerals,
+\texttt{Char.ofNat} and the character lists, \texttt{String.ofList}, and
+\texttt{Literal.toConstructor} in general. Two lemmas run the other way,
+recovering the presence of \texttt{Nat} or \texttt{Bool} from a well-typed literal.
+\end{lemma}
+\begin{proof}
+\uses{fam:strong-inversions, struct:orderedstrong, thm:isdefeq-instl, def:kernel-lit-to-ctor}
+\leanok
+Each unfolds the relevant \texttt{HasPrimitives} accessor to pin the constant's recorded type,
+applies the \texttt{const} rule of \texttt{TrExprS}, and moves the closed typing into the ambient
+level and local context with \texttt{instL} and \texttt{weak0}; the character-list and
+\texttt{trLiteral} lemmas are then inductions over the string. The reverse lemmas invert the
+typing with \texttt{HasType.const\_inv}.
+\end{proof}
+
+\begin{remark}
+Eight signature lines here were changed on the \texttt{iota} branch from \texttt{env.Ordered} to
+\texttt{env.OrderedStrong} (\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1856} onwards), together
+with two call sites where \texttt{wf.constWF} became \texttt{wf.ordered.constWF}. The change is
+forced by \texttt{HasType.const\_inv} alone
+(\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{915}), whose own hypothesis moved because the
+strengthening lemma it invokes, \texttt{IsDefEq.strong}
+(\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{805}), now needs subject reduction of the registered
+$\iota$ rules. The other inversion used here, \texttt{HasType.forallE\_inv}
+(\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{854}), still takes only \texttt{Ordered} and is
+simply fed the stronger hypothesis. The edit is mechanical, but it means every \emph{use} of these
+lemmas
+(\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{16},
+\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{406},
+\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{420}) now discharges \texttt{OrderedStrong}
+through \texttt{VEnv.WF.orderedStrong}, which rests on the admitted \texttt{VEnv.WF.patsStrong}
+(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}). A hypothesis strengthening in this group
+therefore imports a new admission into the checker's literal handling.
+\end{remark}
+
+\begin{theorem}[A primitive specification survives environment extension]
+\label{thm:primspec-addconst}
+\lean{Lean4Lean.VEnv.addConst_eq_of_ne, Lean4Lean.PrimSpec.Holds.addConst, Lean4Lean.PrimSpec.Holds.addDefEq}
+\leanok
+\uses{ind:primspec, def:venv-basic, struct:venv-le}
+Adding a constant under a name different from the spec's key, or adding a definitional equation,
+preserves \texttt{PrimSpec.Holds}. \texttt{addConst\_eq\_of\_ne} is the supporting fact that a
+successful \texttt{addConst} does not disturb the lookup of any other name.
+\end{theorem}
+\begin{proof}
+\uses{thm:isdefeq-mono}
+\leanok
+One case per \texttt{PrimSpec} shape, seven in all. The spec's single lookup is pulled back along
+\texttt{addConst\_eq\_of\_ne}, and everything else it asserts is monotone in the environment, so it
+transfers by \texttt{VEnv.addConst\_le} or \texttt{VEnv.addDefEq\_le}. The bitwise shape is the
+only one needing care, and only because its own quantification over larger environments has to be
+composed with the new extension.
+\end{proof}
+
+\begin{theorem}[The single environment-extension theorem for the primitive invariant]
+\label{thm:hasprimitives-addconst}
+\lean{Lean4Lean.VEnv.HasPrimitives.addConstDefEq, Lean4Lean.primitives_eq, Lean4Lean.List.nodup_keys_unique, Lean4Lean.primSpecs_nodup, Lean4Lean.VEnv.HasPrimitives.addPrimitiveDefEq, Lean4Lean.mem_primSpecs_contains, Lean4Lean.VEnv.HasPrimitives.addConstDefEq_of_not_primitive, Lean4Lean.VEnv.HasPrimitives.addConst, Lean4Lean.VEnv.HasPrimitives.addDefEq}
+\leanok
+\uses{ind:primspec, def:kernel-primitives}
+If \texttt{HasPrimitives env} holds and \texttt{env'} is \texttt{env} plus a constant, then
+\texttt{env'.addDefEq df} again satisfies \texttt{HasPrimitives}, provided the caller discharges
+the entry matching the new name. Because \texttt{primSpecs} is keyed by name without repetition
+there is at most one such entry (\texttt{addPrimitiveDefEq}), and adding a name that is not a
+reserved primitive discharges it vacuously.
+\end{theorem}
+\begin{proof}
+\uses{thm:primspec-addconst}
+\leanok
+A dichotomy on whether the added name is the spec's key: the negative branch is
+Theorem \ref{thm:primspec-addconst}, the positive branch is the caller's obligation.
+\texttt{List.nodup\_keys\_unique} together with \texttt{primSpecs\_nodup}, proved by
+\texttt{decide}, identifies the matching entry uniquely, and \texttt{primitives\_eq}
+(\texttt{rfl}) is what lets a non-primitive name close the branch.
+\end{proof}
+
+\section{Bundled builders and conditional invariants}
+
+\begin{definition}[A bundled translated-and-typed term]
+\label{struct:trterm}
+\lean{Lean4Lean.TrTerm, Lean4Lean.TrTy, Lean4Lean.TrTerm.of, Lean4Lean.TrTy.of, Lean4Lean.TrTerm.cast}
+\leanok
+\uses{ind:trexprs, def:hastype-istype}
+\texttt{TrTerm env Us $\Delta$ src A} packages a model term \texttt{tgt}, a translation
+\texttt{TrExprS env Us $\Delta$ src tgt}, and a typing of \texttt{tgt} at \texttt{A}; \texttt{TrTy}
+is the analogue for types. The bundle is indexed by the \emph{source} expression, so the term the
+checker built fixes the goal and the model term is an output. The module docstring states the
+motivation: the two side conditions of the \texttt{TrExprS.app} rule are exactly a typing for the
+function and a typing for the argument, which is the data such a bundle carries anyway, so the
+primitive-constant proofs get their translations and typings by construction rather than by
+threading them node by node.
+\end{definition}
+
+\begin{lemma}[Combinators for building translated terms]
+\label{family:trterm-builders}
+\lean{Lean4Lean.VLCtx.find?_vlam_self, Lean4Lean.VLCtx.find?_vlam_ne, Lean4Lean.VLCtx.find?_bvar_ne, Lean4Lean.TrExprS.of_nil, Lean4Lean.TrTerm.of_nil', Lean4Lean.TrTerm.natZero, Lean4Lean.TrTerm.boolLit, Lean4Lean.TrTerm.natSucc, Lean4Lean.TrTerm.wk, Lean4Lean.TrTerm.app, Lean4Lean.TrTerm.app', Lean4Lean.TrTerm.fvar, Lean4Lean.TrTerm.const0, Lean4Lean.TrTerm.natBinApp, Lean4Lean.TrTerm.boolBinApp, Lean4Lean.TrTerm.natUnApp, Lean4Lean.TrTy.mdata, Lean4Lean.TrTerm.mdata, Lean4Lean.TrTerm.lam, Lean4Lean.TrTy.forallE}
+\leanok
+\uses{struct:trterm, family:trexprs-literals}
+The leaves are the three \texttt{find?} lemmas (a binder's own variable, a variable from an
+earlier binder, a variable past an anonymous binder) and \texttt{of\_nil}, which transports a
+translation established at the empty local context into any well-formed one provided its target is
+closed. On top of them sit the application, lambda, pi and \texttt{mdata} combinators, specialised
+to the non-dependent shapes the primitive probes use so that the side conditions are discharged by
+\texttt{rfl}, and \texttt{wk}, which weakens a bundle past a freshly introduced binder.
+\end{lemma}
+\begin{proof}
+\uses{thm:trexprs-weakfv}
+\leanok
+The \texttt{find?} lemmas unfold \texttt{VLCtx.find?} and \texttt{next}; \texttt{of\_nil} is
+Theorem \ref{thm:trexprs-weakfv} along \texttt{FVLift.from\_nil} followed by
+\texttt{ClosedN.liftN\_eq}; each combinator is then a record literal over the corresponding
+\texttt{TrExprS} rule.
+\end{proof}
+
+\begin{theorem}[A primitive used as an operator enters as a bundle]
+\label{thm:trexprs-ofconst}
+\lean{Lean4Lean.TrExprS.ofConst, Lean4Lean.TrTerm.ofConst}
+\leanok
+\uses{ind:trexprs, struct:trterm, struct:orderedstrong}
+\contrib{mixed} \srcloc{Lean4Lean/Verify/Typing/TrTerm.lean}{104}
+\thesisref{no counterpart}
+From a closed typing of \texttt{const c []} at \texttt{A} in the empty context over an
+\texttt{OrderedStrong} environment, and given \texttt{A.instL [] = A} (discharged by \texttt{simp}
+for the closed arrow types the primitives use), \texttt{const c []} translates to itself and has
+type \texttt{A} in any level context and any local context.
+\end{theorem}
+\begin{proof}
+\uses{fam:strong-inversions, thm:isdefeq-instl}
+\leanok
+\texttt{HasType.const\_inv} recovers the constant's declaration and universe-parameter count, which
+is what the \texttt{const} rule of \texttt{TrExprS} needs; \texttt{instL} at the empty level list
+and \texttt{weak0} then move the typing into the ambient context.
+\end{proof}
+
+\begin{remark}
+The hypothesis of both members was changed on \texttt{iota} from \texttt{env.Ordered} to
+\texttt{env.OrderedStrong}, forced by the new signature of \texttt{HasType.const\_inv}
+(\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{915}); the proof terms are otherwise identical to
+master's. These two lines are the whole of the \texttt{iota} branch's footprint in
+\srcloc{Lean4Lean/Verify/Typing/TrTerm.lean}{1}.
+\end{remark}
+
+\begin{definition}[Conditionally translatable expressions]
+\label{def:conditionallytyped}
+\lean{Lean4Lean.ConditionallyTyped, Lean4Lean.ConditionallyTyped.mk, Lean4Lean.ConditionallyTyped.mono, Lean4Lean.ConditionallyTyped.weakN_inv, Lean4Lean.ConditionallyTyped.fresh}
+\leanok
+\uses{ind:trexprs, def:ngen-reserves, def:vt-closed, def:vt-fvarsin}
+\texttt{ConditionallyTyped ngen env Us $\Delta$ e} says that \texttt{e} is \texttt{Closed}, that
+every free variable of \texttt{e} is reserved by the name generator, and that \emph{if} all its
+free variables are in $\Delta$\texttt{.fvars} then \texttt{e} is translatable there. This is the
+invariant the checker's state carries about terms whose context has been narrowed, so that a term
+may survive a context it no longer fits. \texttt{mono} transports the invariant along generator
+growth, \texttt{fresh} extends the context by a fresh declaration, and \texttt{weakN\_inv} removes
+a named entry again.
+\end{definition}
+\axfoot{sorryAx in weakN\_inv only, via TrExprS.weakFV\_inv and TrProj.weak'\_inv}
+
+\begin{definition}[Conditionally typed expressions]
+\label{def:conditionallyhastype}
+\lean{Lean4Lean.ConditionallyHasType, Lean4Lean.ConditionallyHasType.mk, Lean4Lean.ConditionallyHasType.typed, Lean4Lean.ConditionallyHasType.mono, Lean4Lean.ConditionallyHasType.weakN_inv, Lean4Lean.ConditionallyHasType.fresh}
+\leanok
+\uses{def:conditionallytyped, def:isfvarupset, thm:trexprs-weakfv-inv}
+The same conditional discipline applied to a pair, a term and its type: both are closed and
+reserved, and if the term's free variables are in the context then there is a full
+\texttt{TrTyping} for the pair. \texttt{weakN\_inv} is the intricate member: it strengthens both
+components with Theorem \ref{thm:trexprs-weakfv-inv}, realigns them with unique typing, pushes the
+model typing down with \texttt{HasType.weakN\_iff}, and rebuilds the \texttt{FVarsBelow} clause
+against the up-set relativised to the smaller context. It is sorry-dependent through that
+strengthening.
+\end{definition}
+\axfoot{sorryAx in weakN\_inv, via TrExprS.weakFV\_inv, TrProj.weak'\_inv and VEnv.IsDefEqU.weakN\_iff}
+
+\begin{definition}[Conditionally reduced expressions]
+\label{def:conditionallywhnf}
+\lean{Lean4Lean.ConditionallyWHNF, Lean4Lean.ConditionallyWHNF.mk, Lean4Lean.ConditionallyWHNF.mono, Lean4Lean.ConditionallyWHNF.weakN_inv, Lean4Lean.ConditionallyWHNF.fresh}
+\leanok
+\uses{def:conditionallyhastype, thm:isdefequ-weakn-iff}
+The conditional discipline for a term together with its weak head normal form: both closed and
+reserved, and, when the term's variables are in the context, a \texttt{FVarsBelow} and a shared
+translation target for the two. \texttt{weakN\_inv} follows the same script as for
+\texttt{ConditionallyHasType}, except that the fact pushed down at the end is an
+\texttt{IsDefEqU.weakN\_iff} rather than a \texttt{HasType.weakN\_iff}; it inherits the same
+admissions.
+\end{definition}
+\axfoot{sorryAx in weakN\_inv, via TrExprS.weakFV\_inv and VEnv.IsDefEqU.weakN\_iff (Theory/Typing/UniqueTyping.lean:172)}
+
+\section{Contribution summary}
+
+The \texttt{trproj} branch contributed the projection translation. Where
+\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{69} to 136 now stands, master held the single line
+\texttt{def TrProj : ... := sorry}, and \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{641} held seven
+\texttt{sorry} lemmas about it, so the \texttt{proj} rule of \texttt{TrExprS}
+(Definition \ref{ind:trexprs}) related a source projection to an arbitrary model term and the whole
+translation relation was, in that case, vacuous. The branch replaced the stub by
+\texttt{TrProjCtor} (Definition \ref{struct:trprojctor}) and its existential closure
+\texttt{TrProj} (Definition \ref{def:trproj}): since \texttt{VExpr} has no projection node, the
+target is required to be the recursor expansion applied to the major premise, which is the
+thesis's \texttt{inv\_x} construction generalised from \texttt{Acc} to an arbitrary
+single-constructor structure, built from the \texttt{Theory/Proj.lean} vocabulary of
+Chapter \ref{chap:proj}. Two design decisions carry the section: the expansion's typing is a
+\emph{field} of the relation rather than something to be derived, and the expansion data
+(constructor name, level lists, parameters, field telescope) is hidden existentially so that the
+consumers' statements do not change.
+
+Five of master's seven stubs are now proved: Theorems \ref{thm:trproj-weak},
+\ref{thm:trproj-defeqdfc}, \ref{thm:trproj-wf}, \ref{thm:trproj-instn} and
+\ref{thm:trproj-instl}. Three of them, \ref{thm:trproj-weak}, \ref{thm:trproj-instn} and
+\ref{thm:trproj-instl}, are a single \texttt{refine} over a record literal built on one observation
+reused three times, that the pattern key, the field index and the minor arity mention the field
+telescope only through its length; \ref{thm:trproj-defeqdfc} reuses the old record with
+\texttt{\{H with \ldots\}} and \ref{thm:trproj-wf} is two lines. Theorem \ref{thm:trproj-wf} is
+strictly stronger than master's stub, the hypothesis on the major premise being now a field; as a
+result the projection case of Theorem \ref{thm:trexprs-wf} shrinks rather than grows. The new
+parameters on \texttt{TrProj} create one obligation that master did not have,
+Theorem \ref{thm:trproj-mono}, which is discharged using the \texttt{iota} branch's monotonicity
+of the pattern registry. Two of the five proved forms also carry hypotheses master's stubs did not:
+\texttt{Ordered env} on \ref{thm:trproj-weak} and, on \ref{thm:trproj-instn}, that plus a typing
+for the substituted term; each is available at the single call site. Outside the projection section
+the branch also added the three spine lemmas of Theorem \ref{thm:mkapplist-spine}, one of which is
+used at \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{50}, and the inversion
+Theorem \ref{thm:trexprs-mkapplist-inv}, used five times at \texttt{WHNF.lean:87} to \texttt{:93},
+both in the projection and $\iota$ proof. Downstream, the projection relation is what
+\ref{thm:tr-env-proj-defeq} in Chapter \ref{chap:trenv} supplies the kernel-side reduction facts
+for, and what \texttt{inferProj} in Chapter \ref{chap:typechecker} is meant to produce.
+
+The \texttt{iota} branch contributed two unrelated things here. The first is the self-contained
+block of Lemma \ref{family:lctx-empty-decl} and Theorem \ref{thm:mkforall-eq-fold}: lookups in a
+chain of \texttt{mkLocalDecl} steps over the empty context, with the freshness side condition
+deliberately dropped so that a six-step chain does not generate six obligations, five of its
+eight declarations being consumed by the hand-built \texttt{Quot} axiom shapes in
+\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1} and the rest serving them locally. The second is not a contribution of content
+but a propagation: eight lemma signatures in the literal family
+(Lemma \ref{family:trexprs-literals}) and two in Theorem \ref{thm:trexprs-ofconst} were
+strengthened from \texttt{Ordered} to \texttt{OrderedStrong}, forced by the new signature of
+\texttt{HasType.const\_inv} on that branch.
+
+What remains open. Theorem \ref{thm:trproj-weak-inv} and Theorem \ref{thm:trproj-uniq} are still
+\texttt{sorry}. The first is blocked on a master admission, \texttt{VEnv.IsDefEqU.weakN\_iff}, and
+keeps Theorem \ref{thm:trexprs-weakfv-inv} and the three \texttt{weakN\_inv} lemmas of
+Definitions \ref{def:conditionallytyped}, \ref{def:conditionallyhastype} and
+\ref{def:conditionallywhnf} sorry-dependent, exactly as on master. The second is blocked on
+facts about the relation itself, and keeps Theorem \ref{thm:trexprs-uniq},
+Lemma \ref{family:trexpr-builders} and everything built on them sorry-dependent; its docstring
+does not address how the per-field level list is pinned, which may mean the relation is
+under-constrained rather than the proof merely unwritten. Beyond this chapter, nothing constructs
+a \texttt{TrProjCtor} witness in general: \texttt{inferProj.WF\_struct} is \texttt{sorry}, so the
+relation is inhabited only by the hand-built examples of Chapter \ref{chap:proj}.
+
+\section{Review notes}
+
+\begin{itemize}
+\item \textbf{Medium.} \texttt{TrProj.uniq} is still \texttt{sorry}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{992}). Its docstring lists what a proof needs, unique
+typing of the projection function, type-former injectivity for the structure's level list, its
+parameters and the head names, and functionality of the $\iota$ registry for the parameter count
+and the field count, but it does not say how the per-field level list \texttt{uss} is pinned. Two
+\texttt{TrProjCtor} witnesses for the same projection may choose different \texttt{uss}, in which
+case the two expansions are syntactically different recursor applications at different universe
+instances and a definitional equality between them is not obviously available. Either the sketch
+is incomplete or \texttt{TrProjCtor} is under-constrained. \ref{thm:trexprs-uniq} and the
+\texttt{proj} builder of \ref{family:trexpr-builders} depend on this hole.
+\item \textbf{Medium.} \texttt{TrProj.weak'\_inv} is still \texttt{sorry}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{745}). The docstring correctly traces it to the
+admitted master lemma \texttt{IsDefEqU.weakN\_iff}
+(\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{172}), but the consequence is that
+\ref{thm:trexprs-weakfv-inv} and all three \texttt{Conditionally} strengthening lemmas
+(\ref{def:conditionallytyped}, \ref{def:conditionallyhastype}, \ref{def:conditionallywhnf}) remain
+sorry-dependent, and those are a large part of the checker's specification.
+\item \textbf{Medium.} \texttt{TrProjCtor.pat} (\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{97})
+asserts only that \emph{some} reduct is registered under the $\iota$ key; the reduct itself is not
+pinned, so \ref{def:trproj} alone does not determine reduction behaviour, and the key, being a
+sum, does not exclude a different motive/minor/index split adding up to the same number. The
+docstring acknowledges this and defers to \ref{thm:tr-env-proj-defeq} for the kernel-side facts,
+but the relation is weaker than it looks, and this is the stated obstacle to
+\ref{thm:trproj-uniq}.
+\item \textbf{Low.} \texttt{TrProj} (\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{133})
+existentially quantifies six pieces of data, two of which are pinned by other fields: the
+parameter count is the length of the parameter list by \texttt{params\_length}, and the field
+telescope is determined by the constructor name, the level list and the parameters by
+\texttt{ctor}. Replacing them by definitions would shrink the relation and remove an obligation
+from each of the three proofs that rebuild the record (\texttt{weak'}, \texttt{instN},
+\texttt{instL}), where they reappear as \texttt{by simpa} and \texttt{by rw [hlen]}.
+\item \textbf{Low.} The \texttt{iota} block installs a global \texttt{DecidableEq FVarId} instance
+inside \texttt{namespace Lean.LocalContext}
+(\srcloc{Lean4Lean/Verify/LocalContext.lean}{183}), under a section heading about the empty local
+context. The instance has nothing to do with \texttt{LocalContext}, and given the project's own
+\texttt{LawfulBEq FVarId} (\srcloc{Lean4Lean/Verify/Expr.lean}{12}) it could have been
+\texttt{instDecidableEqOfLawfulBEq}, as is already done for \texttt{DefinitionSafety} at
+\srcloc{Lean4Lean/Verify/Expr.lean}{51}. No conflict exists today, since Lean core has no such
+instance, but the placement invites one.
+\item \textbf{Low.} \texttt{TrExprS.mkAppList\_inv}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{2349}) overlaps with the pre-existing
+\texttt{AppStack.build} (\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{2344}): both invert a
+translated application spine. The pointwise-list shape is what the WHNF proof wants, so the
+duplication is defensible, but it leaves two spine-inversion idioms in one file.
+\item \textbf{Low.} Of the three spine lemmas the \texttt{trproj} branch added to
+\srcloc{Lean4Lean/Verify/Expr.lean}{745}, only \texttt{getAppArgsList\_mkAppList} has an explicit
+consumer (\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{50});
+\texttt{getAppFn\_mkAppList} is reached only as a \texttt{@[simp]} lemma, and
+\texttt{getAppArgsRevList\_mkAppList} (\srcloc{Lean4Lean/Verify/Expr.lean}{749}) has no consumer
+outside its own file, existing only to prove the forward form.
+\item \textbf{Low.} The \texttt{iota} branch strengthened eight master lemma signatures in
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1856} and two in
+\srcloc{Lean4Lean/Verify/Typing/TrTerm.lean}{104} from \texttt{env.Ordered} to
+\texttt{env.OrderedStrong}, forced by the new signature of \texttt{HasType.const\_inv}. Since
+\texttt{OrderedStrong} is obtained only through \texttt{VEnv.WF.orderedStrong}, which invokes the
+admitted \texttt{VEnv.WF.patsStrong} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}), every
+downstream use of the literal lemmas (\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{16},
+\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{406},
+\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{420}) now depends on that admission.
+\item \textbf{Low.} The scope paragraph of \texttt{TrProjCtor}
+(\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{84}) makes precise claims about the kernel's
+\texttt{inferProj}, which structures it accepts and when its \texttt{Prop} gate fires, that are
+prose only: nothing in the repository formalizes them, and both \texttt{inferProj.WF\_struct} and
+\texttt{inferProj.WF} (\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{392},
+\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{407}) are \texttt{sorry}. The completeness
+boundary is therefore asserted, not verified.
+\item \textbf{Low.} Within the \texttt{iota} block of
+\srcloc{Lean4Lean/Verify/LocalContext.lean}{181}, \texttt{toList\_empty} and \texttt{WF.empty}
+exist only to serve \texttt{find?\_empty} three lines later, and have no other consumer.
+\end{itemize}

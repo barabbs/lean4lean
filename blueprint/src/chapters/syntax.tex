@@ -1,0 +1,1551 @@
+\chapter{Syntax: levels, expressions, declarations, environments}
+\label{chap:syntax}
+
+This chapter covers the object language of the whole verification. Everything that
+later chapters state -- the typing judgement, the inductive specification, the
+projection development, the kernel correspondence -- is stated about the universe
+levels, expressions, declarations and environments defined here. The group contains
+no judgements and no proofs about typing; it is the syntax plus its substitution
+calculus, plus two self-contained extras (the translation from real Lean syntax, and
+a complexity result about level equivalence).
+
+The files are
+\srcloc{Lean4Lean/Theory.lean}{1} (the aggregator module),
+\srcloc{Lean4Lean/Theory/VLevel.lean}{1} (188 lines, universe levels),
+\srcloc{Lean4Lean/Theory/VExpr.lean}{1} (1334 lines, expressions and substitution),
+\srcloc{Lean4Lean/Theory/VDecl.lean}{1} (67 lines, declaration payloads),
+\srcloc{Lean4Lean/Theory/VEnv.lean}{1} (57 lines, environments),
+\srcloc{Lean4Lean/Theory/Quot.lean}{1} (21 lines, the quotient block),
+\srcloc{Lean4Lean/Theory/Meta.lean}{1} (112 lines, elaboration glue) and
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{1} (450 lines, a coNP-hardness proof).
+Of the 2235 lines, 1786 are master, 254 come from the \texttt{iota} branch and 195
+from the \texttt{trproj} branch. The contributed lines are concentrated in three
+places: a 372-line mixed block at the end of \texttt{VExpr.lean} (telescope and
+spine readers, plus a substitution-based weakening section), more than half of
+\texttt{VDecl.lean} (recursors and their computation rules), and the \texttt{pats}
+field of \texttt{VEnv} with its extension operation.
+
+Against Carneiro's thesis, \texttt{VLevel} and \texttt{VExpr} realise the grammar of
+\texttt{axioms.tex} \S2.1 together with the constants of \S2.5, with two deliberate
+deviations: universe variables are de Bruijn-style \texttt{Nat} indices rather than
+names, and level order and equivalence are defined \emph{semantically} (pointwise over
+all assignments) rather than by the syntactic derivation system of \S2.2. There is no
+\texttt{let} and no projection in the syntax; both are eliminated at translation time
+by \texttt{Theory/Meta.lean}, which is exactly why the \texttt{trproj} contribution has
+to model kernel projections as a reduction relation elsewhere rather than as syntax.
+\texttt{VDecl}/\texttt{VInductDecl} realise \S2.6.1, and the contributed
+\texttt{VRecursor}/\texttt{VRecRule} realise \S2.6.3 and the constructor half of \S2.6.4.
+(Section numbers throughout this chapter are the ones the thesis sources produce:
+\texttt{intro.tex} is \S1 and \texttt{axioms.tex} is \S2, so \S2.5 is ``Definitions
+($\delta$ reduction)'' and \S2.6 is ``Inductive types''.)
+\texttt{LevelSat.lean} has no thesis counterpart at all; it is an original result of the
+repository.
+
+Two honest gaps against the thesis are visible already at this layer.
+\texttt{VRecursor.k} carries the K-like-reduction flag but the thesis's second $\iota$
+rule is not modelled; this one is recorded in the code's own docstrings, both on the
+field (\srcloc{Lean4Lean/Theory/VDecl.lean}{32}) and on \texttt{VEnv.addRecRule}
+(\srcloc{Lean4Lean/Theory/Inductive.lean}{251}). The second gap is not remarked on
+anywhere: the quotient computation rule is still registered as a \texttt{VDefEq} rather
+than through the new pattern registry, so the model carries two mechanisms for
+computation rules, and \texttt{Theory/Quot.lean} carries no docstring at all.
+
+Overall assessment: nothing in this group depends on a \texttt{sorry} -- every
+declaration here, contributed or not, is a definition or a fully proved theorem, and no
+declaration of these eight files has \texttt{sorryAx} in its axiom footprint -- and
+documentation quality in the contributed regions is well above the surrounding master
+code, with several docstrings explaining a design decision rather than restating a type.
+The specification choices are good: total readers rather than partial ones, decidable
+biconditional reformulations where decidability is wanted, and $n$-indexed general
+forms where the projection development needs them. The main criticism is hygiene.
+Seven contributed declarations in this group are dead -- five that nothing mentions at
+all, and two that survive only by feeding one of those five -- and one \texttt{trproj}
+refactor relocated an upstream lemma and left a six-declaration master block dead
+without removing it, on a file that is otherwise shared verbatim with upstream.
+
+\section{Module structure}
+
+\begin{definition}[The \texttt{Lean4Lean.Theory} aggregator module]
+\label{mod:theory-root}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory.lean}{1}
+An import-only module, six lines long, that pulls in the whole idealised theory, in
+file order: the environment lemmas, the strong typing judgement, unique typing,
+Church-Rosser, the inductive-parameter development
+\texttt{Theory.Typing.InductiveParams}, and head reduction. The fifth import (line 5,
+\texttt{InductiveParams}) is the single line the \texttt{iota} branch added to this
+file; \texttt{HeadReduction} on line 6 is master and is the last. A module is not a
+declaration, so this node names no Lean constant.
+\end{definition}
+
+\section{Universe levels}
+
+\begin{definition}[Universe level expressions \texttt{VLevel}]
+\label{ind:vlevel}
+\lean{Lean4Lean.VLevel}
+\leanok
+\srcloc{Lean4Lean/Theory/VLevel.lean}{8}
+The grammar of universe levels: $0$, successor, $\max$, $\mathrm{imax}$, and
+parameters \texttt{param i} indexed by a natural number. Universe variables are
+represented by their index into the declaration's parameter list rather than by
+name, so the thesis's substitution $\alpha[\bar\ell/\bar u]$ becomes list indexing.
+
+\thesisref{axioms.tex \S2.1, the grammar $\ell ::= u \mid 0 \mid S\ell \mid \max(\ell,\ell) \mid \mathrm{imax}(\ell,\ell)$}
+\end{definition}
+
+\begin{definition}[Level well-formedness in a parameter count]
+\label{def:vlevel-wf}
+\lean{Lean4Lean.VLevel.WF,Lean4Lean.VLevel.decidable_WF}
+\leanok
+\uses{ind:vlevel}
+\srcloc{Lean4Lean/Theory/VLevel.lean}{20}
+\texttt{l.WF n} holds when every \texttt{param i} occurring in $l$ satisfies $i < n$,
+i.e. when $l$ mentions only the first $n$ universe parameters. It is decidable, by the
+obvious structural instance.
+
+\thesisref{axioms.tex \S2.5, ``the universe variables in $\alpha$ and $\ell$ are contained in $\bar u$''}
+\end{definition}
+
+\begin{definition}[Evaluation of a level at a parameter assignment]
+\label{def:vlevel-eval}
+\lean{Lean4Lean.VLevel.eval}
+\leanok
+\uses{ind:vlevel}
+\srcloc{Lean4Lean/Theory/VLevel.lean}{34}
+\texttt{l.eval ls : Nat} interprets a level at an assignment \texttt{ls : List Nat} of
+naturals to parameters, out-of-range parameters defaulting to $0$, with
+$\mathrm{imax}$ interpreted by \texttt{Lean.Nat.imax}. This is the semantics against
+which order and equivalence of levels are defined, rather than a syntactic proof
+system; it is a deliberate simplification over the kernel's \texttt{Level.isEquiv},
+and the reason a complexity statement about the latter can be made at all
+(\ref{thm:levelsat-equiv-iff-unsat}).
+\end{definition}
+
+\begin{definition}[Order and equivalence of levels]
+\label{def:vlevel-le-equiv}
+\lean{Lean4Lean.VLevel.LE,Lean4Lean.VLevel.Equiv,Lean4Lean.VLevel.le_antisymm_iff,Lean4Lean.VLevel.equiv_def}
+\leanok
+\uses{def:vlevel-eval}
+\srcloc{Lean4Lean/Theory/VLevel.lean}{41}
+$a \le b$ means $a.\mathrm{eval}\;ls \le b.\mathrm{eval}\;ls$ for every assignment
+$ls$, and $a \approx b$ means the two evaluation functions are equal;
+\texttt{equiv\_def} restates the latter pointwise. Antisymmetry,
+$a \approx b \leftrightarrow a \le b \wedge b \le a$, is \texttt{funext\_iff}
+composed with \texttt{Nat.le\_antisymm\_iff} and \texttt{forall\_and}.
+
+\thesisref{axioms.tex \S2.2, the algorithmic judgements $\ell \le \ell' + n$ and $\ell \equiv \ell'$, and the sort congruence rule $\ell\equiv\ell' \Rightarrow \mathsf{U}_\ell \equiv \mathsf{U}_{\ell'}$ that consumes them (the constant congruence rule is \S2.5)}
+\end{definition}
+
+\begin{lemma}[Order and congruence algebra of levels]
+\label{fam:vlevel-lattice}
+\lean{Lean4Lean.VLevel.le_refl,Lean4Lean.VLevel.le_trans,Lean4Lean.VLevel.zero_le,Lean4Lean.VLevel.le_succ,Lean4Lean.VLevel.succ_le_succ,Lean4Lean.VLevel.le_max_left,Lean4Lean.VLevel.le_max_right,Lean4Lean.VLevel.succ_congr,Lean4Lean.VLevel.max_congr,Lean4Lean.VLevel.imax_congr,Lean4Lean.VLevel.max_comm,Lean4Lean.VLevel.max_self,Lean4Lean.VLevel.zero_imax,Lean4Lean.VLevel.imax_zero,Lean4Lean.VLevel.imax_self,Lean4Lean.VLevel.imax_eq_zero,Lean4Lean.VLevel.IsNeverZero,Lean4Lean.VLevel.IsNeverZero.imax_eq_max}
+\leanok
+\uses{def:vlevel-le-equiv}
+\srcloc{Lean4Lean/Theory/VLevel.lean}{45}
+The routine algebra of $\le$ and $\approx$: reflexivity and transitivity, $0$ least,
+$a \le \mathrm{succ}\,a$, the two $\max$ injections, congruence of
+$\mathrm{succ}/\max/\mathrm{imax}$ under $\approx$, and the $\mathrm{imax}$
+simplifications $\mathrm{imax}(0,a)\approx a$, $\mathrm{imax}(a,0)\approx 0$,
+$\mathrm{imax}(a,a)\approx a$, $\mathrm{imax}(a,b)\approx 0 \leftrightarrow b\approx 0$,
+and $\mathrm{imax}(a,b)\approx\max(a,b)$ when $b$ is never zero.
+\end{lemma}
+\begin{proof}
+\uses{def:vlevel-eval}
+\leanok
+The $\le$ lemmas are term-mode applications of the matching \texttt{Nat} lemma under
+the $\forall ls$ (\texttt{Nat.le\_refl}, \texttt{Nat.le\_trans},
+\texttt{Nat.zero\_le}, \texttt{Nat.le\_succ}, \texttt{Nat.le\_max\_left/right}); the
+$\approx$ lemmas are \texttt{simp [equiv\_def, eval]} plus the corresponding
+\texttt{Nat.max}/\texttt{Lean.Nat.imax} rewrite. No \texttt{omega} is used anywhere in
+this file. \texttt{imax\_eq\_zero} additionally needs a classical contradiction step
+(\texttt{Decidable.byContradiction}).
+\end{proof}
+
+\begin{definition}[Level substitution and the identity substitution]
+\label{def:vlevel-inst}
+\lean{Lean4Lean.VLevel.inst,Lean4Lean.VLevel.params,Lean4Lean.VLevel.inst_inst,Lean4Lean.VLevel.inst_id,Lean4Lean.VLevel.inst_map_id,Lean4Lean.VLevel.eval_inst,Lean4Lean.VLevel.WF.inst,Lean4Lean.VLevel.inst_congr,Lean4Lean.VLevel.params_wf}
+\leanok
+\uses{ind:vlevel,def:vlevel-eval,def:vlevel-wf}
+\srcloc{Lean4Lean/Theory/VLevel.lean}{115}
+\texttt{l.inst ls} substitutes the levels \texttt{ls} for the parameters of $l$,
+out-of-range parameters becoming $0$, and
+$\texttt{params}\;n = [\texttt{param}\;0,\dots,\texttt{param}\;(n-1)]$ is the identity
+substitution. The accompanying lemmas give functoriality
+(\texttt{inst\_inst}), the identity law \texttt{inst\_id} for levels well-formed in
+$n$ parameters, the retraction \texttt{inst\_map\_id}, commutation with
+\texttt{eval}, preservation of well-formedness, and congruence under $\approx$
+(pointwise on the substituted list).
+
+\thesisref{axioms.tex \S2.5, $\tau_{\bar\ell}(c)=\alpha[\bar\ell/\bar u]$}
+\end{definition}
+
+\begin{definition}[Translation of kernel levels into the model]
+\label{def:vlevel-oflevel}
+\lean{Lean4Lean.VLevel.ofLevel,Lean4Lean.VLevel.WF.of_ofLevel,Lean4Lean.VLevel.WF.of_mapM_ofLevel}
+\leanok
+\uses{ind:vlevel,def:vlevel-wf}
+\srcloc{Lean4Lean/Theory/VLevel.lean}{168}
+\texttt{ofLevel ls l} partially translates a real \texttt{Lean.Level} into a
+\texttt{VLevel}, resolving a named parameter to its index in \texttt{ls} and failing
+on metavariables and on names not in \texttt{ls}. Any result is well-formed in
+\texttt{ls.length}, and likewise for a list translated by \texttt{mapM}. This is the
+bridge the \texttt{Verify} layer uses, and the only place where level \emph{names}
+occur.
+\end{definition}
+
+\section{Expressions and the substitution calculus}
+
+\begin{definition}[Expressions of the idealised theory \texttt{VExpr}]
+\label{ind:vexpr}
+\lean{Lean4Lean.VExpr}
+\leanok
+\srcloc{Lean4Lean/Theory/VExpr.lean}{7}
+De Bruijn syntax with six constructors: \texttt{bvar i}, \texttt{sort u},
+\texttt{const c us}, \texttt{app}, \texttt{lam} and \texttt{forallE}. Binders carry
+only their domain type: there are no binder names, no \texttt{let}, no projections and
+no literals. The absent constructs are eliminated at translation time
+(\ref{def:meta-ofexpr}), which is why projections have to be modelled as a separate
+reduction relation rather than as syntax.
+
+\thesisref{axioms.tex \S2.1, the grammar $e ::= x \mid \mathsf{U}_\ell \mid e\,e \mid \lambda x{:}e.\,e \mid \forall x{:}e.\,e$, extended with $c_{\bar u}$ from \S2.5}
+\end{definition}
+
+\begin{definition}[Weakening \texttt{liftN} and its algebra]
+\label{def:liftn}
+\lean{Lean4Lean.liftVar,Lean4Lean.VExpr.liftN,Lean4Lean.VExpr.lift,Lean4Lean.VExpr.liftN_zero,Lean4Lean.VExpr.liftN'_liftN',Lean4Lean.VExpr.liftN'_liftN_lo,Lean4Lean.VExpr.liftN'_liftN_hi,Lean4Lean.VExpr.liftN_liftN,Lean4Lean.VExpr.liftN_succ,Lean4Lean.VExpr.liftN'_comm,Lean4Lean.VExpr.lift_liftN'}
+\leanok
+\uses{ind:vexpr}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{17}
+\texttt{liftN n e k} adds $n$ to every de Bruijn index of $e$ that is at least the
+cut-off $k$, descending with $k+1$ under binders; \texttt{lift} is \texttt{liftN 1}.
+The lemmas compose two lifts under the side condition
+$k_1 \le k_2 \le n_1 + k_1$ (\texttt{liftN'\_liftN'}), specialise it to the low and
+high arrangements, and commute lifts at different cut-offs (\texttt{liftN'\_comm}).
+
+\thesisref{typesys.tex, Lemma \texttt{thm:weak} (Weakening) -- this is its syntactic substrate}
+\end{definition}
+
+\begin{definition}[Closed expressions]
+\label{def:closedn}
+\lean{Lean4Lean.VExpr.ClosedN,Lean4Lean.VExpr.Closed,Lean4Lean.VExpr.ClosedN.mono,Lean4Lean.VExpr.ClosedN.liftN_eq,Lean4Lean.VExpr.ClosedN.lift_eq,Lean4Lean.VExpr.ClosedN.liftN,Lean4Lean.VExpr.ClosedN.liftN_eq_rev}
+\leanok
+\uses{ind:vexpr,def:liftn}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{99}
+\texttt{e.ClosedN k} holds when every free de Bruijn index of $e$ is below $k$, with
+\texttt{Closed} the default $k = 0$. Closedness is monotone in $k$, is preserved by
+lifting (with the bound raised by $n$), and an expression closed below $k$ is fixed by
+any lift with cut-off at least $k$.
+\end{definition}
+
+\begin{definition}[Decidability of \texttt{ClosedN}]
+\label{inst:dec-closedn}
+\lean{Lean4Lean.VExpr.decClosedN}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{108}
+\uses{def:closedn}
+An instance \texttt{decClosedN} giving \texttt{Decidable (e.ClosedN k)} for all $e$ and
+$k$, written as a direct structural definition of the decision witness rather than by
+tactics: the \texttt{bvar} case is \texttt{Nat} comparison, \texttt{sort} and
+\texttt{const} are \texttt{isTrue trivial}, and the three binary cases are
+\texttt{instDecidableAnd}. It is needed because registering an $\iota$ rule branches on
+\texttt{if h : ru.rhs.Closed}, so closedness is decided inside a \emph{definition}, not
+only inside a proof.
+
+\thesisref{no thesis counterpart (decidability is an implementation concern)}
+\reviewnote{The sibling head-shape decidability instances were moved out of this file to
+\texttt{Lean4Lean/Tests/ShapeDecide.lean} (commit \texttt{ba118fd}, ``file the head-shape
+decidability instances with the tests'') while this one stayed. That file's module
+docstring does give the general rationale -- the shape predicates are used as
+propositions in the theory and only the tests run them -- but says nothing about why
+\texttt{decClosedN} is the exception, and the exception is the interesting part, since it
+is the one closedness test a \emph{definition} needs.}
+\end{definition}
+
+\begin{definition}[Universe instantiation of expressions]
+\label{def:instl}
+\lean{Lean4Lean.VExpr.instL,Lean4Lean.VExpr.LevelWF,Lean4Lean.VExpr.instL_instL,Lean4Lean.VExpr.instL_liftN,Lean4Lean.VExpr.LevelWF.instL_id,Lean4Lean.VExpr.levelWF_liftN,Lean4Lean.VExpr.ClosedN.instL}
+\leanok
+\uses{ind:vexpr,def:vlevel-inst}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{152}
+\texttt{e.instL ls} applies the level substitution \texttt{ls} to every sort and to
+every level argument of every constant in $e$, leaving the term structure untouched;
+\texttt{e.LevelWF U} says every level occurring in $e$ is well-formed in $U$
+parameters. Universe instantiation commutes with weakening, composes
+(\texttt{instL\_instL}), preserves closedness, and is the identity on level-well-formed
+terms at \texttt{VLevel.params U}.
+
+\thesisref{axioms.tex \S2.5, the universe substitution applied to a constant's type and value}
+\end{definition}
+
+\begin{definition}[Single-variable instantiation and the lift/instantiation square]
+\label{def:inst}
+\lean{Lean4Lean.VExpr.instVar,Lean4Lean.VExpr.inst,Lean4Lean.VExpr.liftN_instN_lo,Lean4Lean.VExpr.liftN_instN_hi,Lean4Lean.VExpr.liftN_inst_hi,Lean4Lean.VExpr.lift_instN_lo,Lean4Lean.VExpr.lift_inst_hi,Lean4Lean.VExpr.inst_liftN,Lean4Lean.VExpr.inst_lift,Lean4Lean.VExpr.inst_liftN_lo,Lean4Lean.VExpr.inst_liftN_bvar}
+\leanok
+\uses{def:liftn,ind:vexpr}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{194}
+\texttt{e.inst a k} substitutes $a$ for de Bruijn variable $k$ in $e$, shifting the
+variables above $k$ down by one and lifting $a$ by $k$; the variable case
+\texttt{instVar} is the three-way test $i < k$, $i = k$, $i > k$. The surrounding
+lemmas are the standard commutation square between lifting and instantiation in the
+\texttt{lo} arrangement (instantiation above the lift) and the \texttt{hi} arrangement
+(instantiation below it), together with the cancellation
+$(\texttt{liftN}\;1\;e\;k).\texttt{inst}\;a\;k = e$.
+
+\thesisref{typesys.tex, Lemma \texttt{thm:subst} (Properties of substitution) -- its syntactic substrate}
+\end{definition}
+
+\begin{definition}[Telescope instantiation]
+\label{def:insts}
+\lean{Lean4Lean.VExpr.insts,Lean4Lean.VExpr.insts_append,Lean4Lean.VExpr.insts_sort,Lean4Lean.VExpr.insts_const,Lean4Lean.VExpr.insts_app,Lean4Lean.VExpr.insts_nil,Lean4Lean.VExpr.insts_cons}
+\leanok
+\uses{def:inst}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{333}
+\texttt{e.insts as} substitutes a whole telescope by one \texttt{inst} at index $0$ per
+element, the head of the list being substituted last, so that \texttt{insts (as ++ bs)}
+is \texttt{insts as} after \texttt{insts bs}. The docstring argues for using a
+substitution rather than an applied abstraction: statements built out of substituted
+pieces decompose on the nose, since substitution commutes with application
+syntactically, whereas an applied abstraction does so only up to definitional equality.
+
+\thesisref{axioms.tex \S2.6.1, the telescope notation $f\;e : \beta[e/x]$}
+\end{definition}
+
+\begin{definition}[Inverting a lift: \texttt{unliftN} and \texttt{Skips}]
+\label{def:unliftn-skips}
+\lean{Lean4Lean.VExpr.unliftN,Lean4Lean.VExpr.Skips,Lean4Lean.VExpr.Skips',Lean4Lean.VExpr.skips_iff,Lean4Lean.VExpr.skips_iff_exists,Lean4Lean.VExpr.skips_add,Lean4Lean.VExpr.liftN_inj,Lean4Lean.VExpr.of_liftN_eq_liftN,Lean4Lean.VExpr.of_liftN_eq_instL,Lean4Lean.VExpr.Skips.of_liftN_hi,Lean4Lean.VExpr.Skips.of_instL}
+\leanok
+\uses{def:liftn,def:inst}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{367}
+\texttt{unliftN e n k} undoes $n$ lifts at cut-off $k$ by instantiating
+\texttt{default} $n$ times, and \texttt{e.Skips n k} is the equation
+$\texttt{liftN}\;n\;(\texttt{unliftN}\;e\;n\;k)\;k = e$, i.e. ``$e$ is in the image of
+\texttt{liftN n \_ k}''; \texttt{Skips'} is the equivalent structural characterisation.
+The consequences are that \texttt{liftN} is injective, that two equal lifts factor
+through a common preimage, and that skipping is inherited from a larger lift and from a
+universe instantiation.
+\end{definition}
+
+\begin{lemma}[Commuting two instantiations; closedness under instantiation]
+\label{fam:inst-inst}
+\lean{Lean4Lean.VExpr.inst_instVar_hi,Lean4Lean.VExpr.inst_inst_hi,Lean4Lean.VExpr.inst0_inst_hi,Lean4Lean.VExpr.inst_instVar_lo,Lean4Lean.VExpr.inst_inst_lo,Lean4Lean.VExpr.instN_bvar0,Lean4Lean.VExpr.ClosedN.instN,Lean4Lean.VExpr.ClosedN.inst,Lean4Lean.VExpr.ClosedN.instN_eq,Lean4Lean.VExpr.instL_instN,Lean4Lean.VExpr.LevelWF.inst}
+\leanok
+\uses{def:inst,def:closedn}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{489}
+The second half of the substitution calculus: two instantiations commute in both the
+\texttt{hi} and \texttt{lo} cut-off arrangements; instantiation preserves
+\texttt{ClosedN} (lowering the bound by one) and \texttt{LevelWF}; an expression closed
+below $k$ is fixed by an instantiation at any index at least $k$; and universe
+instantiation commutes with term instantiation.
+
+\thesisref{typesys.tex, \texttt{item:subst\_ty} (Properties of substitution)}
+\end{lemma}
+\begin{proof}
+\uses{def:instl,def:liftn}
+\leanok
+All by structural induction on the substituted term, the variable cases reducing to
+arithmetic on \texttt{instVar} together with the lift lemmas of \ref{def:liftn}.
+\end{proof}
+
+\section{The \texttt{Lift} and \texttt{Subst} algebras}
+
+\begin{definition}[The \texttt{Lift} renaming algebra]
+\label{ind:lift}
+\lean{Lean4Lean.Lift,Lean4Lean.Lift.skipN,Lean4Lean.Lift.consN,Lean4Lean.Lift.comp,Lean4Lean.Lift.dom,Lean4Lean.Lift.size,Lean4Lean.Lift.depth,Lean4Lean.Lift.inter,Lean4Lean.Lift.diff,Lean4Lean.Lift.Fixes,Lean4Lean.Lift.liftVar,Lean4Lean.Lift.liftVar_comp,Lean4Lean.Lift.Fixes.liftVar_eq,Lean4Lean.Lift.depth_succ}
+\leanok
+\uses{ind:vexpr}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{587}
+A \texttt{Lift} is a finite description of an order-preserving injection of de Bruijn
+indices, built from \texttt{refl}, \texttt{skip} (insert a binder) and \texttt{cons} (go
+under a binder), acting on variables by \texttt{Lift.liftVar}. It carries a composition
+monoid (\texttt{comp}, with $\texttt{liftVar}$ contravariantly functorial), a meet and a
+difference (\texttt{inter}, \texttt{diff}), the measures \texttt{dom}, \texttt{size},
+\texttt{depth}, and the predicate \texttt{Fixes k}, which says the renaming is the
+identity below $k$. It generalises $\texttt{liftN}\;n\;\_\;k$, recovered as
+$\texttt{consN}\;(\texttt{skipN}\;\texttt{refl}\;n)\;k$, to arbitrary interleavings.
+\end{definition}
+
+\begin{lemma}[\texttt{consN} fixes the binders it is pushed under]
+\label{fam:lift-consn}
+\lean{Lean4Lean.Lift.consN_fixes,Lean4Lean.Lift.consN_cons,Lean4Lean.Lift.liftVar_consN_lt,Lean4Lean.Lift.liftVar_consN_succ}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{744}
+\uses{ind:lift}
+Four facts about pushing a lift under $m$ binders: $(\rho.\texttt{consN}\;m)$ fixes $m$;
+$(\texttt{cons}\;\rho).\texttt{consN}\;j = \rho.\texttt{consN}\;(j+1)$; the renaming is
+the identity on indices below $m$; and it commutes with successor one binder at a time.
+
+\thesisref{no thesis counterpart (de Bruijn bookkeeping)}
+\end{lemma}
+\begin{proof}
+\uses{ind:lift}
+\leanok
+\texttt{consN\_fixes} and \texttt{consN\_cons} are structural recursions on $m$ and $j$;
+\texttt{liftVar\_consN\_lt} is \texttt{consN\_fixes} fed to
+\texttt{Lift.Fixes.liftVar\_eq}; \texttt{liftVar\_consN\_succ} is \texttt{rfl}.
+\reviewnote{Of this four-lemma block only \texttt{consN\_cons} has a consumer (in
+\texttt{piBinders\_lift'}, \ref{fam:pibinders-stability}).
+\texttt{liftVar\_consN\_lt} and \texttt{liftVar\_consN\_succ} are unused anywhere in the
+repository, which makes \texttt{consN\_fixes} dead in effect as well.}
+\end{proof}
+
+\begin{definition}[Weakening along a \texttt{Lift}]
+\label{def:lift-prime}
+\lean{Lean4Lean.VExpr.lift',Lean4Lean.VExpr.lift'_consN_skipN,Lean4Lean.VExpr.lift'_comp,Lean4Lean.VExpr.lift'_depth_zero,Lean4Lean.VExpr.lift'_refl,Lean4Lean.VExpr.lift_eq_lift',Lean4Lean.VExpr.instL_lift',Lean4Lean.VExpr.ClosedN.lift'_eq}
+\leanok
+\uses{ind:lift,def:liftn}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{763}
+\texttt{e.lift' rho} renames the free variables of $e$ along $\rho$, descending with
+\texttt{cons} under binders. It specialises to \texttt{liftN} at
+$\texttt{consN}\;(\texttt{skipN}\;\texttt{refl}\;n)\;k$, is functorial for
+\texttt{comp}, is the identity when $\rho$ has depth $0$, commutes with universe
+instantiation, and fixes an expression closed below a level that $\rho$ fixes.
+\end{definition}
+
+\begin{definition}[General (simultaneous) substitutions]
+\label{def:subst}
+\lean{Lean4Lean.VExpr.Subst,Lean4Lean.VExpr.subst,Lean4Lean.VExpr.Subst.lift,Lean4Lean.VExpr.Subst.liftN,Lean4Lean.VExpr.Subst.lift_l,Lean4Lean.VExpr.Subst.lift_r,Lean4Lean.VExpr.subst_lift',Lean4Lean.VExpr.lift'_subst,Lean4Lean.VExpr.Subst.comp,Lean4Lean.VExpr.Subst.comp_lift,Lean4Lean.VExpr.subst_subst,Lean4Lean.VExpr.liftN_subst}
+\leanok
+\uses{def:lift-prime,ind:vexpr}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{794}
+A \texttt{Subst} is a function \texttt{Nat} $\to$ \texttt{VExpr}; \texttt{e.subst sigma}
+applies it, lifting under binders (\texttt{Subst.lift}, iterated as
+\texttt{Subst.liftN}). \texttt{Subst.comp} composes two substitutions and
+\texttt{subst\_subst} is its action law, $(e.\texttt{subst}\,\sigma).\texttt{subst}\,\sigma' = e.\texttt{subst}\,(\sigma.\texttt{comp}\,\sigma')$;
+associativity and unitality of \texttt{comp} are not themselves stated, only
+\texttt{comp\_lift}. A \texttt{Lift} is absorbed on either side through
+\texttt{subst\_lift'} and \texttt{lift'\_subst}, which rewrite it into
+\texttt{Subst.lift\_l} and \texttt{Subst.lift\_r}. This is the API the
+\texttt{trproj} section at line 963 builds on.
+\end{definition}
+
+\begin{lemma}[Identity, cons-chains and the \texttt{inst}-as-\texttt{subst} bridge]
+\label{fam:subst-basic}
+\lean{Lean4Lean.VExpr.Subst.id,Lean4Lean.VExpr.Subst.head,Lean4Lean.VExpr.Subst.tail,Lean4Lean.VExpr.Subst.cons,Lean4Lean.VExpr.Subst.one,Lean4Lean.VExpr.subst_id,Lean4Lean.VExpr.id_lift,Lean4Lean.VExpr.Subst.lift_l_refl,Lean4Lean.VExpr.Subst.lift_l_skip,Lean4Lean.VExpr.lift_subst,Lean4Lean.VExpr.Subst.Fixes,Lean4Lean.VExpr.Subst.Fixes.lift,Lean4Lean.VExpr.ClosedN.subst_eq,Lean4Lean.VExpr.lift_subst_cons,Lean4Lean.VExpr.lift_subst_lift,Lean4Lean.VExpr.subst_inst,Lean4Lean.VExpr.inst_lift_cons,Lean4Lean.VExpr.instN_eq,Lean4Lean.VExpr.inst_eq}
+\leanok
+\uses{def:subst,def:inst}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{854}
+The concrete substitutions \texttt{id}, \texttt{cons} and \texttt{one a} with their
+head/tail algebra, the predicate \texttt{Subst.Fixes n} (identity below $n$, stable
+under lifting), and the bridge
+$\texttt{e.inst a k} = \texttt{e.subst ((Subst.one a).liftN k)}$ reducing
+single-variable instantiation to a general substitution. A lift on the left of a
+substitution walks off it one binder at a time, so a closing given as a \texttt{cons}
+chain reaches \texttt{Subst.id} by \texttt{simp}.
+\end{lemma}
+\begin{proof}
+\uses{def:lift-prime}
+\leanok
+\texttt{instN\_eq} is an induction on the term with a nested induction on the cut-off in
+the variable case; the rest are \texttt{funext} plus a case split on the index, or short
+inductions using \texttt{subst\_lift'}/\texttt{lift'\_subst}.
+\end{proof}
+
+\begin{definition}[Left inverse of a \texttt{Lift}, and injectivity of \texttt{lift'}]
+\label{def:lift-inv}
+\lean{Lean4Lean.Lift.inv,Lean4Lean.VExpr.lift_l_inv,Lean4Lean.VExpr.lift'_inj}
+\leanok
+\uses{def:subst,ind:lift}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{887}
+\texttt{rho.inv} is the substitution that undoes $\rho$, the \texttt{skip} case
+discarding the inserted variable to \texttt{default}; it satisfies
+$\texttt{Subst.lift\_l}\;\rho\;\rho.\texttt{inv} = \texttt{Subst.id}$, whence
+$\texttt{lift'}\;\_\;\rho$ is injective.
+\end{definition}
+
+\begin{lemma}[\texttt{Subst.Depth}, truncation and \texttt{lift\_r\_one}]
+\label{fam:subst-trunc-orphans}
+\lean{Lean4Lean.VExpr.Subst.Depth,Lean4Lean.VExpr.Subst.Depth.id,Lean4Lean.VExpr.Subst.Depth.one,Lean4Lean.VExpr.Subst.trunc,Lean4Lean.VExpr.Subst.lift_r_comm,Lean4Lean.VExpr.lift_r_one,Lean4Lean.VExpr.Subst.tail_eq_lift_l,Lean4Lean.VExpr.Subst.lift_r_tail}
+\leanok
+\uses{def:subst}
+\srcloc{Lean4Lean/Theory/VExpr.lean}{796}
+$\sigma.\texttt{Depth}\;n\;n'$ says $\sigma$ is the shift by $n-n'$ above $n'$;
+\texttt{Subst.trunc} truncates a substitution to such a shift, and
+\texttt{Subst.lift\_r\_comm} and \texttt{lift\_r\_one} push a \texttt{Lift} through a
+substitution of known depth. On master this block existed in order to prove
+\texttt{lift'\_inst\_hi}.
+\end{lemma}
+\begin{proof}
+\uses{def:lift-prime}
+\leanok
+\texttt{lift\_r\_comm} is \texttt{funext} plus an induction computing
+$(\rho.\texttt{consN}\;n).\texttt{liftVar}$; \texttt{lift\_r\_one} instantiates it at
+\texttt{Subst.Depth.one} and simplifies the truncation away.
+\reviewnote{The \texttt{trproj} branch re-derived \texttt{lift'\_inst\_hi} from
+\ref{thm:lift-instn-hi} and left this block behind. \texttt{lift\_r\_one}
+(\srcloc{Lean4Lean/Theory/VExpr.lean}{919}) now has no consumer at all, and the whole
+chain that fed it died with it: \texttt{Subst.lift\_r\_comm} (911), \texttt{Subst.trunc}
+(908), \texttt{Subst.Depth.one} (885), \texttt{Subst.Depth.id} (858) and
+\texttt{Subst.Depth} itself (796) are now mentioned only inside this block -- six
+declarations. \texttt{Subst.tail\_eq\_lift\_l} was already unused on master. Only
+\texttt{Subst.lift\_r\_tail} is still used, from
+\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{1005}. All six survive verbatim in
+\texttt{Experimental/SExpr.lean}, where the same API is proved out and
+\texttt{lift\_r\_one} is still consumed.}
+\end{proof}
+
+\section{Weakening and instantiation as substitutions}
+
+The \texttt{trproj} branch opened this section of \texttt{VExpr.lean} with a design
+statement (\srcloc{Lean4Lean/Theory/VExpr.lean}{963}): since \texttt{lift'} and
+\texttt{inst} are both instances of \texttt{subst}, a lemma about a term builder need
+only be proved once against \texttt{subst}, and the weakening and instantiation forms
+are read off by rewriting, \texttt{Lift.consN} matching \texttt{Subst.liftN} binder for
+binder. The rest of the section is that programme carried out.
+
+\begin{theorem}[Weakening is a substitution]
+\label{thm:lift-eq-subst}
+\lean{Lean4Lean.VExpr.lift'_eq_subst}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{970}
+\uses{def:subst,def:lift-prime}
+$\texttt{e.lift'}\;\rho = \texttt{e.subst}\;(\texttt{Subst.lift\_l}\;\rho\;\texttt{Subst.id})$:
+weakening along $\rho$ is the substitution that renames each variable along $\rho$.
+
+\thesisref{no thesis counterpart (an internal refactoring lemma)}
+\end{theorem}
+\begin{proof}
+\uses{fam:subst-basic,def:subst}
+\leanok
+\texttt{subst\_id.symm.trans subst\_lift'}: run the identity substitution on
+$\texttt{e.lift'}\;\rho$, then absorb the lift on the left by \texttt{subst\_lift'}.
+This is the keystone of the section and is used from \texttt{Theory/Proj.lean} as well
+as inside this file.
+\end{proof}
+
+\begin{lemma}[\texttt{Subst.liftN} bookkeeping]
+\label{fam:subst-liftn-algebra}
+\lean{Lean4Lean.VExpr.Subst.lift_liftN,Lean4Lean.VExpr.Subst.liftN_liftN,Lean4Lean.VExpr.Subst.lift_lift_l_id,Lean4Lean.VExpr.Subst.liftN_lift_l_id,Lean4Lean.VExpr.Subst.Fixes.liftN}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{973}
+\uses{def:subst,def:lift-prime}
+Five unfolding lemmas for iterated lifting of a substitution:
+$\sigma.\texttt{lift}.\texttt{liftN}\;n = \sigma.\texttt{liftN}\;(n+1)$;
+$(\sigma.\texttt{liftN}\;k).\texttt{liftN}\;j = \sigma.\texttt{liftN}\;(k+j)$;
+$\texttt{Subst.lift\_l}\;\rho\;\texttt{id}$ commutes with \texttt{lift} and
+\texttt{liftN}, turning $\rho$ into $\rho.\texttt{cons}$ and $\rho.\texttt{consN}\;j$;
+and $(\sigma.\texttt{liftN}\;n)$ fixes $n$.
+
+\thesisref{no thesis counterpart (de Bruijn bookkeeping)}
+\end{lemma}
+\begin{proof}
+\uses{fam:subst-basic}
+\leanok
+\texttt{Subst.lift\_liftN} and \texttt{Subst.liftN\_liftN} are structural recursions on
+the number of lifts whose step is \texttt{congrArg Subst.lift} on the induction
+hypothesis; \texttt{Subst.Fixes.liftN} recurses through \texttt{Subst.Fixes.lift};
+\texttt{Subst.liftN\_lift\_l\_id} recurses by rewriting with
+\texttt{Subst.lift\_lift\_l\_id}, which is itself not a recursion at all but the two
+rewrites \texttt{Subst.lift\_l\_lift} and \texttt{id\_lift}.
+\texttt{Subst.liftN\_lift\_l\_id} is the one that makes \texttt{Lift.consN} and
+\texttt{Subst.liftN} line up binder for binder, which is what the section docstring
+promises; all five are consumed from \texttt{Theory/Proj.lean} (lines 171, 177, 189,
+343 and 368).
+\end{proof}
+
+\begin{lemma}[Substitution past a one-variable instantiation, at the level of substitutions]
+\label{thm:subst-comp-liftn-one}
+\lean{Lean4Lean.VExpr.Subst.comp_liftN_one}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{993}
+\uses{def:subst,fam:subst-basic}
+For every $n$,
+$\mathrm{comp}\,((\mathrm{one}\,P).\mathrm{liftN}\,n)\,(\sigma.\mathrm{liftN}\,n) = \mathrm{comp}\,(\sigma.\mathrm{liftN}\,(n{+}1))\,((\mathrm{one}\,(P.\mathrm{subst}\,\sigma)).\mathrm{liftN}\,n)$,
+i.e. the substitution lemma stated between substitutions rather than between terms.
+
+\thesisref{no thesis counterpart}
+\end{lemma}
+\begin{proof}
+\uses{fam:subst-basic,def:subst}
+\leanok
+Induction on $n$. The base case is \texttt{funext} followed by a case split on the
+variable, the successor branch closing with \texttt{lift\_subst\_cons} and
+\texttt{subst\_id}; the step rewrites by \texttt{Subst.comp\_lift} on both sides and
+applies the induction hypothesis. Stating it at the \texttt{Subst} level is the right
+call: all the arithmetic lives here, and \ref{thm:subst-instn} below is then a rewrite.
+Its only consumer is that lemma.
+\end{proof}
+
+\begin{theorem}[Substitution commutes with instantiation at index $n$]
+\label{thm:subst-instn}
+\lean{Lean4Lean.VExpr.subst_instN}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1009}
+\uses{def:subst,def:inst}
+$(e.\mathrm{inst}\,a\,n).\mathrm{subst}\,(\sigma.\mathrm{liftN}\,n) = (e.\mathrm{subst}\,(\sigma.\mathrm{liftN}\,(n{+}1))).\mathrm{inst}\,(a.\mathrm{subst}\,\sigma)\,n$,
+for all $e$, $a$, $\sigma$ and $n$.
+
+\thesisref{typesys.tex, Lemma \texttt{thm:subst} in its general ($n$-indexed) form}
+\end{theorem}
+\begin{proof}
+\uses{thm:subst-comp-liftn-one,fam:subst-basic}
+\leanok
+Rewrite both instantiations to substitutions by \texttt{instN\_eq}, collapse the two
+composites by \texttt{subst\_subst}, and close with \ref{thm:subst-comp-liftn-one}.
+\reviewnote{Master already proves \texttt{subst\_inst}
+(\srcloc{Lean4Lean/Theory/VExpr.lean}{952}), which is exactly the case $n = 0$, and
+keeps its independent hand proof; the contribution did not fold it in. The docstring
+says ``under \texttt{m} binders'' while the statement binds $n$.}
+\end{proof}
+
+\begin{theorem}[Weakening under $m$ binders commutes with instantiation at index $m$]
+\label{thm:lift-instn-hi}
+\lean{Lean4Lean.VExpr.lift'_instN_hi,Lean4Lean.VExpr.lift'_inst_hi}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1014}
+\uses{def:lift-prime,def:inst,ind:lift}
+$(e_1.\mathrm{inst}\,e_2\,m).\mathrm{lift}'\,(\rho.\mathrm{consN}\,m) = (e_1.\mathrm{lift}'\,(\rho.\mathrm{consN}\,(m{+}1))).\mathrm{inst}\,(e_2.\mathrm{lift}'\,\rho)\,m$,
+with \texttt{lift'\_inst\_hi} the case $m = 0$.
+
+\thesisref{typesys.tex, the weakening/substitution interaction of Lemma \texttt{thm:subst}}
+\end{theorem}
+\begin{proof}
+\uses{thm:lift-eq-subst,fam:subst-liftn-algebra,thm:subst-instn}
+\leanok
+One \texttt{simp only} call: read both sides as substitutions by
+\ref{thm:lift-eq-subst}, rewrite $\texttt{Subst.lift\_l}\;\rho\;\texttt{id}$ lifted $m$
+times backwards through \texttt{Subst.liftN\_lift\_l\_id}, and apply
+\ref{thm:subst-instn}.
+\reviewnote{\texttt{lift'\_inst\_hi} already existed on master at line 903 with a
+one-line proof from \texttt{lift\_r\_one}. Moving it 115 lines down and re-deriving it
+is arguably cleaner, but it creates merge-conflict surface on a file otherwise shared
+verbatim with upstream and orphans the block at \ref{fam:subst-trunc-orphans}. The
+general form \texttt{lift'\_instN\_hi} has no consumer outside this pair.}
+\end{proof}
+
+\begin{lemma}[Inserting a binder at depth $i$ commutes with a shifted substitution]
+\label{thm:liftn-subst-liftn}
+\lean{Lean4Lean.VExpr.liftN_subst_liftN,Lean4Lean.VExpr.substVar_liftN_lift}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1032}
+\uses{def:subst,def:liftn}
+$(e.\mathrm{liftN}\,1\,i).\mathrm{subst}\,(\sigma.\mathrm{liftN}\,(i{+}1)) = (e.\mathrm{subst}\,(\sigma.\mathrm{liftN}\,i)).\mathrm{liftN}\,1\,i$, with
+\texttt{substVar\_liftN\_lift} the variable case.
+
+\thesisref{typesys.tex, Lemma \texttt{thm:subst}, generalising master's \texttt{lift\_subst\_lift}}
+\end{lemma}
+\begin{proof}
+\uses{def:liftn}
+\leanok
+Structural recursion on $e$, the binder cases raising $i$ by one; the \texttt{bvar} case
+is \texttt{substVar\_liftN\_lift}, itself a recursion on the pair of the depth $i$ and
+the index, using \texttt{liftVar\_succ} and \texttt{lift\_liftN'}.
+\reviewnote{The docstring correctly identifies the case $i = 0$ as master's
+\texttt{lift\_subst\_lift} (\srcloc{Lean4Lean/Theory/VExpr.lean}{947}) but does not
+re-derive it, so that specialisation keeps a separate hand proof; the lemma itself has
+one consumer, in \texttt{Theory/Proj.lean}.}
+\end{proof}
+
+\section{Telescopes and application spines}
+
+The remainder of \texttt{VExpr.lean} is the \texttt{iota} branch's toolkit for talking
+about the \emph{shape} of a recursor type, a constructor type and an $\iota$ redex,
+together with \texttt{trproj} stability lemmas saying those shapes survive substitution.
+All the readers are total functions rather than \texttt{Option}-valued ones, which is
+what lets the well-formedness predicates built on them be decidable and hence testable
+against the real kernel.
+
+\begin{definition}[Application spines \texttt{mkApps}]
+\label{def:mkapps}
+\lean{Lean4Lean.VExpr.mkApps,Lean4Lean.VExpr.mkApps_nil,Lean4Lean.VExpr.mkApps_cons,Lean4Lean.VExpr.mkApps_append}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1051}
+\uses{ind:vexpr}
+$\texttt{f.mkApps}\;[a_0,\dots,a_n] = f\;a_0\dots a_n$, the left fold of \texttt{app},
+with the \texttt{nil} and \texttt{cons} simp lemmas and associativity over list append.
+It was introduced so that recursor redexes and constructor applications can be written
+uniformly; \texttt{Theory/Inductive.lean} and \texttt{Theory/Proj.lean} are built on it.
+
+\thesisref{axioms.tex \S2.6.1, the telescope application $f\;e_1\dots e_n$}
+\end{definition}
+
+\begin{lemma}[Spines commute with substitution, weakening and instantiation]
+\label{fam:mkapps-stability}
+\lean{Lean4Lean.VExpr.mkApps_subst,Lean4Lean.VExpr.mkApps_lift',Lean4Lean.VExpr.mkApps_inst,Lean4Lean.VExpr.mkApps_instL}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1059}
+\uses{def:mkapps,def:subst,def:inst,def:instl,def:lift-prime}
+Each of \texttt{subst}, \texttt{lift'}, \texttt{inst} and \texttt{instL} distributes
+over \texttt{mkApps}, applying the operation to the head and mapping it over the
+argument list.
+
+\thesisref{no thesis counterpart (structural congruences)}
+\end{lemma}
+\begin{proof}
+\uses{thm:lift-eq-subst,fam:subst-basic}
+\leanok
+\texttt{mkApps\_subst} is one induction on the argument list; \texttt{mkApps\_lift'} and
+\texttt{mkApps\_inst} are then \texttt{simp only} corollaries via
+\ref{thm:lift-eq-subst} and \texttt{instN\_eq}. \texttt{mkApps\_instL} needs its own
+induction because \texttt{instL} is not a \texttt{Subst}. This is the section's design
+statement paying off: one induction, three corollaries, and all four are consumed --
+\texttt{subst}, \texttt{inst} and \texttt{instL} from \texttt{Theory/Proj.lean} (lines
+300, 309, 310) and the \texttt{Verify} layer, \texttt{mkApps\_lift'} from
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{656}.
+\end{proof}
+
+\begin{definition}[A descending run of de Bruijn variables]
+\label{def:bvarsdesc}
+\lean{Lean4Lean.VExpr.bvarsDesc,Lean4Lean.VExpr.bvarsDesc_length,Lean4Lean.VExpr.getElem_bvarsDesc}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory/VExpr.lean}{1081}
+\uses{ind:vexpr}
+$\texttt{bvarsDesc}\;lo\;n = [\texttt{bvar}\;(lo+n-1),\dots,\texttt{bvar}\;lo]$, the
+argument list with which a constructor or recursor applies the $n$ variables of a
+telescope it has just bound; its length is $n$ and its $t$-th element is
+$\texttt{bvar}\;(lo + (n-1-t))$. The descending convention is the one forced by de
+Bruijn telescopes and is documented. Definition and length lemma are \texttt{iota}
+(lines 1081 and 1083); \texttt{getElem\_bvarsDesc} (line 1085) was added on
+\texttt{trproj} for the projection development.
+
+\thesisref{axioms.tex \S2.6.1, the variables $b$ of a constructor telescope}
+\end{definition}
+
+\begin{definition}[Reading the leading Pi-telescope]
+\label{def:pi-telescope}
+\lean{Lean4Lean.VExpr.piArity,Lean4Lean.VExpr.piBody,Lean4Lean.VExpr.piBinders,Lean4Lean.VExpr.piBinders_length}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1090}
+\uses{ind:vexpr}
+Three total functions on \texttt{VExpr}: \texttt{piArity} counts the leading
+\texttt{forallE} binders, \texttt{piBody} strips them all, and \texttt{piBinders} lists
+their domains outermost first, each still in its own binder context; the list has length
+\texttt{piArity}. Totality rather than an \texttt{Option} is the right choice here,
+because the shape predicates that consume these are conjunctions that pin the arity
+separately.
+
+\thesisref{axioms.tex \S2.6.1, the telescope notation $(x{::}\alpha)$ and $\forall x{::}\alpha.\,\beta$}
+\end{definition}
+
+\begin{lemma}[Pi-telescopes under weakening and universe instantiation]
+\label{fam:pibinders-stability}
+\lean{Lean4Lean.VExpr.piBinders_lift',Lean4Lean.VExpr.piBinders_instL,Lean4Lean.VExpr.piArity_instL}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1108}
+\uses{def:pi-telescope,def:lift-prime,def:instl}
+$(T.\texttt{lift'}\;\rho).\texttt{piBinders}$ is $T.\texttt{piBinders}$ with the $j$-th
+domain weakened along $\rho.\texttt{consN}\;j$; universe instantiation maps over the
+binders unchanged and therefore preserves \texttt{piArity}.
+
+\thesisref{no thesis counterpart (stability of a syntactic reader)}
+\end{lemma}
+\begin{proof}
+\uses{fam:lift-consn}
+\leanok
+Structural recursion following the \texttt{forallE} spine, using
+\texttt{List.mapIdx\_cons} and \texttt{Lift.consN\_cons} to shift the index; the
+non-\texttt{forallE} cases are \texttt{rfl}. Note the asymmetry with
+\ref{fam:ctorheaded-stability}: \texttt{lift'} and \texttt{instL} cannot create new
+leading binders, whereas \texttt{inst} can, which is why the \texttt{inst} version needs
+a \texttt{CtorHeaded} hypothesis.
+\end{proof}
+
+\begin{definition}[Reading the leading lambda-telescope]
+\label{def:lam-telescope}
+\lean{Lean4Lean.VExpr.lamArity,Lean4Lean.VExpr.lamBody,Lean4Lean.VExpr.lamBinders,Lean4Lean.VExpr.lamBinders_length,Lean4Lean.VExpr.foldr_lam_lamBinders}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory/VExpr.lean}{1123}
+\uses{ind:vexpr}
+The $\lambda$-analogues of the $\Pi$-readers: \texttt{lamArity}, \texttt{lamBody} and
+\texttt{lamBinders}, with the length lemma and the reconstruction
+$\texttt{e.lamBinders.foldr lam e.lamBody} = e$. \texttt{lamArity} and \texttt{lamBody}
+are \texttt{iota} (lines 1123 and 1128); \texttt{lamBinders}, its length lemma and the
+reconstruction are \texttt{trproj} (lines 1133 to 1143).
+
+\thesisref{no thesis counterpart (a reader for $\iota$-rule reducts)}
+\reviewnote{The consumer of all three \texttt{trproj} additions is a single proof in the
+verification layer, \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1128}: it builds the
+$\beta$-redex of an $\iota$ rule out of \texttt{rhs.lamBinders} and closes the
+reconstruction with \texttt{foldr\_lam\_lamBinders} (lines 1133 and 1134).
+\texttt{lamBinders\_length} is named nowhere, but it is \texttt{@[simp]} and the arity
+side condition at line 1132 (\texttt{simp [hla]} against
+\texttt{hla : rhs.lamArity = ...}) is exactly what it discharges, so it should not be
+called dead. This is the one \texttt{lamBinders} consumer in the repository; nothing in
+\texttt{Theory/Proj.lean} uses these three.}
+\end{definition}
+
+\begin{definition}[Decomposing an application spine]
+\label{def:app-spine}
+\lean{Lean4Lean.VExpr.getAppFn,Lean4Lean.VExpr.getAppArgs,Lean4Lean.VExpr.getAppFn_app,Lean4Lean.VExpr.getAppArgs_app,Lean4Lean.VExpr.getAppFn_mkApps,Lean4Lean.VExpr.getAppArgs_mkApps,Lean4Lean.VExpr.mkApps_getAppFn_getAppArgs}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1146}
+\uses{def:mkapps}
+\texttt{getAppFn} returns the head of an application spine and \texttt{getAppArgs} its
+arguments, first argument first. They compute on \texttt{mkApps} (the head is the head of
+the inner function, the arguments are appended) and invert it:
+$\texttt{e.getAppFn.mkApps e.getAppArgs} = e$. The names deliberately mirror
+\texttt{Lean.Expr.getAppFn} and \texttt{getAppArgs}, since the \texttt{Verify} layer has
+to match these against the kernel's own spine functions.
+
+\thesisref{axioms.tex \S2.6.1, reading a target $t\;e$ as a head applied to arguments}
+\end{definition}
+
+\begin{theorem}[Prefix characterisation of an application spine]
+\label{thm:eq-mkapps-append}
+\lean{Lean4Lean.VExpr.eq_mkApps_append_iff,Lean4Lean.VExpr.eq_mkApps_append_length_iff}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1174}
+\uses{def:app-spine,def:mkapps}
+$\exists\,\mathit{rest},\; e = f.\texttt{mkApps}\,(\mathit{pre} \mathbin{+\!\!+} \mathit{rest})$
+holds if and only if $e$ and $f$ have the same spine head and
+$f.\texttt{getAppArgs} \mathbin{+\!\!+} \mathit{pre}$ is a prefix of
+$e.\texttt{getAppArgs}$. The second version additionally pins
+$|\mathit{rest}| = n$ by the equation
+$|e.\texttt{getAppArgs}| = |f.\texttt{getAppArgs}| + |\mathit{pre}| + n$.
+
+\thesisref{no thesis counterpart (a decidability-oriented reformulation)}
+\end{theorem}
+\begin{proof}
+\uses{def:app-spine}
+\leanok
+Forward by computing both spine projections of
+$f.\texttt{mkApps}\,(\mathit{pre} \mathbin{+\!\!+} \mathit{rest})$; backward by rewriting
+\texttt{mkApps\_getAppFn\_getAppArgs e} along the head equation and the prefix witness,
+the length version then closing by \texttt{omega}. These are the workhorses that turn
+the existential shape predicates of \texttt{Theory/Inductive.lean} into decidable ones:
+the existential over a list of expressions on the left becomes, on the right, a spine
+equality plus a \texttt{List.IsPrefix} and a length equation, all decidable once
+\texttt{VExpr} has \texttt{DecidableEq}. The two instances built directly on them are at
+\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{20}.
+\end{proof}
+
+\begin{definition}[Head-constructor tests and their reflections]
+\label{def:head-tests}
+\lean{Lean4Lean.VExpr.isSort,Lean4Lean.VExpr.isBvar,Lean4Lean.VExpr.isConst,Lean4Lean.VExpr.isSort_iff,Lean4Lean.VExpr.isBvar_iff,Lean4Lean.VExpr.isConst_iff}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1200}
+\uses{ind:vexpr}
+Boolean tests for the \texttt{sort}, \texttt{bvar} and \texttt{const} head
+constructors, each with an \texttt{iff} lemma reflecting the test into the corresponding
+existential.
+
+\thesisref{no thesis counterpart (test support)}
+\reviewnote{The only consumers are the \texttt{Decidable} instances in
+\texttt{Lean4Lean/Tests/ShapeDecide.lean}, so this is test-support machinery living in a
+theory file. Also, the docstring ``Head-constructor tests, with their reflections into
+existentials'' is attached to \texttt{isSort} alone while describing all six
+declarations.}
+\end{definition}
+
+\begin{definition}[\texttt{RecHeaded}: the shape of a recursor type]
+\label{def:recheaded}
+\lean{Lean4Lean.VExpr.RecHeaded}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1219}
+\uses{def:pi-telescope,def:app-spine}
+$\texttt{ty.RecHeaded} := \exists k,\; \texttt{ty.piBody.getAppFn} = \texttt{bvar}\;k$:
+the $\Pi$-body of \texttt{ty} is an application headed by a bound variable. That is the
+shape of a recursor's type and of a minor premise, whose targets are applications of a
+motive binder. It is the cheap, purely syntactic discriminator that separates recursor
+constants from constructor constants.
+
+\thesisref{axioms.tex \S2.6.3, the recursor type $\forall C{:}\kappa.\,\forall e{::}\varepsilon.\,\forall a{::}\alpha.\,\forall z{:}P\,a.\;C\,a\,z$, whose body is headed by the motive variable $C$}
+\end{definition}
+
+\begin{definition}[\texttt{CtorHeaded}, and its disjointness from \texttt{RecHeaded}]
+\label{def:ctorheaded}
+\lean{Lean4Lean.VExpr.CtorHeaded,Lean4Lean.VExpr.RecHeaded.not_ctorHeaded}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1223}
+\uses{def:pi-telescope,def:app-spine,def:recheaded}
+$\texttt{ty.CtorHeaded} := \exists I\,us,\; \texttt{ty.piBody.getAppFn} = \texttt{const}\;I\;us$:
+the $\Pi$-body is an application headed by a \emph{constant}, the shape of a
+constructor's type, whose target is a type-former application. Since a bound variable is
+not a constant, no type is both \texttt{RecHeaded} and \texttt{CtorHeaded}; the proof
+rewrites the \texttt{bvar} witness into the \texttt{const} equation and closes by
+\texttt{cases}. That disjointness lemma is the load-bearing one: it is what rules out an
+$\iota$ redex whose head is simultaneously a recursor and a constructor
+(\ref{thm:indparams-patsiota-rec-ne-ctor}).
+
+\thesisref{axioms.tex \S2.6.1, the constructor judgement $\Gamma;t{:}F\vdash \alpha\;\mathsf{ctor}$, whose base case is $t\;e$}
+\end{definition}
+
+\begin{lemma}[\texttt{CtorHeaded} passes to the body of a Pi]
+\label{thm:ctorheaded-forallE}
+\lean{Lean4Lean.VExpr.CtorHeaded.forallE}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1232}
+\uses{def:ctorheaded}
+If $\texttt{forallE}\;A\;B$ is \texttt{CtorHeaded} then so is $B$.
+
+\thesisref{no thesis counterpart}
+\end{lemma}
+\begin{proof}
+\uses{def:pi-telescope}
+\leanok
+The proof term is \texttt{h}: the statement is definitionally trivial, because
+$(\texttt{forallE}\;A\;B).\texttt{piBody}$ reduces to $B.\texttt{piBody}$.
+\reviewnote{The lemma has no consumer anywhere in the repository, and its docstring
+states a different proposition than the statement: ``a \texttt{CtorHeaded} type is not a
+$\Pi$-telescope ending in a variable, so instantiation cannot create new leading
+binders'' is the motivation for \texttt{piArity\_inst\_of\_ctorHeaded}, which lives some
+forty lines below.}
+\end{proof}
+
+\begin{lemma}[\texttt{CtorHeaded} is stable under instantiation, and then so is the arity]
+\label{fam:ctorheaded-stability}
+\lean{Lean4Lean.VExpr.getAppFn_inst_const,Lean4Lean.VExpr.CtorHeaded.inst,Lean4Lean.VExpr.getAppFn_instL_const,Lean4Lean.VExpr.CtorHeaded.instL,Lean4Lean.VExpr.piBinders_inst_of_ctorHeaded,Lean4Lean.VExpr.piArity_inst_of_ctorHeaded}
+\leanok
+\contrib{trproj} \srcloc{Lean4Lean/Theory/VExpr.lean}{1234}
+\uses{def:ctorheaded,def:pi-telescope,def:inst,def:instl}
+A spine whose head is a constant keeps that head under \texttt{inst}, and keeps it up to
+level substitution under \texttt{instL}; hence \texttt{CtorHeaded} is preserved by both.
+Consequently instantiating a \texttt{CtorHeaded} type maps its $\Pi$-binders pointwise,
+the $j$-th binder being instantiated at index $k+j$, and leaves \texttt{piArity}
+unchanged.
+
+\thesisref{no thesis counterpart (stability needed by the projection development)}
+\end{lemma}
+\begin{proof}
+\uses{def:app-spine}
+\leanok
+All by structural recursion following the spine and then the telescope, the impossible
+head shapes discharged by \texttt{nomatch};
+\texttt{piArity\_inst\_of\_ctorHeaded} is \texttt{piBinders\_inst\_of\_ctorHeaded}
+followed by \texttt{List.length\_mapIdx}.
+\reviewnote{\texttt{getAppFn\_instL\_const}
+(\srcloc{Lean4Lean/Theory/VExpr.lean}{1248}) and \texttt{CtorHeaded.instL}
+(\srcloc{Lean4Lean/Theory/VExpr.lean}{1256}) are dead: nothing outside this file
+mentions them. They read as symmetry-driven additions to the \texttt{inst} pair rather
+than lemmas the projection development needs.}
+\end{proof}
+
+\begin{definition}[The head constant of a spine, and the type former a motive ranges over]
+\label{def:headconst}
+\lean{Lean4Lean.VExpr.headConst?,Lean4Lean.VExpr.motiveFormer?,Lean4Lean.VExpr.headConst?_eq_some}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1279}
+\uses{def:app-spine,def:pi-telescope}
+\texttt{headConst? e} is the head constant of $e$'s application spine, if the head is a
+constant at all, and \texttt{headConst?\_eq\_some} reflects that option into an
+existential over the level arguments. \texttt{motiveFormer? A} is the head constant of
+the \emph{last} $\Pi$-binder of $A$, i.e. of the $P$ in a motive type
+$\forall a{::}\alpha.\,P\,a \to \mathsf{U}$. That is the trick which lets block
+well-formedness say ``this recursor eliminates that type former'' without carrying a
+separate field.
+
+\thesisref{axioms.tex \S2.6.3, the motive type $\kappa = \forall a{::}\alpha.\,P\,a\to \mathsf{U}_u$}
+\end{definition}
+
+\begin{lemma}[Constant-headed spines as decidable conditions]
+\label{fam:const-spine}
+\lean{Lean4Lean.VExpr.const_mkApps_spine,Lean4Lean.VExpr.eq_const_mkApps_of_spine,Lean4Lean.VExpr.eq_const_mkApps_iff,Lean4Lean.VExpr.eq_const_mkApps_append_iff}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VExpr.lean}{1295}
+\uses{def:headconst,def:app-spine,def:mkapps}
+A constant application $(\texttt{const}\;c\;us).\texttt{mkApps}\;\mathit{args}$ has spine
+head $\texttt{const}\;c\;us$ and arguments $\mathit{args}$, and conversely an expression
+with those spine projections is that application. The two biconditionals package this:
+$e$ is $c$ applied to exactly $\mathit{args}$ iff $\texttt{e.headConst?} = \texttt{some}\;c$
+and $\texttt{e.getAppArgs} = \mathit{args}$; and $e$ is $c$ applied to $\mathit{pre}$
+followed by further arguments satisfying $P$ iff the head constant is $c$, $\mathit{pre}$
+is a prefix of the arguments, and $P$ holds of
+$\texttt{e.getAppArgs.drop}\;|\mathit{pre}|$.
+
+\thesisref{no thesis counterpart (a decidability-oriented reformulation)}
+\end{lemma}
+\begin{proof}
+\uses{def:app-spine}
+\leanok
+Both directions from \texttt{mkApps\_getAppFn\_getAppArgs} together with
+\texttt{headConst?\_eq\_some}. The last biconditional is what makes the
+\texttt{ValidIndApp} and \texttt{CtorResult} clauses of block well-formedness decidable
+(\ref{def:ind-valid-ind-app}, \ref{def:ind-ctor-result}).
+\reviewnote{\texttt{const\_mkApps\_spine} bundles two independent facts into one
+conjunction and is only ever consumed as \texttt{.1}/\texttt{.2}; two lemmas would read
+better. Neither it nor \texttt{eq\_const\_mkApps\_of\_spine} is used outside
+\texttt{VExpr.lean}.}
+\end{proof}
+
+\section{Environments}
+
+\begin{definition}[Constant signatures and definitional-equality axioms]
+\label{struct:vconstant}
+\lean{Lean4Lean.VConstant,Lean4Lean.VDefEq}
+\leanok
+\uses{ind:vexpr}
+\srcloc{Lean4Lean/Theory/VEnv.lean}{6}
+\texttt{VConstant} is a universe-parameter count together with a type;
+\texttt{VDefEq} is a universe count together with a left-hand side, a right-hand side
+and their common type.
+
+\thesisref{axioms.tex \S2.5, $\tau_{\bar u}(c)$ and the $\delta$ rule $c_{\bar\ell}\equiv v_{\bar\ell}(c)$}
+\end{definition}
+
+\begin{definition}[Environments \texttt{VEnv}]
+\label{struct:venv}
+\lean{Lean4Lean.VEnv}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory/VEnv.lean}{16}
+\uses{struct:vconstant,inductive:pattern-core}
+An environment has three components: a partial map \texttt{constants} from names to
+constant signatures, a \emph{predicate} \texttt{defeqs} on \texttt{VDefEq} giving the
+axiomatic definitional equalities, and (added on the \texttt{iota} branch) a dependent
+predicate
+$\texttt{pats} : (p : \texttt{Pattern}) \to p.\texttt{RHS} \times p.\texttt{Check} \to \texttt{Prop}$,
+the registry of schematic reduction rules keyed by the shape of the redex. Making
+reduction rules \texttt{Prop}-valued environment data rather than a fixed clause of the
+reduction relation keeps environments extensible and monotone, and matches how master
+already treats \texttt{defeqs}.
+
+\thesisref{axioms.tex \S2.5 and \S2.6, the ambient set of constants and reduction rules}
+\reviewnote{The dependent type of \texttt{pats} is heavier than that of the other two
+fields and is what forces the transport in \ref{def:venv-addpat}.}
+\end{definition}
+
+\begin{definition}[The empty environment and its extensions]
+\label{def:venv-basic}
+\lean{Lean4Lean.VEnv.empty,Lean4Lean.VEnv.contains,Lean4Lean.VEnv.addConst,Lean4Lean.VEnv.addDefEq}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory/VEnv.lean}{23}
+\uses{struct:venv}
+\texttt{empty} has no constants, no definitional equalities and no pattern rules;
+\texttt{contains} tests for a declared name; \texttt{addConst} returns \texttt{none} if
+the name is already taken and otherwise extends the map; \texttt{addDefEq}
+unconditionally adjoins one equation to the \texttt{defeqs} predicate. Only the
+\texttt{pats \_ \_ := False} line of \texttt{empty} is \texttt{iota} work.
+
+\thesisref{axioms.tex \S2.5, extending the environment by a declaration}
+\end{definition}
+
+\begin{definition}[Registering a schematic reduction rule]
+\label{def:venv-addpat}
+\lean{Lean4Lean.VEnv.addPat}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VEnv.lean}{44}
+\uses{struct:venv,inductive:pattern-rhs}
+\texttt{env.addPat p r} adjoins the rule \texttt{r} for the pattern \texttt{p}: the new
+\texttt{pats p' r'} holds when the old one did, or when
+$\exists\,h : p' = p,\; h \triangleright r' = r$. The dependent equality is needed
+because $r'$ and $r$ inhabit
+$p'.\texttt{RHS} \times p'.\texttt{Check}$ and $p.\texttt{RHS} \times p.\texttt{Check}$,
+which are different types.
+
+\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}): ``technically, the reduction rule is all substitution instances of this rule''}
+\reviewnote{Unlike \texttt{addConst}, \texttt{addPat} cannot fail: there is no freshness
+or consistency check, so two conflicting reducts for the same pattern are admissible at
+this layer. That burden is pushed entirely onto block well-formedness and
+\texttt{VEnv.PatWF} downstream, and the asymmetry with \texttt{addConst} deserves a
+comment here. The idiom $\exists\,h : p' = p,\; h \triangleright r' = r$ is correct but
+unusual; a heterogeneous equality would read more conventionally.}
+\end{definition}
+
+\begin{definition}[Environment extension order]
+\label{struct:venv-le}
+\lean{Lean4Lean.VEnv.LE,Lean4Lean.VEnv.LE.rfl,Lean4Lean.VEnv.LE.trans}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory/VEnv.lean}{47}
+\uses{struct:venv}
+$\texttt{env}_1 \le \texttt{env}_2$ is a three-field structure: every constant lookup,
+every definitional equality and (the \texttt{iota} addition, line 50) every registered
+pattern rule of $\texttt{env}_1$ is present in $\texttt{env}_2$. Reflexivity is the
+triple of identities and transitivity the triple of composites, so extending the order
+with the new field cost two lines. This is the monotonicity backbone on which every
+environment-extension lemma rests.
+
+\thesisref{no thesis counterpart (an internal invariant)}
+\end{definition}
+
+\section{Declarations}
+
+\begin{definition}[Named constants and definitions]
+\label{def:vconstval}
+\lean{Lean4Lean.VConstVal,Lean4Lean.VDefVal,Lean4Lean.VDefVal.toDefEq}
+\leanok
+\uses{struct:vconstant}
+\srcloc{Lean4Lean/Theory/VDecl.lean}{5}
+\texttt{VConstVal} is a \texttt{VConstant} with a name; \texttt{VDefVal} adds a value.
+\texttt{toDefEq} turns a definition into the $\delta$ equation
+$c_{\texttt{params uvars}} \equiv v$ at the declared type.
+
+\thesisref{axioms.tex \S2.5 (definitions, $\delta$ reduction)}
+\end{definition}
+
+\begin{definition}[One type former of an inductive block]
+\label{struct:vinductivetype}
+\lean{Lean4Lean.VInductiveType}
+\leanok
+\uses{def:vconstval}
+\srcloc{Lean4Lean/Theory/VDecl.lean}{14}
+A named constant together with the list of its constructors, each again a named constant
+with a type.
+
+\thesisref{axioms.tex \S2.6.1, $K = \sum_c (c : \forall b{::}\beta.\,t\;p[b])$}
+\end{definition}
+
+\begin{definition}[One recursor computation rule]
+\label{struct:vrecrule}
+\lean{Lean4Lean.VRecRule}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VDecl.lean}{20}
+\uses{ind:vexpr}
+A rule records the constructor \texttt{ctor} it fires on, that constructor's parameter
+count \texttt{ctorParams}, its number of non-parameter arguments \texttt{nfields}, and
+the closed reduct template \texttt{rhs}; the redex key's constructor spine therefore has
+$\texttt{ctorParams} + \texttt{nfields}$ arguments. It mirrors
+\texttt{Lean.RecursorRule} except for \texttt{ctorParams}, which the kernel's structure
+does not have.
+
+\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), the rule $\mathrm{rec}_P\,C\,e\,p[b]\,(c\,b) \rightsquigarrow e_c\,b\,v$}
+\reviewnote{The docstring justifies the extra field carefully: for a nested inductive the
+constructor a rule fires on need not have the recursor's parameter count
+(\texttt{Tree.rec\_1} fires on \texttt{List.cons}), and it is honest that the current
+well-formedness predicate admits only direct blocks, where the two coincide. The field
+is therefore redundant as data but necessary as specification, and the code says so.}
+\end{definition}
+
+\begin{definition}[A recursor declaration]
+\label{struct:vrecursor}
+\lean{Lean4Lean.VRecursor}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VDecl.lean}{35}
+\uses{struct:vrecrule,def:vconstval}
+A named constant extended with the block it belongs to (\texttt{all}), the telescope
+segmentation \texttt{numParams}, \texttt{numMotives}, \texttt{numMinors},
+\texttt{numIndices}, the K-like-reduction flag \texttt{k}, and its list of computation
+rules. It mirrors \texttt{Lean.RecursorVal} field for field, which is what makes the
+kernel-side correspondence a field-by-field match.
+
+\thesisref{axioms.tex \S2.6.3 (the recursor), the segmentation $\forall C{:}\kappa.\,\forall e{::}\varepsilon.\,\forall a{::}\alpha.\,\forall z{:}P\,a$}
+\reviewnote{\texttt{k} is recorded but, as its own docstring admits, unused by the
+theory: the thesis's second $\iota$ rule (K-like reduction on a subsingleton eliminator)
+is outside the model. The honesty is in the docstring, but the structure still advertises
+coverage the development does not have.}
+\end{definition}
+
+\begin{definition}[Positions in the recursor telescope]
+\label{def:getmajoridx}
+\lean{Lean4Lean.VRecursor.getMajorIdx,Lean4Lean.VRecursor.getFirstIndexIdx}
+\leanok
+\contrib{iota} \srcloc{Lean4Lean/Theory/VDecl.lean}{46}
+\uses{struct:vrecursor}
+\texttt{getMajorIdx} is the argument index of the major premise,
+$\texttt{numParams}+\texttt{numMotives}+\texttt{numMinors}+\texttt{numIndices}$, and
+\texttt{getFirstIndexIdx} that of the first index; both mirror the homonymous fields of
+\texttt{Lean.RecursorVal}.
+
+\thesisref{axioms.tex \S2.6.3, the position of the major premise $z$ in the recursor telescope}
+\reviewnote{\texttt{VRecursor.getFirstIndexIdx} has no consumer anywhere. The
+\texttt{getFirstIndexIdx} occurrences elsewhere in the repository are all Lean's own
+\texttt{RecursorVal} field on a kernel \texttt{rval}
+(\srcloc{Lean4Lean/Inductive/Reduce.lean}{84} and
+\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{29}), plus one mention in a comment in
+\texttt{Theory/Typing/Pattern.lean}. And \texttt{VEnv.addRecRule}
+(\srcloc{Lean4Lean/Theory/Inductive.lean}{260}) spells the major index
+$\texttt{numParams}+\texttt{numMotives}+\texttt{numMinors}+\texttt{numIndices}$ out by
+hand instead of calling \texttt{getMajorIdx}, although its docstring says ``major at
+\texttt{getMajorIdx}''.}
+\end{definition}
+
+\begin{definition}[An inductive block]
+\label{struct:vinductdecl}
+\lean{Lean4Lean.VInductDecl}
+\leanok
+\contrib{mixed} \srcloc{Lean4Lean/Theory/VDecl.lean}{54}
+\uses{struct:vinductivetype,struct:vrecursor}
+A mutual inductive declaration: the number of universe parameters, the number of type
+parameters, the list of type formers with their constructors, and (the \texttt{iota}
+addition, line 58) the list of recursors with their computation rules. Storing
+recursors as \emph{data} rather than deriving them is the central design choice of the
+\texttt{iota} contribution: it mirrors the kernel, which stores them, at the cost of
+having to \emph{specify} rather than construct them, which is what block well-formedness
+(\ref{structure:ind-wf}) then does.
+
+\thesisref{axioms.tex \S2.6.1, $\mu t{:}F.\;K$, together with \S2.6.3's $\mathrm{rec}_P$}
+\end{definition}
+
+\begin{definition}[Declaration kinds]
+\label{ind:vdecl}
+\lean{Lean4Lean.VDecl}
+\leanok
+\uses{def:vconstval,struct:vinductdecl}
+\srcloc{Lean4Lean/Theory/VDecl.lean}{60}
+The ways an environment may be extended: \texttt{axiom}, \texttt{def},
+\texttt{opaque}, \texttt{example}, the quotient block, an inductive block, or a mutual
+block of definitions.
+\end{definition}
+
+\section{Translating real Lean syntax}
+
+\begin{definition}[Translating \texttt{Lean.Expr} into \texttt{VExpr}]
+\label{def:meta-ofexpr}
+\lean{Lean4Lean.Meta.expandProj,Lean4Lean.Meta.expandExpr,Lean4Lean.Meta.ofExpr}
+\leanok
+\uses{ind:vexpr,def:vlevel-oflevel}
+\srcloc{Lean4Lean/Theory/Meta.lean}{12}
+\texttt{expandProj} rewrites a structure projection into the corresponding
+\texttt{casesOn} application, \texttt{expandExpr} does so everywhere and instantiates
+metavariables, and \texttt{ofExpr} maps the residual syntax into \texttt{VExpr},
+translating \texttt{let} by substitution into the body, literals through
+\texttt{toConstructor}, and free variables through a supplied index map or their local
+definition. Projections and metavariables that survive are rejected with an error.
+
+\reviewnote{This is the context for the \texttt{trproj} work: the model's syntax has no
+projection node, and this translator removes projections by \texttt{casesOn} expansion,
+so projections must be modelled as a reduction relation elsewhere. Defensible, but it
+means \texttt{VExpr} and \texttt{Lean.Expr} diverge on exactly the construct being
+verified.}
+\end{definition}
+
+\begin{definition}[The \texttt{vexpr}/\texttt{vconst}/\texttt{vdefeq} term macros]
+\label{def:meta-macros}
+\lean{Lean4Lean.Meta.toVExprCore,Lean4Lean.Meta.toVExprWrapper,Lean4Lean.Meta.elabForVExpr}
+\leanok
+\uses{def:meta-ofexpr}
+\srcloc{Lean4Lean/Theory/Meta.lean}{59}
+Elaboration-time macros that let a \texttt{VExpr}, a \texttt{VConstant} or a
+\texttt{VDefEq} be written as ordinary Lean syntax and compiled to its model
+representation, the auto-bound universe parameters being counted into \texttt{uvars}.
+They are used by \texttt{Theory/Quot.lean} and by the primitive-constant tables of the
+\texttt{Verify} layer.
+\end{definition}
+
+\section{The quotient block}
+
+\begin{definition}[The quotient constants and their computation rule]
+\label{def:quot-consts}
+\lean{Lean4Lean.eqConst,Lean4Lean.quotConst,Lean4Lean.quotMkConst,Lean4Lean.quotLiftConst,Lean4Lean.quotIndConst,Lean4Lean.quotDefEq}
+\leanok
+\uses{def:meta-macros,struct:vconstant}
+\srcloc{Lean4Lean/Theory/Quot.lean}{6}
+The signatures of \texttt{Eq}, \texttt{Quot}, \texttt{Quot.mk}, \texttt{Quot.lift} and
+\texttt{Quot.ind} are obtained by elaborating the real Lean constants through
+\texttt{type\_of\%} and the \texttt{vconst} macro, and \texttt{quotDefEq} is the equation
+$\mathrm{lift}_R\,\beta\,f\,h\,(\mathrm{mk}_R\,a) \equiv f\,a$. \texttt{Quot.sound} is
+absent here, correctly: in Lean 4 it is an ordinary \texttt{axiom} and not one of the
+four quotient primitives the kernel's quotient module installs, so in the model it
+arrives through the generic \texttt{VDecl.axiom} path rather than through
+\texttt{addQuot}. The kernel-side \texttt{Environment.addQuot}
+(\srcloc{Lean4Lean/Quot.lean}{39}) checks the same four names.
+
+\thesisref{axioms.tex \S2.7.1 (quotient types)}
+\reviewnote{Taking the types from real Lean rather than writing them out is economical,
+but it makes the model's fidelity depend on the ambient Lean version.}
+\end{definition}
+
+\begin{definition}[Adding the quotient block to an environment]
+\label{def:venv-addquot}
+\lean{Lean4Lean.VEnv.QuotReady,Lean4Lean.VEnv.addQuot}
+\leanok
+\uses{def:quot-consts,def:venv-basic}
+\srcloc{Lean4Lean/Theory/Quot.lean}{13}
+\texttt{QuotReady env} requires \texttt{Eq} to be already declared with the expected
+signature; \texttt{addQuot} then adds the four quotient constants in order and finally
+the \texttt{Quot.lift}/\texttt{Quot.mk} definitional equality, failing if any name is
+taken.
+
+\thesisref{axioms.tex \S2.7.1}
+\reviewnote{The quotient computation rule is registered as a \texttt{VDefEq}, not through
+the \texttt{pats} registry of \ref{struct:venv}, so after the \texttt{iota} work the
+model carries two mechanisms for computation rules. This is a follow-up rather than a
+defect, but nothing in the code says so: \texttt{Theory/Quot.lean} has no docstrings at
+all, and neither \texttt{VEnv.addPat} nor \texttt{Theory/Typing/Pattern.lean} mentions
+the quotient rule.}
+\end{definition}
+
+\section{Level equivalence is coNP-hard}
+
+This file has no counterpart in the thesis. It is a self-contained reduction from CNF
+satisfiability to \texttt{VLevel} equivalence, and hence a lower bound on the problem
+that the kernel's \texttt{Level.isEquiv} and \texttt{Level.geq} solve. The module
+docstring also sketches the matching NP upper bound for the complement, which is not
+formalised.
+
+\begin{definition}[CNF formulas and the dual-rail encoding]
+\label{def:levelsat-cnf}
+\lean{Lean4Lean.LevelSat.Lit,Lean4Lean.LevelSat.Clause,Lean4Lean.LevelSat.CNF,Lean4Lean.LevelSat.ClauseSat,Lean4Lean.LevelSat.Sat,Lean4Lean.LevelSat.yes,Lean4Lean.LevelSat.no,Lean4Lean.LevelSat.rail}
+\leanok
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{70}
+Literals are pairs in $\mathrm{Fin}\,n \times \mathrm{Bool}$, clauses are lists of
+literals, a CNF is a list of clauses, and \texttt{Sat} is the usual existential over
+Boolean assignments. Each variable $i$ gets two level parameters, the rails $i^{+}$ at
+index $2i$ and $i^{-}$ at index $2i+1$, a rail counting as ``true'' when its value is
+nonzero. Indexing variables by $\mathrm{Fin}\,n$ puts ``the formula mentions only
+variables the levels provide rails for'' into the type, so the reduction carries no side
+condition.
+\end{definition}
+
+\begin{definition}[The two levels of the reduction]
+\label{def:levelsat-levels}
+\lean{Lean4Lean.LevelSat.two,Lean4Lean.LevelSat.clauseLvl,Lean4Lean.LevelSat.gates,Lean4Lean.LevelSat.var,Lean4Lean.LevelSat.small,Lean4Lean.LevelSat.big}
+\leanok
+\uses{def:levelsat-cnf,ind:vlevel}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{104}
+$\mathrm{clauseLvl}\,C$ is the $\max$ of the rails of a clause; $\mathrm{gates}\,\varphi$
+gates the constant $2$ behind every clause by an iterated $\mathrm{imax}$ fold;
+$\mathrm{var}\,i = \max(i^{+},\,\mathrm{imax}(\mathrm{imax}(2,i^{+}),\,i^{-}))$ detects a
+variable whose two rails are both nonzero; $\mathrm{small}\,n$ is the $\max$ of all
+$\mathrm{var}\,i$ for $i < n$; and $\mathrm{big}\,\varphi = \max(\mathrm{small}\,n,\,\mathrm{gates}\,\varphi)$.
+Since every level denotes a monotone function, negation cannot be computed; it enters as
+a failure of domination, the constant $2$ having to exceed everything the right-hand
+side offers.
+\end{definition}
+
+\begin{lemma}[Evaluation lemmas for the gadget levels]
+\label{fam:levelsat-eval}
+\lean{Lean4Lean.LevelSat.eval_var_eq,Lean4Lean.LevelSat.yes_le_eval_var,Lean4Lean.LevelSat.no_le_eval_var,Lean4Lean.LevelSat.two_le_eval_var,Lean4Lean.LevelSat.eval_var_le_one,Lean4Lean.LevelSat.le_eval_small,Lean4Lean.LevelSat.two_le_eval_small,Lean4Lean.LevelSat.eval_small_le_one,Lean4Lean.LevelSat.eval_clauseLvl_ne_zero,Lean4Lean.LevelSat.eval_foldl_imax_le,Lean4Lean.LevelSat.eval_foldl_imax_le_of_zero,Lean4Lean.LevelSat.le_eval_foldl_imax}
+\leanok
+\uses{def:levelsat-levels,def:vlevel-eval}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{141}
+Pointwise evaluation of the gadgets. $\mathrm{var}\,i$ is the larger of the two rails
+unless both are nonzero, in which case it is at least $2$ (\texttt{eval\_var\_eq} is the
+equation, the four inequalities its consequences). For $\mathrm{small}\,n$ there are
+three separate one-directional lemmas, not a biconditional: it dominates every parameter
+below $2n$ (\texttt{le\_eval\_small}), it is at least $2$ as soon as both rails of some
+$i<n$ are nonzero (\texttt{two\_le\_eval\_small}), and it is at most $1$ given that every
+$i<n$ has a zero rail and every parameter below $2n$ is at most $1$
+(\texttt{eval\_small\_le\_one}). The $\mathrm{imax}$ fold is bounded by the gate values
+unless every gate is nonzero, in which case the gated constant survives.
+\end{lemma}
+\begin{proof}
+\uses{def:vlevel-eval}
+\leanok
+Each lemma restates \texttt{VLevel.eval} in terms of \texttt{max} and \texttt{ite} and
+closes with \texttt{split} and \texttt{omega}; the \texttt{small} lemmas are inductions
+on $n$ and the fold lemmas inductions on the list of gates.
+\end{proof}
+
+\begin{definition}[The rail encoding of an assignment]
+\label{def:levelsat-raillist}
+\lean{Lean4Lean.LevelSat.railVal,Lean4Lean.LevelSat.railList,Lean4Lean.LevelSat.ofFin,Lean4Lean.LevelSat.getD_railList,Lean4Lean.LevelSat.getD_railList_rail}
+\leanok
+\uses{def:levelsat-cnf}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{270}
+$\mathrm{railVal}\,a\,j$ is $1$ when rail $j$ agrees with the assignment $a$ and $0$
+otherwise, and $\mathrm{railList}\,n\,a$ is the list of the first $2n$ rail values: the
+point at which $\mathrm{big}$ and $\mathrm{small}$ differ when $a$ satisfies the formula.
+\texttt{ofFin} reads a $\mathrm{Fin}\,n$-indexed assignment at an arbitrary index.
+\end{definition}
+
+\begin{theorem}[Level equivalence is coNP-hard]
+\label{thm:levelsat-equiv-iff-unsat}
+\lean{Lean4Lean.LevelSat.equiv_iff_unsat}
+\leanok
+\uses{def:levelsat-levels,def:levelsat-cnf,def:vlevel-le-equiv}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{331}
+For every CNF formula $\varphi$ over $n$ variables,
+$\mathrm{big}\,\varphi \approx \mathrm{small}\,n$ if and only if $\varphi$ is
+unsatisfiable. Since the two levels are computed from $\varphi$ in linear size
+(\ref{fam:levelsat-size}), deciding \texttt{VLevel.Equiv}, the problem
+\texttt{Level.isEquiv} solves, is coNP-hard.
+\end{theorem}
+\begin{proof}
+\uses{fam:levelsat-eval,def:levelsat-raillist}
+\leanok
+Forward: a satisfying assignment gives the point $\mathrm{railList}\,n\,(\mathrm{ofFin}\,a)$
+at which $\mathrm{small}$ stays at most $1$, the rails being $0/1$ and consistent, while
+every clause gate is nonzero, so the gated constant $2$ pokes above it. Backward: at any
+point where the two levels differ, the gate fold must exceed $\mathrm{small}$, which
+forces every clause gate nonzero and every variable's rails consistent; reading the
+assignment off the $\mathrm{yes}$ rails yields a satisfying assignment.
+\end{proof}
+
+\begin{lemma}[The same hardness for the order test]
+\label{thm:levelsat-le-iff-unsat}
+\lean{Lean4Lean.LevelSat.le_iff_unsat,Lean4Lean.LevelSat.small_le_big}
+\leanok
+\uses{def:levelsat-levels,def:vlevel-le-equiv}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{382}
+$\mathrm{big}\,\varphi \le \mathrm{small}\,n$ if and only if $\varphi$ is unsatisfiable,
+so \texttt{Level.geq} is coNP-hard as well.
+\end{lemma}
+\begin{proof}
+\uses{thm:levelsat-equiv-iff-unsat}
+\leanok
+Rewrite by \ref{thm:levelsat-equiv-iff-unsat} and antisymmetry
+(\texttt{VLevel.le\_antisymm\_iff}); the missing half is
+$\mathrm{small}\,n \le \mathrm{big}\,\varphi$, which holds structurally by
+\texttt{Nat.le\_max\_left}.
+\end{proof}
+
+\begin{lemma}[The reduction is linear]
+\label{fam:levelsat-size}
+\lean{Lean4Lean.LevelSat.size,Lean4Lean.LevelSat.cnfSize,Lean4Lean.LevelSat.size_clauseLvl,Lean4Lean.LevelSat.size_gates,Lean4Lean.LevelSat.size_var,Lean4Lean.LevelSat.size_small,Lean4Lean.LevelSat.size_big}
+\leanok
+\uses{def:levelsat-levels,def:levelsat-cnf}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{392}
+Counting nodes, $\mathrm{size}(\mathrm{big}\,\varphi) = 10n + 2\,\mathrm{cnfSize}(\varphi) + 5$,
+where $\mathrm{cnfSize}$ charges one for each literal and one for each clause. So both
+levels are linear in the formula, which is what makes
+\ref{thm:levelsat-equiv-iff-unsat} a hardness result.
+\end{lemma}
+\begin{proof}
+\uses{def:levelsat-levels}
+\leanok
+Inductions on the clause, the clause list and $n$, each closing with \texttt{omega};
+$\mathrm{size}(\mathrm{var}\,i) = 9$ and $\mathrm{size}(2) = 3$ are \texttt{rfl}. The
+docstring is explicit that only the size half of the linear-time claim is formalised.
+\end{proof}
+
+\begin{example}[Two worked instances]
+\label{ex:levelsat-instances}
+\lean{Lean4Lean.LevelSat.selfContradiction,Lean4Lean.LevelSat.not_sat_selfContradiction}
+\leanok
+\uses{thm:levelsat-equiv-iff-unsat}
+\srcloc{Lean4Lean/Theory/LevelSat.lean}{431}
+$x_0 \wedge \neg x_0$ is unsatisfiable, so the two levels it produces are equivalent;
+this is exactly the case where a naive reduction reading each parameter directly as a SAT
+variable would wrongly report a difference, since the rails $0^{+}$ and $0^{-}$ may both
+be nonzero and $\mathrm{small}$ is what rules that point out. The formula $x_0$ alone is
+satisfiable, and the two levels differ at the rail encoding $[1,0]$, where
+$\mathrm{big}$ evaluates to $2$ and $\mathrm{small}$ to $1$.
+\end{example}
+
+\section{Contribution summary}
+
+The \texttt{iota} branch contributed 254 lines here, and they are specification design
+rather than proof. Three pieces matter. First, the \texttt{pats} field of
+\ref{struct:venv} with \ref{def:venv-addpat} and the third clause of
+\ref{struct:venv-le}: reduction rules become \texttt{Prop}-valued, pattern-indexed
+environment data instead of a fixed clause of the reduction relation, which keeps
+environments extensible and monotone; in the monotonicity backbone it costs one new
+field (\srcloc{Lean4Lean/Theory/VEnv.lean}{50}) and two rewritten proof terms, the
+pairs of \texttt{LE.rfl} and \texttt{LE.trans} becoming triples.
+Second, \ref{struct:vrecrule}, \ref{struct:vrecursor}, \ref{def:getmajoridx} and the
+\texttt{recs} field of \ref{struct:vinductdecl}: recursors and their computation rules
+become data in the model, mirroring \texttt{Lean.RecursorVal} and
+\texttt{Lean.RecursorRule} field for field, with the deliberate addition of
+\texttt{ctorParams}. Third, the syntactic toolkit at the end of \texttt{VExpr.lean}
+(\ref{def:mkapps} to \ref{fam:const-spine}): total telescope and spine readers, plus
+biconditionals trading existentials over expression lists for prefix and length tests,
+which is what lets the shape predicates of
+chapter \ref{chap:inductive} be decidable and therefore testable against the real kernel.
+The one load-bearing lemma of that block is the disjointness in \ref{def:ctorheaded}.
+
+The \texttt{trproj} branch contributed 195 lines, all in \texttt{VExpr.lean}, and they
+are supporting infrastructure for the projection development of chapter
+\ref{chap:proj}. The organising idea is \ref{thm:lift-eq-subst}: since weakening and
+instantiation are both substitutions, a builder lemma need only be proved once against
+\texttt{subst}. That idea is written down as a section docstring and pays off
+immediately in \ref{fam:mkapps-stability}, where one induction yields three corollaries.
+What is actually consumed downstream splits in two. \texttt{Theory/Proj.lean} takes
+\ref{thm:lift-eq-subst}, all five lemmas of \ref{fam:subst-liftn-algebra},
+\ref{thm:subst-instn}, \ref{thm:liftn-subst-liftn}, the \texttt{subst}, \texttt{inst} and
+\texttt{instL} halves of \ref{fam:mkapps-stability}, \texttt{getElem\_bvarsDesc}, and
+\texttt{CtorHeaded.inst} and \texttt{piArity\_inst\_of\_ctorHeaded} from
+\ref{fam:ctorheaded-stability}. The \emph{verification} layer, not
+\texttt{Theory/Proj.lean}, is what consumes \ref{fam:pibinders-stability}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{652},
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1598},
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1051}),
+\texttt{piBinders\_inst\_of\_ctorHeaded}, \texttt{mkApps\_lift'}, and the
+$\lambda$-telescope readers of \ref{def:lam-telescope}.
+\ref{thm:lift-instn-hi} is consumed only through its $m=0$ case, which
+\texttt{Theory/Typing/HeadReduction.lean} already used before the refactor.
+
+What remains open at this layer. The K-like reduction flag of \ref{struct:vrecursor} is
+recorded but not modelled, so the thesis's second $\iota$ rule is out of scope. The
+quotient computation rule (\ref{def:venv-addquot}) still lives in \texttt{defeqs} rather
+than in \texttt{pats}, leaving two mechanisms for computation rules. \texttt{ctorParams}
+is redundant as data until nested blocks are admitted. And seven contributed
+declarations in this chapter are dead. Five are mentioned nowhere outside their own
+statement: \texttt{Lift.liftVar\_consN\_lt}, \texttt{Lift.liftVar\_consN\_succ},
+\texttt{VExpr.CtorHeaded.forallE}, \texttt{VExpr.CtorHeaded.instL} and
+\texttt{VRecursor.getFirstIndexIdx}. Two more, \texttt{Lift.consN\_fixes} and
+\texttt{VExpr.getAppFn\_instL\_const}, survive only by feeding one of those five. The
+review notes below list them with line numbers.
+
+\section{Review notes}
+
+\begin{itemize}
+\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/VExpr.lean}{919}: dead upstream code
+created by the \texttt{trproj} refactor. Master proved \texttt{lift'\_inst\_hi} at
+\texttt{master:VExpr.lean:903} with the one-line
+\texttt{simp [subst\_lift', lift'\_subst, lift\_r\_one, inst\_eq]}; the branch moved the
+lemma to line 1018 and re-derived it from the new \texttt{lift'\_instN\_hi}.
+\texttt{lift\_r\_one} now has no consumer anywhere, and with it the whole chain that
+existed to feed it: \texttt{Subst.lift\_r\_comm} (911), \texttt{Subst.trunc} (908),
+\texttt{Subst.Depth.one} (885), \texttt{Subst.Depth.id} (858) and \texttt{Subst.Depth}
+(796) are now mentioned only inside that block. Six declarations. Either keeping
+master's proof or deleting the orphaned block would be consistent; leaving both
+maximises merge-conflict surface on a file otherwise shared verbatim with upstream
+(\ref{fam:subst-trunc-orphans}, \ref{thm:lift-instn-hi}).
+\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1232}:
+\texttt{VExpr.CtorHeaded.forallE} is unused anywhere in the repository, is proved by
+\texttt{:= h} because it is definitionally trivial, and its docstring states a different
+proposition than the lemma. The docstring text is the motivation for
+\texttt{piArity\_inst\_of\_ctorHeaded}, not for this statement
+(\ref{thm:ctorheaded-forallE}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1046}: stale section docstring.
+It promises telescope and spine readers ``with their decidability'', but the decidability
+instances were relocated to \texttt{Lean4Lean/Tests/ShapeDecide.lean}, so the section
+contains no decidability at all.
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{753}:
+\texttt{Lift.liftVar\_consN\_lt} and \texttt{Lift.liftVar\_consN\_succ} (line 756) have no
+consumer, which makes \texttt{Lift.consN\_fixes} (line 745) dead in effect as well. Of
+the four-lemma block at lines 744 to 758 only \texttt{consN\_cons} is used
+(\ref{fam:lift-consn}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1256}:
+\texttt{VExpr.CtorHeaded.instL} and its helper \texttt{getAppFn\_instL\_const} (line 1248)
+are dead; nothing outside \texttt{VExpr.lean} mentions them. They look like
+symmetry-driven additions to the \texttt{inst} pair rather than lemmas the projection
+development needs (\ref{fam:ctorheaded-stability}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1009}: redundancy left
+unresolved, and inconsistently. \texttt{subst\_instN} subsumes master's
+\texttt{subst\_inst} (line 952) at $n = 0$, and \texttt{liftN\_subst\_liftN} (line 1032)
+subsumes master's \texttt{lift\_subst\_lift} (line 947) at $i = 0$ -- its own docstring
+says so -- yet both master lemmas keep independent hand proofs, whereas
+\texttt{lift'\_inst\_hi} in the same block \emph{was} re-derived. Three analogous pairs,
+three different treatments. Additionally \texttt{subst\_instN}'s docstring says ``under
+\texttt{m} binders'' while the statement binds $n$
+(\ref{thm:subst-instn}, \ref{thm:liftn-subst-liftn}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1133}: the whole
+$\lambda$-telescope block -- \texttt{lamBinders}, \texttt{lamBinders\_length},
+\texttt{foldr\_lam\_lamBinders} -- has exactly one consumer, a single proof at
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1128}, and
+\texttt{lamBinders\_length} is reached only through \texttt{simp} rather than by name.
+That is thin, but it is not dead code: the claim that it is should not be made
+(\ref{def:lam-telescope}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1295}:
+\texttt{const\_mkApps\_spine} bundles two independent facts into one conjunction and is
+only ever consumed as \texttt{.1}/\texttt{.2}; together with
+\texttt{eq\_const\_mkApps\_of\_spine} it has no consumer outside \texttt{VExpr.lean}
+(\ref{fam:const-spine}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{1200}: the docstring
+``Head-constructor tests, with their reflections into existentials'' is attached to
+\texttt{isSort} alone while describing all six declarations; and the whole block exists
+only for the decidability instances in the test file (\ref{def:head-tests}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VExpr.lean}{108}: \texttt{decClosedN} stayed
+in the theory file while the sibling head-shape instances moved to
+\texttt{Lean4Lean/Tests/ShapeDecide.lean} (commit \texttt{ba118fd}). That file's module
+docstring explains the general policy but not this exception, which is the part a reader
+needs: \texttt{decClosedN} is the one such instance a \emph{definition} depends on, via
+the \texttt{if h : ru.rhs.Closed} of \texttt{VEnv.addRecRule}
+(\srcloc{Lean4Lean/Theory/Inductive.lean}{258}) (\ref{inst:dec-closedn}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VDecl.lean}{51}:
+\texttt{VRecursor.getFirstIndexIdx} is defined and documented but has no consumer
+anywhere; every other \texttt{getFirstIndexIdx} in the repository is Lean's own
+\texttt{RecursorVal} field on a kernel \texttt{rval}
+(\srcloc{Lean4Lean/Inductive/Reduce.lean}{84},
+\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{29} and following), plus one comment in
+\texttt{Theory/Typing/Pattern.lean}. Relatedly,
+\texttt{VEnv.addRecRule} (\srcloc{Lean4Lean/Theory/Inductive.lean}{260}) spells
+\texttt{numParams + numMotives + numMinors + numIndices} out by hand instead of calling
+\texttt{VRecursor.getMajorIdx}, though its docstring says ``major at
+\texttt{getMajorIdx}'' (\ref{def:getmajoridx}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VDecl.lean}{41}: \texttt{VRecursor.k} records
+the K-like-reduction flag but, as its own docstring admits, is unused by the theory; the
+thesis's second $\iota$ rule is outside the model. Honest, but the structure advertises
+coverage the development does not have, and a reader auditing ``does this model Lean's
+$\iota$?'' has to read the docstring to find out (\ref{struct:vrecursor}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/VEnv.lean}{44}: \texttt{VEnv.addPat} cannot
+fail. Unlike \texttt{addConst} it performs no freshness or consistency check, so
+conflicting reducts for the same pattern are admissible at this layer; the invariant is
+enforced only downstream. The asymmetry with \texttt{addConst} deserves a comment here
+(\ref{def:venv-addpat}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Quot.lean}{11}: after the \texttt{iota} work
+the model has two mechanisms for computation rules, since \texttt{quotDefEq} is still a
+\texttt{VDefEq} rather than a \texttt{pats} entry. The duplication is nowhere
+acknowledged in the code -- \texttt{Theory/Quot.lean} carries no docstrings, and neither
+\texttt{VEnv.addPat} nor \texttt{Theory/Typing/Pattern.lean} mentions the quotient rule
+(\ref{def:venv-addquot}).
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Quot.lean}{6}: the quotient signatures are
+obtained by elaborating the real Lean constants, so the model's fidelity at this point
+depends on the ambient Lean version rather than on anything written in the repository
+(\ref{def:quot-consts}).
+\item \textbf{Low (context, not a defect).} \srcloc{Lean4Lean/Theory/Meta.lean}{12}:
+\texttt{ofExpr} rejects \texttt{.proj} (line 46) and \texttt{expandProj} eliminates
+projections through \texttt{casesOn} beforehand. \texttt{VExpr} and \texttt{Lean.Expr}
+therefore diverge on exactly the construct the \texttt{trproj} branch verifies, which is
+why projections are modelled as a reduction relation in chapter \ref{chap:proj} instead
+of as syntax (\ref{def:meta-ofexpr}).
+\end{itemize}

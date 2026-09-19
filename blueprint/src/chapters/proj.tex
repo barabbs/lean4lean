@@ -1,0 +1,1621 @@
+\chapter{Structure projections}
+\label{chap:proj}
+
+The model expression type \texttt{VExpr} (\ref{ind:vexpr}) has no projection node. The design
+decision of the \texttt{trproj} branch is that a kernel projection \texttt{.proj S i e} of a value
+$e : S\;usS\;ps$ is represented by an application of the recursor the kernel generates for $S$.
+Writing $P_i$ for that application, the projection is $P_i\,e$, where
+$P_i = S.\mathrm{rec}\;(uss\,i)\;ps\;(\lambda x{:}S\,usS\,ps.\;F_i[f_j := P_j\,x])\;(\lambda f_0\dots f_{n-1}.\,f_i)$.
+Here $Fs = [F_0,\dots,F_{n-1}]$ is the constructor's field telescope instantiated at the
+parameters $ps$, $F_i$ lives over $\Gamma, f_0\dots f_{i-1}$, and the earlier projection
+\emph{functions} $P_j$ ($j<i$) are the same expansions. This chapter covers the file that builds
+that expansion and proves its substitution metatheory, plus the four test modules that validate it
+and the $\iota$-rule specification of Chapter~\ref{chap:inductive} against the real kernel.
+
+The files are \srcloc{Lean4Lean/Theory/Proj.lean}{1} (449 lines, entirely \texttt{trproj}: 10
+definitions and 38 lemmas, no \texttt{sorry}), \srcloc{Lean4Lean/Tests/ProjShape.lean}{1} (185
+lines, entirely \texttt{trproj}), \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{1} (597 lines, entirely
+\texttt{trproj}), \srcloc{Lean4Lean/Tests/IotaShape.lean}{1} (607 lines: 603 \texttt{iota}, 4
+\texttt{trproj}) and \srcloc{Lean4Lean/Tests/ShapeDecide.lean}{1} (78 lines: 67 \texttt{iota}, 11
+\texttt{trproj}). There is no master code in this group at all: every node below is contributed.
+\texttt{Theory/Proj.lean} is the definitional half of the \texttt{trproj} contribution; its
+consumer is \texttt{TrProjCtor} (\ref{struct:trprojctor}) in Chapter~\ref{chap:trexpr}, and its
+substitution lemmas are what \texttt{TrProj.weak'}, \texttt{TrProj.instN}, \texttt{TrProj.instL}
+and \texttt{TrEnv.proj\_defeq} (\ref{thm:tr-env-proj-defeq}) consume.
+
+\emph{Conventions.} Contexts are listed outermost first and $\mathrm{bvar}\;0$ is the innermost
+binder. Over $\Gamma, f_0\dots f_{n-1}$ the field $f_j$ is $\mathrm{bvar}(n-1-j)$. The level list
+$uss\,j$ is per field, because the elimination level of $P_j$ is the sort of $F_j$: for the
+standard $\Sigma$ type, $\mathrm{Sigma.fst}$ needs $\mathrm{Sigma.rec}.\{u+1,u,v\}$ and
+$\mathrm{Sigma.snd}$ needs $\mathrm{Sigma.rec}.\{v+1,u,v\}$.
+
+\emph{Thesis correspondence.} The thesis has no treatment of Lean's \texttt{Expr.proj}: it never
+mentions structures, structure eta or \texttt{inferProj}. Projections appear only indirectly, and
+the branch borrows both appearances. The \emph{shape} of the expansion is the thesis's
+$\mathrm{inv}_x$ (typesys.tex \S3.1), which projects the argument of $\mathrm{intro}$ out of a
+proof of $\mathrm{acc}\;x$ through $\mathrm{rec}_{\mathrm{acc}}$; the \emph{dependent typing}
+$P_i\,e : F_i[f_j := P_j\,e]$ is the shape of the primitive $\Sigma$ rule
+$\pi_2\,p:\beta[\pi_1\,p/x]$ of Wtypes.tex \S5.1; the per-field level list realises the remark of
+axioms.tex \S2.6.3 that the motive universe $u$ in the motive type
+$\kappa=\forall a{:}\alpha.\,P\,a\to\mathcal{U}_u$ is fresh per use of $\mathrm{rec}_P$.
+Each citation is individually accurate, but
+they are borrowed idioms, not inherited results: $\mathrm{inv}_x$ is introduced in the thesis to
+prove conversion \emph{undecidable}, and $\pi_2$ belongs to the W-type system that \emph{replaces}
+general inductives, which lean4lean does not formalise.
+
+\emph{Assessment.} The representation is well chosen and well documented: it leaves
+\texttt{IsDefEq} (\ref{def:isdefeq}) untouched, adding no rule of its own and computing through the
+\texttt{iota} branch's $\iota$ rule (\ref{rule:isdefeq-pat}); it is layered so that each builder is
+proved once against \texttt{Subst} and the weakening and instantiation forms are read off, and the
+lemma set matches its consumers almost exactly. \texttt{Theory/Proj.lean} contains no
+\texttt{sorry}, and the four inhabitation witnesses of \texttt{Tests/ProjInhabit.lean}, two per
+hand-built block, are sorry-free. What is \emph{not} established is the bridge from the kernel: \texttt{inferProj.WF\_struct} (\ref{thm:vtc-inferproj-struct})
+is \texttt{sorry}, so nothing yet shows that a kernel-accepted projection yields a
+\texttt{TrProjCtor}; the general construction exists only as a fifteen-line informal derivation in
+the module docstring, mechanised on two hand-built instances. The right reading is: the model and
+its metatheory are in place and demonstrably satisfiable, and the bridge from the kernel is open.
+Structure eta is the one thing the representation cannot carry, and the docstring says so.
+
+\section{The projection expansion}
+
+\begin{definition}[Field selector \texttt{fieldSelector}]
+  \label{def:proj-field-selector}
+  \lean{Lean4Lean.VExpr.fieldSelector}
+  \leanok
+  \uses{ind:vexpr}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{70}
+  \thesisref{axioms.tex \S2.6.3, the recursor: the minor premise
+  $\varepsilon_c=\forall b{:}\beta.\forall v{:}\delta.\,C\,p[b]\,(c\,b)$.}
+  $\mathrm{fieldSelector}\;Fs\;i$ is $Fs.\mathrm{foldr}\;\lambda\;(\mathrm{bvar}(|Fs|-1-i))$, the
+  $\lambda$-telescope over the field types whose body is the $i$-th binder counted from the
+  outside. It is the minor premise handed to the structure's recursor to read out field $i$.
+  \reviewnote{The \texttt{Nat} subtraction $|Fs|-1-i$ is unguarded: for $i\ge|Fs|$ it truncates to
+  $0$ and silently selects the innermost binder instead of being undefined. Callers are expected to
+  carry \texttt{TrProjCtor.field\_lt}.}
+\end{definition}
+
+\begin{definition}[Instantiating leading Pi-binders, \texttt{instPis}]
+  \label{def:proj-inst-pis}
+  \lean{Lean4Lean.VExpr.instPis}
+  \leanok
+  \uses{def:inst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{75}
+  \thesisref{no direct counterpart; it models the parameter loop of the kernel's
+  \texttt{inferProj}.}
+  $\mathrm{instPis} : \mathtt{VExpr}\to\mathtt{List\ VExpr}\to\mathtt{Option\ VExpr}$ peels the
+  leading $\Pi$-binders of $ty$ and instantiates them with $args$, outermost first:
+  $\mathrm{instPis}\;e\;[] = \mathrm{some}\;e$,
+  $\mathrm{instPis}\;(\forall A.\,B)\;(a::as) = \mathrm{instPis}\;(B.\mathrm{inst}\;a)\;as$, and
+  $\mathrm{none}$ on any other head with a non-empty argument list.
+  \reviewnote{Manifest binders only. The kernel \texttt{whnf}s at each binder, so a constructor type
+  whose telescope hides behind a definition makes this \texttt{none}; that is a documented
+  completeness boundary of \texttt{TrProjCtor.ctor}, not a soundness gap.}
+\end{definition}
+
+\begin{definition}[Telescope substitution at descending indices, \texttt{instFields}]
+  \label{def:proj-inst-fields}
+  \lean{Lean4Lean.VExpr.instFields}
+  \leanok
+  \uses{def:inst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{84}
+  \thesisref{no counterpart; a de Bruijn convention of the formalisation.}
+  $\mathrm{instFields}\;F\;[] = F$ and
+  $\mathrm{instFields}\;F\;(P::Ps) = \mathrm{instFields}\;(F.\mathrm{inst}\;P\;|Ps|)\;Ps$: the
+  $m=|Ps|$ innermost binders of $F$ (the fields $f_j=\mathrm{bvar}(m-1-j)$) are replaced by the
+  $P_j$, outermost first, each $P_j$ living over the outer context alone. Substituting for an
+  unused binder is the identity.
+  \reviewnote{This is a \emph{second} telescope-substitution convention next to the master
+  \texttt{VExpr.insts}, which substitutes at index $0$ once per binder. The section docstring
+  (lines 195--203) argues convincingly that neither is a special case of the other, but no lemma
+  relates them, so the two conventions only ever meet through raw \texttt{inst}.}
+\end{definition}
+
+\begin{definition}[Motive body relative to given projections, \texttt{projMotiveBodyOf}]
+  \label{def:proj-motive-body-of}
+  \lean{Lean4Lean.VExpr.projMotiveBodyOf}
+  \leanok
+  \uses{def:proj-inst-fields, def:liftn}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{91}
+  \thesisref{Wtypes.tex \S5.1, the primitive $\Sigma$ rules $\pi_1\,p:\alpha$ and
+  $\pi_2\,p:\beta[\pi_1\,p/x]$.}
+  $\mathrm{projMotiveBodyOf}\;Fs\;i\;Ps = \mathrm{instFields}\;F'\;(Ps.\mathrm{map}\;\lambda P.\;P.\mathrm{lift}\;(\mathrm{bvar}\;0))$,
+  where $F' = (Fs.\mathrm{getD}\;i\;\mathrm{default}).\mathrm{liftN}\;1\;i$: the field type $F_i$, which
+  lives over $\Gamma, f_0\dots f_{i-1}$, is first moved under the motive's new binder $x$ by
+  $\mathrm{liftN}\;1\;i$, then each earlier field $f_j$ is replaced by $P_j\,x$.
+  \reviewnote{Out-of-range $i$ falls back to $\mathrm{default}=\mathrm{sort}\;\mathrm{zero}$ through
+  \texttt{List.getD}, so the definition is total but meaningless above the field count.}
+\end{definition}
+
+\begin{definition}[Projection function relative to given projections, \texttt{projFnOf}]
+  \label{def:proj-fn-of}
+  \lean{Lean4Lean.VExpr.projFnOf}
+  \leanok
+  \uses{def:proj-motive-body-of, def:proj-field-selector, def:mkapps}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{96}
+  \thesisref{typesys.tex \S3.1, the projection $\mathrm{inv}_x$ of $\mathrm{acc}\,x$ through
+  $\mathrm{rec}_{\mathrm{acc}}$; axioms.tex \S2.6.3, the recursor.}
+  $\mathrm{projFnOf}\;S\;usS\;uss\;ps\;Fs\;i\;Ps$ is the recursor application
+  $\mathrm{const}\,(S.\mathrm{rec})\,(uss\,i)$ applied to
+  $ps \mathbin{+\!\!+} [\lambda x{:}(S\,usS)\,ps.\;\mathrm{projMotiveBodyOf}\;Fs\;i\;Ps,\;
+   \mathrm{fieldSelector}\;Fs\;i]$. It is the expansion of field $i$ \emph{given} the earlier
+  projection functions $Ps$; separating it from \ref{def:proj-fn} is what lets the substitution
+  lemmas below be stated generically in $Ps$.
+\end{definition}
+
+\begin{definition}[The first \texorpdfstring{$i$}{i} projection functions, \texttt{projFns}]
+  \label{def:proj-fns}
+  \lean{Lean4Lean.VExpr.projFns}
+  \leanok
+  \uses{def:proj-fn-of}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{108}
+  \thesisref{axioms.tex \S2.6.3, the recursor: $u$ is a fresh universe variable per use of
+  $\mathrm{rec}_P$.}
+  By recursion on $i$: $\mathrm{projFns}\dots 0 = []$ and
+  $\mathrm{projFns}\dots(i+1) = \mathrm{projFns}\dots i \mathbin{+\!\!+}
+   [\mathrm{projFnOf}\dots i\;(\mathrm{projFns}\dots i)]$, so that
+  $\mathrm{projFns}\dots i = [P_0,\dots,P_{i-1}]$.
+  \reviewnote{The defining equation mentions $\mathrm{projFns}\dots i$ twice, so the unfolded
+  expansion of field $i$ is exponential in $i$ (each motive embeds every earlier projection
+  function in full) and every induction over it must apply the induction hypothesis twice. An
+  accumulating fold returning the list built so far would be linear.}
+\end{definition}
+
+\begin{definition}[Motive body of projection \texorpdfstring{$i$}{i}, \texttt{projMotiveBody}]
+  \label{def:proj-motive-body}
+  \lean{Lean4Lean.VExpr.projMotiveBody}
+  \leanok
+  \uses{def:proj-motive-body-of, def:proj-fns}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{114}
+  \thesisref{Wtypes.tex \S5.1, $\pi_2\,p:\beta[\pi_1\,p/x]$.}
+  $\mathrm{projMotiveBody}\;S\;usS\;uss\;ps\;Fs\;i =
+   \mathrm{projMotiveBodyOf}\;Fs\;i\;(\mathrm{projFns}\;S\;usS\;uss\;ps\;Fs\;i)$, a term over
+  $\Gamma, x$. It is the codomain used by \texttt{TrProjCtor.fn\_ty}
+  (\ref{struct:trprojctor}): $P_i : \forall x{:}S\,usS\,ps,\;\mathrm{projMotiveBody}\dots i$.
+\end{definition}
+
+\begin{definition}[The projection function, \texttt{projFn}]
+  \label{def:proj-fn}
+  \lean{Lean4Lean.VExpr.projFn}
+  \leanok
+  \uses{def:proj-motive-body, def:proj-field-selector, def:mkapps}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{120}
+  \thesisref{typesys.tex \S3.1, $\mathrm{inv}_x$ through $\mathrm{rec}_{\mathrm{acc}}$;
+  axioms.tex \S2.6.3, the recursor.}
+  $\mathrm{projFn}\;S\;usS\;uss\;ps\;Fs\;i$ is
+  $\mathrm{const}\,(S.\mathrm{rec})\,(uss\,i)$ applied to
+  $ps \mathbin{+\!\!+} [\lambda x{:}(S\,usS)\,ps.\;\mathrm{projMotiveBody}\dots i,\;
+   \mathrm{fieldSelector}\;Fs\;i]$. This is \emph{the} representation of \texttt{Expr.proj} in the
+  model: \texttt{TrProjCtor.eq} sets $e' = \mathrm{projFn}\dots i\;e$. It is definitionally
+  $\mathrm{projFnOf}\dots i\;(\mathrm{projFns}\dots i)$ (\ref{fam:proj-unfolding}).
+\end{definition}
+
+\begin{definition}[The type of a projected term, \texttt{projTy}]
+  \label{def:proj-ty}
+  \lean{Lean4Lean.VExpr.projTy}
+  \leanok
+  \uses{def:proj-inst-fields, def:proj-fns}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{127}
+  \thesisref{Wtypes.tex \S5.1, $\pi_2\,p:\beta[\pi_1\,p/x]$.}
+  $\mathrm{projTy}\;S\;usS\;uss\;ps\;Fs\;i\;e =
+   \mathrm{instFields}\;(Fs.\mathrm{getD}\;i\;\mathrm{default})\;
+   ((\mathrm{projFns}\dots i).\mathrm{map}\;\lambda P.\;P\,e)$, a term over $\Gamma$: the result the
+  kernel's \texttt{inferProj} computes, with each \texttt{.proj S j struct} replaced by
+  $P_j\,struct$.
+  \reviewnote{Dead in the library: its only use anywhere is the example at
+  \srcloc{Lean4Lean/Tests/ProjShape.lean}{178}, and the model types a projection through
+  \ref{def:proj-motive-body} instead. The identity its docstring asserts,
+  $\mathrm{projTy}\dots e = (\mathrm{projMotiveBody}\dots i).\mathrm{inst}\;e$, is never proved
+  (it should follow from \texttt{instFields\_subst} and \texttt{inst\_liftN}), so the definition
+  the prose uses to explain \texttt{inferProj} is formally disconnected from the one the model
+  uses. \texttt{Tests/ProjShape.lean} nevertheless names \texttt{projTy} in its module docstring
+  and in the error message at \srcloc{Lean4Lean/Tests/ProjShape.lean}{114} for a check whose type
+  is built from \ref{def:proj-motive-body}.}
+\end{definition}
+
+\begin{definition}[Arity of a binder of a telescope, \texttt{binderArity?}]
+  \label{def:proj-binder-arity}
+  \lean{Lean4Lean.VExpr.binderArity?}
+  \leanok
+  \uses{def:pi-telescope}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{136}
+  \thesisref{axioms.tex \S2.6.3, the recursor: the minor premise binds the constructor's arguments
+  and its inductive hypotheses.}
+  $ty.\mathrm{binderArity?}\;k = ty.\mathrm{piBinders}[k]?.\mathrm{map}\;\mathrm{piArity}$, the
+  $\Pi$-arity of the $k$-th binder of $ty$'s telescope. Used as \texttt{TrProjCtor.minor\_arity}:
+  $rci.\mathrm{type}.\mathrm{binderArity?}(np+1) = \mathrm{some}\;n_f$ says the minor premise of the
+  structure's recursor binds exactly the fields and no inductive hypothesis, that is, the
+  constructor is non-recursive.
+  \reviewnote{It pins only the \emph{number} of binders, not their types: a recursor whose minor
+  bound $n_f$ unrelated things would pass. In \ref{thm:tr-env-proj-defeq} the gap is closed by the
+  kernel-side structure facts, so it is contained, but the docstring's wording
+  ``has exactly the \texttt{nf} fields as binders'' over-reads what is checked.}
+\end{definition}
+
+\begin{lemma}[Unfolding facts for the projection builders]
+  \label{fam:proj-unfolding}
+  \lean{Lean4Lean.VExpr.projFn_eq, Lean4Lean.VExpr.projFns_succ, Lean4Lean.VExpr.projFns_length, Lean4Lean.VExpr.projMotiveBody_zero}
+  \leanok
+  \uses{def:proj-fn, def:proj-fns, def:proj-motive-body}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{140}
+  \thesisref{no counterpart; definitional bookkeeping.}
+  Four facts: $\mathrm{projFn}\dots i = \mathrm{projFnOf}\dots i\;(\mathrm{projFns}\dots i)$;
+  $\mathrm{projFns}\dots(i+1) = \mathrm{projFns}\dots i \mathbin{+\!\!+} [\mathrm{projFn}\dots i]$;
+  $(\mathrm{projFns}\dots i).\mathrm{length} = i$; and the motive of field $0$ is the constant
+  motive $(Fs.\mathrm{getD}\;0\;\mathrm{default}).\mathrm{lift}$.
+\end{lemma}
+\begin{proof}
+  \leanok
+  All four are \texttt{rfl} except \texttt{projFns\_length}, which is an induction on $i$ using
+  \texttt{projFns\_succ}.
+  \reviewnote{\texttt{projMotiveBody\_zero} is marked \texttt{@[simp]} but is never invoked
+  explicitly anywhere, as is \texttt{instFields\_nil}; both are cheap, so this is noise rather than
+  a defect.}
+\end{proof}
+
+\section{The builders under substitution}
+
+The design note at \srcloc{Lean4Lean/Theory/Proj.lean}{155} is explicit and, in this reviewer's
+judgement, correct: \texttt{VExpr.lift'} and \texttt{VExpr.inst} are both instances of
+\texttt{VExpr.subst} (\ref{def:subst}), and every builder shifts its pieces by one binder per
+field, so each is proved once against \texttt{Subst} with $\sigma.\mathrm{liftN}\;j$ for the piece
+standing under $j$ binders, and the weakening and instantiation forms are read off. Level
+instantiation substitutes levels rather than terms, so the \texttt{instL} family keeps its own
+proofs. The thirty-odd lemmas of this section have no thesis counterpart; they are the de Bruijn
+bookkeeping the model needs.
+
+\begin{lemma}[Lambda-telescopes under substitution]
+  \label{fam:proj-foldr-lam}
+  \lean{Lean4Lean.VExpr.foldr_lam_subst, Lean4Lean.VExpr.foldr_lam_inst, Lean4Lean.VExpr.foldr_lam_instL}
+  \leanok
+  \uses{def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{164}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  Pushing a substitution through a $\lambda$-telescope: $(\mathrm{foldr}\;\lambda\;base\;Fs).
+  \mathrm{subst}\;\sigma = \mathrm{foldr}\;\lambda\;(base.\mathrm{subst}\;(\sigma.\mathrm{liftN}\;
+  |Fs|))\;(Fs.\mathrm{mapIdx}\;\lambda j\,F.\;F.\mathrm{subst}\;(\sigma.\mathrm{liftN}\;j))$, so
+  the base is substituted under $|Fs|$ extra binders and binder $j$ under $j$ of them. The
+  instantiation form is the same with $\mathrm{inst}\;e_0\;(k+j)$, and the level-instantiation form
+  maps $\mathrm{instL}$ over the telescope.
+\end{lemma}
+\begin{proof}
+  \uses{fam:subst-liftn-algebra, fam:subst-basic}
+  \leanok
+  \texttt{foldr\_lam\_subst} by structural recursion on $Fs$, using
+  \texttt{Subst.lift\_liftN}; \texttt{foldr\_lam\_inst} is then \texttt{instN\_eq} plus
+  \texttt{Subst.liftN\_liftN}; \texttt{foldr\_lam\_instL} is a separate induction.
+  \texttt{foldr\_lam\_inst} is what \texttt{VEnv.IsDefEqU.betaN}
+  (\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{994}) consumes, the $\beta$ phase of
+  \ref{thm:tr-env-proj-defeq}.
+\end{proof}
+
+\begin{lemma}[The field selector under substitution]
+  \label{fam:proj-fieldselector-subst}
+  \lean{Lean4Lean.VExpr.fieldSelector_subst, Lean4Lean.VExpr.fieldSelector_instL}
+  \leanok
+  \uses{def:proj-field-selector, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{185}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  For $i<|Fs|$, $(\mathrm{fieldSelector}\;Fs\;i).\mathrm{subst}\;\sigma =
+  \mathrm{fieldSelector}\;(Fs.\mathrm{mapIdx}\;\lambda j\,F.\;F.\mathrm{subst}\;
+  (\sigma.\mathrm{liftN}\;j))\;i$; the level-instantiation form holds with no side condition.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-foldr-lam, fam:subst-liftn-algebra}
+  \leanok
+  Rewrite with \ref{fam:proj-foldr-lam} and \texttt{subst\_bvar}, then apply
+  \texttt{Subst.Fixes.liftN} to the selected variable $|Fs|-1-i$, which is where $i<|Fs|$ is used.
+  The \texttt{instL} form is \texttt{foldr\_lam\_instL} followed by \texttt{simp}.
+  \reviewnote{Used only inside this file, by \ref{fam:proj-fnof-subst}.}
+\end{proof}
+
+\begin{lemma}[Equations for \texttt{instFields}]
+  \label{fam:proj-instfields-simp}
+  \lean{Lean4Lean.VExpr.instFields_nil, Lean4Lean.VExpr.instFields_cons}
+  \leanok
+  \uses{def:proj-inst-fields}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{205}
+  \thesisref{no counterpart; definitional bookkeeping.}
+  The two defining equations $\mathrm{instFields}\;F\;[]=F$ and
+  $\mathrm{instFields}\;F\;(P::Ps)=\mathrm{instFields}\;(F.\mathrm{inst}\;P\;|Ps|)\;Ps$, restated as
+  rewrite rules; the first is \texttt{@[simp]}.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Both are \texttt{rfl}.
+\end{proof}
+
+\begin{lemma}[\texttt{instFields} under substitution and level instantiation]
+  \label{fam:proj-instfields-subst}
+  \lean{Lean4Lean.VExpr.instFields_subst, Lean4Lean.VExpr.instFields_instL}
+  \leanok
+  \uses{def:proj-inst-fields, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{210}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  $(\mathrm{instFields}\;F\;Ps).\mathrm{subst}\;\sigma =
+  \mathrm{instFields}\;(F.\mathrm{subst}\;(\sigma.\mathrm{liftN}\;|Ps|))\;
+  (Ps.\mathrm{map}\;(\cdot.\mathrm{subst}\;\sigma))$, and the same with $\mathrm{instL}\;ls$ in
+  place of $\mathrm{subst}\;\sigma$ (and no lifting, since level instantiation does not move
+  variables).
+\end{lemma}
+\begin{proof}
+  \uses{thm:subst-instn, fam:inst-inst, fam:proj-instfields-simp}
+  \leanok
+  Structural recursion on $Ps$, closing each step with \texttt{subst\_instN}
+  (respectively \texttt{instL\_instN}).
+\end{proof}
+
+\begin{lemma}[\texttt{instPis} commutes with substitution]
+  \label{fam:proj-instpis-subst}
+  \lean{Lean4Lean.VExpr.instPis_subst, Lean4Lean.VExpr.instPis_lift', Lean4Lean.VExpr.instPis_inst, Lean4Lean.VExpr.instPis_instL}
+  \leanok
+  \uses{def:proj-inst-pis, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{226}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  If $T.\mathrm{instPis}\;ps = \mathrm{some}\;cty$ then $(T.\mathrm{subst}\;\sigma).\mathrm{instPis}
+  \;(ps.\mathrm{map}\;(\cdot.\mathrm{subst}\;\sigma)) = \mathrm{some}\;(cty.\mathrm{subst}\;\sigma)$,
+  and likewise for $\mathrm{lift'}\;\rho$, $\mathrm{inst}\;e_0\;k$ and $\mathrm{instL}\;ls$. Note
+  that \emph{success} is preserved, not merely the value.
+\end{lemma}
+\begin{proof}
+  \uses{fam:subst-basic, thm:lift-eq-subst}
+  \leanok
+  Recursion on $ps$ with \texttt{subst\_inst} at each $\Pi$-binder and \texttt{nomatch} on the five
+  non-$\Pi$ heads; the \texttt{lift'} and \texttt{inst} forms are \texttt{simpa} corollaries through
+  \texttt{lift'\_eq\_subst} and \texttt{instN\_eq}. These are what make the field telescope of
+  \texttt{TrProjCtor.ctor} stable under \texttt{TrProj.weak'}, \texttt{TrProj.instN} and
+  \texttt{TrProj.instL}.
+\end{proof}
+
+\begin{lemma}[\texttt{instPis} preserves \texttt{CtorHeaded}]
+  \label{thm:proj-instpis-ctorheaded}
+  \lean{Lean4Lean.VExpr.instPis_ctorHeaded}
+  \leanok
+  \uses{def:proj-inst-pis, def:ctorheaded}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{254}
+  \thesisref{no counterpart; a stability property of the formalisation's shape predicates.}
+  If $T$ is \texttt{CtorHeaded} (its $\Pi$-telescope ends in a constant application, as every
+  constructor type does) and $T.\mathrm{instPis}\;ps=\mathrm{some}\;cty$, then $cty$ is
+  \texttt{CtorHeaded}.
+\end{lemma}
+\begin{proof}
+  \uses{fam:ctorheaded-stability}
+  \leanok
+  Recursion on $ps$, applying \texttt{CtorHeaded.inst} to the body at each $\Pi$-binder; the
+  non-$\Pi$ heads cannot occur because \texttt{instPis} would have returned \texttt{none}.
+\end{proof}
+
+\begin{lemma}[\texttt{instPis} consumes exactly the arguments it is given]
+  \label{thm:proj-instpis-piarity}
+  \lean{Lean4Lean.VExpr.instPis_piArity}
+  \leanok
+  \uses{def:proj-inst-pis, def:ctorheaded, def:pi-telescope}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{264}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications: a constructor's arity.}
+  For a \texttt{CtorHeaded} $T$ with $T.\mathrm{instPis}\;ps=\mathrm{some}\;cty$ one has
+  $cty.\mathrm{piArity}+|ps| = T.\mathrm{piArity}$. This is what turns a constructor's kernel arity
+  into the model's $np+|fieldTys|$ in \ref{thm:tr-env-proj-defeq}.
+\end{lemma}
+\begin{proof}
+  \uses{fam:ctorheaded-stability}
+  \leanok
+  Recursion on $ps$; the key step is \texttt{piArity\_inst\_of\_ctorHeaded}, which says that
+  instantiating a variable in a constructor-headed type cannot create binders, and the arithmetic
+  is closed by \texttt{omega}.
+\end{proof}
+
+\begin{lemma}[The motive body under substitution]
+  \label{fam:proj-motivebodyof-subst}
+  \lean{Lean4Lean.VExpr.projMotiveBodyOf_subst, Lean4Lean.VExpr.projMotiveBodyOf_instL}
+  \leanok
+  \uses{def:proj-motive-body-of, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{276}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  Given $|Ps|=i$, $(\mathrm{projMotiveBodyOf}\;Fs\;i\;Ps).\mathrm{subst}\;\sigma.\mathrm{lift}$ is
+  the motive body of the substituted pieces (the field telescope substituted binder-wise by
+  \texttt{mapIdx}, the earlier projections pointwise). The $\mathrm{instL}$ form holds
+  unconditionally. The extra $\mathrm{lift}$ on the left is the motive's own binder $x$.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-instfields-subst, thm:liftn-subst-liftn, fam:subst-liftn-algebra}
+  \leanok
+  Unfold, rewrite by \ref{fam:proj-instfields-subst}, \texttt{Subst.lift\_liftN},
+  \texttt{liftN\_subst\_liftN} and \texttt{List.getD\_mapIdx} (whose side condition holds because
+  the default $\mathrm{sort}\;\mathrm{zero}$ is fixed by every substitution), then close the
+  congruence on the arguments $P_j\,x$ with \texttt{lift\_subst\_lift}. The two list lemmas
+  \texttt{List.getD\_mapIdx} and \texttt{List.getD\_map}
+  (\srcloc{Lean4Lean/Std/Basic.lean}{173}) were added on the same branch for these proofs.
+\end{proof}
+
+\begin{lemma}[The parameterised projection function under substitution]
+  \label{fam:proj-fnof-subst}
+  \lean{Lean4Lean.VExpr.projFnOf_subst, Lean4Lean.VExpr.projFnOf_instL}
+  \leanok
+  \uses{def:proj-fn-of, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{294}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  Substitution distributes over $\mathrm{projFnOf}$, pushing into the parameters, the field
+  telescope (binder-wise) and the earlier projections; it needs $i<|Fs|$ and $|Ps|=i$. Level
+  instantiation distributes unconditionally, mapping $\mathrm{VLevel.inst}\;ls$ over $usS$ and
+  pointwise over the per-field level function, $\lambda j.\;(uss\,j).\mathrm{map}\;
+  (\mathrm{VLevel.inst}\;ls)$.
+\end{lemma}
+\begin{proof}
+  \uses{fam:mkapps-stability, fam:proj-motivebodyof-subst, fam:proj-fieldselector-subst}
+  \leanok
+  Unfold and rewrite by \texttt{mkApps\_subst} (respectively \texttt{mkApps\_instL}), then by
+  \ref{fam:proj-motivebodyof-subst} and \ref{fam:proj-fieldselector-subst} for the two trailing
+  arguments.
+\end{proof}
+
+\begin{lemma}[The list of projection functions under substitution]
+  \label{fam:proj-fns-subst}
+  \lean{Lean4Lean.VExpr.projFns_subst, Lean4Lean.VExpr.projFns_instL}
+  \leanok
+  \uses{def:proj-fns, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{313}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  For $i\le|Fs|$, mapping a substitution over $\mathrm{projFns}\dots i$ gives the projection
+  functions of the substituted data; the level-instantiation form has no side condition.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-fnof-subst, fam:proj-unfolding}
+  \leanok
+  Induction on $i$ through \texttt{projFns\_succ}, applying \ref{fam:proj-fnof-subst} at
+  \texttt{projFns\_length} and the induction hypothesis \emph{twice}, since the defining equation
+  of \ref{def:proj-fns} mentions the predecessor list twice.
+\end{proof}
+
+\begin{lemma}[The projection function under weakening, instantiation and level instantiation]
+  \label{fam:proj-fn-subst}
+  \lean{Lean4Lean.VExpr.projFn_subst, Lean4Lean.VExpr.projFn_lift', Lean4Lean.VExpr.projFn_inst, Lean4Lean.VExpr.projFn_instL}
+  \leanok
+  \uses{def:proj-fn, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{333}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  $\mathrm{projFn}$ commutes with $\mathrm{subst}$, $\mathrm{lift'}$, $\mathrm{inst}$ and
+  $\mathrm{instL}$, pushing them into the parameters and, binder-wise via \texttt{mapIdx}, into the
+  field telescope. The three term-level forms carry the side condition $i<|Fs|$.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-fnof-subst, fam:proj-fns-subst, fam:proj-unfolding, thm:lift-eq-subst}
+  \leanok
+  Rewrite by \texttt{projFn\_eq} into $\mathrm{projFnOf}$, then apply \ref{fam:proj-fnof-subst} and
+  \ref{fam:proj-fns-subst}; the \texttt{lift'} and \texttt{inst} forms follow by
+  \texttt{lift'\_eq\_subst} and \texttt{instN\_eq} plus \texttt{Subst} bookkeeping. These three are
+  exactly what \texttt{TrProj.weak'}, \texttt{TrProj.instN} and \texttt{TrProj.instL} consume in
+  \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{641}; stating everything once against \texttt{Subst}
+  and reading off the rest pays for itself here.
+\end{proof}
+
+\begin{lemma}[The motive body under weakening and instantiation]
+  \label{fam:proj-motivebody-subst}
+  \lean{Lean4Lean.VExpr.projMotiveBody_subst, Lean4Lean.VExpr.projMotiveBody_lift', Lean4Lean.VExpr.projMotiveBody_instN, Lean4Lean.VExpr.projMotiveBody_instL}
+  \leanok
+  \uses{def:proj-motive-body, def:subst}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{357}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  The same four forms for $\mathrm{projMotiveBody}$, each shifted by one because the motive body
+  lives under the extra binder $x$: $\sigma.\mathrm{lift}$ on the left of the \texttt{subst} form,
+  $\rho.\mathrm{cons}$ for \texttt{lift'}, and $\mathrm{inst}\;e_0\;(k+1)$ for \texttt{instN}. The
+  three term-level forms carry the side condition $i\le|Fs|$; the $\mathrm{instL}$ form carries
+  none.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-motivebodyof-subst, fam:proj-fns-subst, fam:subst-liftn-algebra}
+  \leanok
+  Unfold to $\mathrm{projMotiveBodyOf}$, apply \ref{fam:proj-motivebodyof-subst} at
+  \texttt{projFns\_length} and \ref{fam:proj-fns-subst}; the remaining three forms are
+  \texttt{Subst} bookkeeping (\texttt{Subst.lift\_lift\_l\_id}, \texttt{Subst.liftN\_liftN}).
+\end{proof}
+
+\section{Field selection on variable spines}
+
+The last group is what \ref{thm:tr-env-proj-defeq} needs to compute: the $\iota$ reduct of a
+structure's rule is the template $\lambda\,\mathit{params}\,\mathit{motive}\,\mathit{minor}\,
+\mathit{fields}.\;\mathit{minor}\;\mathit{fields}$ applied to the redex's arguments, and
+saturating a $\lambda$-telescope by its arguments substitutes them outermost first, that is, by
+$\mathrm{instFields}$.
+
+\begin{lemma}[\texttt{instFields} on applications and on lifted terms]
+  \label{fam:proj-instfields-spine}
+  \lean{Lean4Lean.VExpr.instFields_app, Lean4Lean.VExpr.instFields_mkApps, Lean4Lean.VExpr.instFields_liftN}
+  \leanok
+  \uses{def:proj-inst-fields, def:mkapps, def:liftn}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{394}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  $\mathrm{instFields}$ distributes over application and over $\mathrm{mkApps}$, and cancels a
+  lifting by the telescope's length: $\mathrm{instFields}\;(e.\mathrm{liftN}\;|Ps|)\;Ps = e$.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-instfields-simp, def:inst}
+  \leanok
+  Structural recursion on $Ps$, except for \texttt{instFields\_mkApps}, which recurses on the
+  argument list; the last additionally uses
+  \texttt{liftN'\_liftN\_lo} and \texttt{inst\_liftN} to cancel one lift per step.
+\end{proof}
+
+\begin{lemma}[\texttt{instFields} on a bound variable]
+  \label{thm:proj-instfields-bvar}
+  \lean{Lean4Lean.VExpr.instFields_bvar}
+  \leanok
+  \uses{def:proj-inst-fields}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{413}
+  \thesisref{no counterpart; de Bruijn bookkeeping.}
+  For $j<|Ps|$, $\mathrm{instFields}\;(\mathrm{bvar}\;j)\;Ps =
+  Ps.\mathrm{getD}\;(|Ps|-1-j)\;\mathrm{default}$: the variable $j$, counted innermost first,
+  becomes the correspondingly indexed argument.
+\end{lemma}
+\begin{proof}
+  \uses{fam:proj-instfields-spine}
+  \leanok
+  Recursion on $Ps$, splitting \texttt{instVar} into its three cases; the hit case is closed by
+  \texttt{instFields\_liftN} and the index arithmetic by \texttt{omega}.
+\end{proof}
+
+\begin{theorem}[The iota reduct on the minor and field spine]
+  \label{thm:proj-instfields-minor-spine}
+  \lean{Lean4Lean.VExpr.instFields_minor_spine}
+  \leanok
+  \uses{def:proj-inst-fields, def:mkapps, def:bvarsdesc}
+  \contrib{trproj}\srcloc{Lean4Lean/Theory/Proj.lean}{428}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction):
+  $\mathrm{rec}_P\,C\,e\,p[b]\,(c\,b)\equiv e_c\,b\,v$.}
+  $\mathrm{instFields}\;((\mathrm{bvar}\;|fs|).\mathrm{mkApps}\;(\mathrm{bvarsDesc}\;0\;|fs|))\;
+  (pre \mathbin{+\!\!+} s :: fs) = s.\mathrm{mkApps}\;fs$: saturating the template
+  $\lambda\,\mathit{params}\,\mathit{motive}\,\mathit{minor}\,\mathit{fields}.\;
+  \mathit{minor}\;\mathit{fields}$ on the arguments $pre \mathbin{+\!\!+} s :: fs$ selects the
+  minor $s$ and applies it to the fields.
+\end{theorem}
+\begin{proof}
+  \uses{fam:proj-instfields-spine, thm:proj-instfields-bvar}
+  \leanok
+  Rewrite by \texttt{instFields\_mkApps}, then by \ref{thm:proj-instfields-bvar} twice: once on the
+  head $\mathrm{bvar}\;|fs|$, which lands on $s$ because
+  $|pre \mathbin{+\!\!+} s::fs|-1-|fs| = |pre|$, and once under
+  \texttt{List.ext\_getElem} on each argument, using \texttt{getElem\_bvarsDesc} and \texttt{omega}
+  for the indices. This is the arithmetic core of the $\beta$ phase of
+  \ref{thm:tr-env-proj-defeq}, and it is stated in exactly the shape that proof needs.
+\end{proof}
+
+\section{Deciding the syntactic predicates}
+
+\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{1} makes every syntactic predicate of
+\texttt{Theory/Inductive.lean} executable. The predicates themselves stay propositional in the
+library; only the tests run them, on the translation of the kernel's own recursor, constructor and
+rule data, so the \texttt{Decidable} instances live in a \texttt{Tests} module. The file is
+\texttt{iota}-branch work except for eleven lines: the head-constructor tests of
+\ref{fam:shapedecide-head}, which \texttt{trproj} added for \texttt{TrProjCtor.ctor} and
+\srcloc{Lean4Lean/Tests/ProjShape.lean}{83}, and the \texttt{some} branch of the option instance of
+\ref{fam:shapedecide-existential}.
+
+\begin{example}[Decidable equality for \texttt{VLevel} and \texttt{VExpr}]
+  \label{fam:shapedecide-deceq}
+  \lean{Lean4Lean.instDecidableEqVLevel, Lean4Lean.instDecidableEqVExpr}
+  \leanok
+  \uses{ind:vexpr, ind:vlevel}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{15}
+  \thesisref{no counterpart; executability scaffolding.}
+  Two \texttt{deriving instance DecidableEq} declarations, for \texttt{VLevel} and for
+  \texttt{VExpr}. They are what makes every \texttt{decide} and \texttt{unless} in the shape tests
+  run, and every \texttt{VExpr} comparison in \srcloc{Lean4Lean/Tests/IotaShape.lean}{1},
+  \srcloc{Lean4Lean/Tests/ProjShape.lean}{1} and \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{1}.
+  \reviewnote{The two declarations are elaborator-generated
+  (\texttt{Lean4Lean.instDecidableEqVLevel}, \texttt{Lean4Lean.instDecidableEqVExpr}) and are
+  referenced nowhere in the sources by name.}
+\end{example}
+
+\begin{example}[Decidability of the existential idioms]
+  \label{fam:shapedecide-existential}
+  \lean{Lean4Lean.VExpr.instDecidableExistsListEqMkAppsHAppend, Lean4Lean.VExpr.instDecidableExistsListAndEqNatMkAppsHAppend, Lean4Lean.VExpr.instDecidableExistsAndEqOptionSomeOfDecidablePred}
+  \leanok
+  \uses{thm:eq-mkapps-append, def:mkapps}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{20}
+  \thesisref{no counterpart; executability scaffolding.}
+  Three instances making the recurring existential shapes of the predicates executable:
+  $\exists\,rest,\;e = f.\mathrm{mkApps}\;(pre \mathbin{+\!\!+} rest)$, the same with a length
+  constraint on $rest$, and $\exists a,\;o = \mathrm{some}\;a \wedge P\,a$ for an \texttt{Option}
+  and a decidable predicate. The first two are \texttt{decidable\_of\_iff} against
+  \texttt{eq\_mkApps\_append\_iff} and \texttt{eq\_mkApps\_append\_length\_iff}; the third is a
+  case split on the option.
+  \reviewnote{Only the \texttt{some} branch (lines 31--32) is \texttt{trproj}-attributed; the rest
+  of the node is \texttt{iota}-branch work.}
+\end{example}
+
+\begin{example}[Decidability of the head-constructor tests]
+  \label{fam:shapedecide-head}
+  \lean{Lean4Lean.VExpr.instDecidableExistsVLevelEqSort, Lean4Lean.VExpr.instDecidableExistsNatEqBvar, Lean4Lean.VExpr.instDecidableExistsNameListVLevelEqConst, Lean4Lean.VExpr.instDecidableRecHeaded, Lean4Lean.VExpr.instDecidableCtorHeaded}
+  \leanok
+  \uses{def:head-tests, def:recheaded, def:ctorheaded}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{34}
+  \thesisref{no counterpart; executability scaffolding.}
+  Instances for $\exists u,\;e=\mathrm{sort}\;u$, $\exists k,\;e=\mathrm{bvar}\;k$ and
+  $\exists I\,us,\;e=\mathrm{const}\;I\;us$, and for the derived predicates
+  \texttt{VExpr.RecHeaded} and \texttt{VExpr.CtorHeaded}, each by \texttt{decidable\_of\_iff}
+  against \texttt{isSort\_iff}, \texttt{isBvar\_iff} and \texttt{isConst\_iff}. The last two apply
+  the characterisation to $ty.\mathrm{piBody}.\mathrm{getAppFn}$, which is how \texttt{RecHeaded}
+  and \texttt{CtorHeaded} are defined.
+  \reviewnote{This is the \texttt{trproj} addition to an otherwise \texttt{iota}-branch file:
+  \texttt{CtorHeaded} is what \texttt{TrProjCtor.ctor} and the kernel test of
+  \ref{def:projshape-checkproj} need to decide.}
+\end{example}
+
+\begin{example}[Decision procedures for the block shape predicates]
+  \label{fam:shapedecide-shapes}
+  \lean{Lean4Lean.VExpr.instDecidableMentionsConst, Lean4Lean.VExpr.instDecidableCtorResult, Lean4Lean.VExpr.instDecidableMajorApp, Lean4Lean.VExpr.instDecidableValidIndApp, Lean4Lean.VExpr.instDecidableFieldPositive, Lean4Lean.VExpr.instDecidableCtorPositive, Lean4Lean.VExpr.instDecidableFieldInIndices, Lean4Lean.VExpr.instDecidableMotiveShape, Lean4Lean.VExpr.instDecidableMinorHeaded, Lean4Lean.VExpr.instDecidableMinorFor, Lean4Lean.VExpr.instDecidableRecShape, Lean4Lean.VExpr.instDecidableCtorShape, Lean4Lean.VExpr.instDecidableRuleShape, Lean4Lean.instDecidableLargeElimShape}
+  \leanok
+  \uses{family:ind-shape-iff, def:ind-mentions-const, def:ind-large-elim-shape, structure:ind-wf}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{41}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications; axioms.tex \S2.6.3, the recursor.}
+  Executable instances for every syntactic predicate of \texttt{Theory/Inductive.lean}:
+  \texttt{MentionsConst}, \texttt{CtorResult}, \texttt{MajorApp}, \texttt{ValidIndApp},
+  \texttt{FieldPositive}, \texttt{CtorPositive}, \texttt{FieldInIndices}, \texttt{MotiveShape},
+  \texttt{MinorHeaded}, \texttt{MinorFor}, \texttt{RecShape}, \texttt{CtorShape},
+  \texttt{RuleShape} and \texttt{VInductDecl.LargeElimShape}. Four go through the hand-written
+  \texttt{\_iff} characterisations; the rest are \texttt{unfold; infer\_instance}. They are what
+  turn the specification of \ref{structure:ind-wf} into something the kernel-comparison tests can
+  run.
+  \reviewnote{All twenty-two instances of this file are \emph{global}: twenty-one in the
+  \texttt{Lean4Lean.VExpr} namespace and one on \texttt{VInductDecl.LargeElimShape}, all declared
+  from a \texttt{Tests} module. That is safe today only because nothing in the library imports the
+  module; any future library import would silently expose typeclass resolution to these potentially
+  expensive decision procedures, the more so for the one instance that is not about a library
+  predicate at all, $\exists a,\;o=\mathrm{some}\;a\wedge P\,a$ for \emph{any} \texttt{Option} and
+  any decidable $P$ (\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{27}). The module docstring explains
+  the placement but not this risk.}
+\end{example}
+
+\section{Validating the inductive specification against the kernel}
+
+\srcloc{Lean4Lean/Tests/IotaShape.lean}{1} is the consumer of the previous section. It decides
+every \emph{syntactic} clause of \texttt{VInductDecl.WF} (\ref{structure:ind-wf}) on the kernel's
+own recursor, constructor and rule data (the typing clauses \texttt{types\_wf}, \texttt{ctors\_wf},
+\texttt{recs\_wf}, \texttt{rules\_wf} and the typing half of \texttt{universes} are out of reach of
+\texttt{decide}), and compares the model's $\iota$ reduct builder
+\texttt{SimplePattern.iotaRHS} (\ref{def:pattern-iota-rhs}) with the reduct the executable kernel
+computes. The shape of every check is the same: read a declaration with \texttt{getConstInfo},
+translate its type with \texttt{Meta.ofExpr} (\ref{def:meta-ofexpr}), and \texttt{decide} the
+predicate through the instances of \ref{fam:shapedecide-shapes}, raising a \texttt{MetaM} error on
+failure, so a regression fails the build. The file is \texttt{iota}-branch work: 603 of its 607
+lines, the four \texttt{trproj} lines being one guard and one negative control noted below.
+
+\begin{example}[Direct-block fixtures and the documented nested control]
+  \label{def:iotashape-fixtures-direct}
+  \lean{Lean4Lean.Tests.IotaShape.P2, Lean4Lean.Tests.IotaShape.Vec, Lean4Lean.Tests.IotaShape.Ev, Lean4Lean.Tests.IotaShape.Od, Lean4Lean.Tests.IotaShape.Tree}
+  \leanok
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{39}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications.}
+  Four local declarations: the structure \texttt{P2} with two \texttt{Nat} fields, the
+  indexed family $\mathrm{Vec}\;\alpha:\mathrm{Nat}\to\mathrm{Type}$, the mutual \texttt{Prop}
+  block \texttt{Ev}/\texttt{Od} over $\mathrm{Nat}$, and \texttt{Tree} with the single constructor
+  $\mathrm{node}:\mathrm{List}\;\mathrm{Tree}\to\mathrm{Tree}$. The last is the documented
+  negative control: Lean accepts it as a \emph{nested} inductive, but its constructor re-enters the
+  block through \texttt{List}, which the direct-block clause \texttt{ctors\_positive}
+  (\ref{def:ind-ctor-positive}) rejects, and the auxiliary recursor \texttt{Tree.rec\_1} eliminates
+  \texttt{List}, a type former outside the block, so its major premise is not an application of the
+  block's own parameter and index variables.
+\end{example}
+
+\begin{example}[The \texttt{rule\_shape} clause for one rule, \texttt{ruleShapeAt}]
+  \label{def:iotashape-ruleshapeat}
+  \lean{Lean4Lean.Tests.IotaShape.ruleShapeAt, Lean4Lean.Tests.IotaShape.instDecidableRuleShapeAt}
+  \leanok
+  \uses{def:ind-rule-shape, def:ind-minor-for, def:pi-telescope, structure:ind-wf}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{59}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction); axioms.tex \S2.6.3, the
+  recursor.}
+  $\mathrm{ruleShapeAt}\;ty\;rhs\;np\;nm\;nmin\;nf\;c$ asserts that there is a minor index
+  $j<nmin$ whose binder $A$, at telescope position $np+nm+j$ of $ty$, is the minor premise
+  \emph{for the constructor} $c$ (\texttt{VExpr.MinorFor}), has at least $nf$ binders, and for
+  which $rhs$ satisfies $\mathtt{RuleShape}\;np\;nm\;nmin\;nf\;(A.\mathrm{piArity}-nf)\;j$: the
+  reduct applies that minor to the $nf$ fields and to exactly the remaining binders, its inductive
+  hypotheses. It mirrors the \texttt{rule\_shape} clause of \ref{structure:ind-wf}; the
+  accompanying \texttt{Decidable} instance is \texttt{unfold ruleShapeAt; infer\_instance} and is
+  what makes the kernel comparison executable.
+\end{example}
+
+\begin{example}[Deciding the per-recursor clauses, \texttt{checkShapes}]
+  \label{def:iotashape-checkshapes}
+  \lean{Lean4Lean.Tests.IotaShape.checkShapes}
+  \leanok
+  \uses{def:iotashape-ruleshapeat, def:ind-rec-shape, def:ind-ctor-shape, def:recheaded, def:ctorheaded, def:ind-major-former, def:meta-ofexpr}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{72}
+  \thesisref{axioms.tex \S2.6.3, the recursor.}
+  For a kernel recursor: translate its type and decide \texttt{RecShape} at the kernel's own split
+  into parameters, motives, minors and indices, \texttt{RecHeaded}, the \emph{failure} of
+  \texttt{CtorHeaded}, and \texttt{majorFormer?}. Then the \texttt{recs\_elim} clause: the
+  recursor carries the universe parameters of its block's first type former or exactly one more,
+  and correspondingly every motive binder ends in $\mathrm{sort}\,\mathrm{zero}$ or in
+  $\mathrm{sort}\,(\mathrm{param}\;0)$. Then \texttt{rules\_total}, and per rule
+  \ref{def:iotashape-ruleshapeat}, \texttt{CtorShape} of the constructor type at its own parameter
+  count plus the rule's field count, the failure of \texttt{RecHeaded} for that type, and
+  agreement of the rule's \texttt{nfields} with the constructor's \texttt{numFields}.
+  \reviewnote{The \texttt{recs\_elim} check spells the extra universe as $\mathrm{param}\;0$, that
+  is, it assumes the fresh universe sits at index $0$ of the recursor's \texttt{levelParams}. That
+  is how Lean generates recursors, but nothing here checks it.}
+\end{example}
+
+\begin{example}[Executable pattern matcher, \texttt{matchPat}]
+  \label{def:iotashape-matchpat}
+  \lean{Lean4Lean.Tests.IotaShape.matchPat}
+  \leanok
+  \uses{inductive:pattern-core, inductive:pattern-matches, ind:vexpr}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{103}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  $\mathrm{matchPat}\;p\;e$ returns, as an $\mathrm{Option}$, a level assignment and a
+  path-indexed argument assignment $p.\mathrm{Path}\to\mathtt{VExpr}$, by structural recursion on
+  the pattern: $\mathrm{const}\;c$ matches $\mathrm{const}\;c'\;ls$ when $c=c'$, returning $ls$
+  and the empty assignment; $\mathrm{var}\;f$ matches an application, recording its argument at
+  the new path and recursing into the function; $\mathrm{app}\;f\;a$ recurses into both halves and
+  joins the two assignments with $\mathrm{Sum.elim}$. Every other combination is
+  $\mathrm{none}$.
+\end{example}
+
+\begin{example}[Soundness of the executable matcher]
+  \label{thm:iotashape-matchpat-sound}
+  \lean{Lean4Lean.Tests.IotaShape.matchPat_sound}
+  \leanok
+  \uses{def:iotashape-matchpat, inductive:pattern-matches}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{115}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  If $\mathrm{matchPat}\;p\;e=\mathrm{some}\,(m_1,m_2)$ then $p.\mathrm{Matches}\;e\;m_1\;m_2$:
+  the matcher only ever reports genuine matches, so a successful run of the $\iota$ comparison
+  below is evidence about the real relation and not only about the matcher. The proof is a
+  structural recursion on the pattern and the expression together, the three matching cases
+  closing with the constructors \texttt{.const}, \texttt{.var} and \texttt{.app} after
+  \texttt{simp only [matchPat]} and a \texttt{split}, and the fifteen impossible shape
+  combinations discharged in one \texttt{simp [matchPat]}.
+  \reviewnote{Completeness is not proved, which is the right asymmetry for a test: a failed match
+  raises an error rather than passing silently.}
+\end{example}
+
+\begin{example}[Comparing \texttt{iotaRHS} with the executable kernel's reduct]
+  \label{def:iotashape-checkiota}
+  \lean{Lean4Lean.Tests.IotaShape.checkIota, Lean4Lean.Tests.IotaShape.checkIotaAuto}
+  \leanok
+  \uses{def:pattern-iota-rhs, inductive:simple-pattern, def:iotashape-matchpat, def:kernel-inductive-reduce-rec, def:meta-ofexpr, def:closedn}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{141}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  \texttt{checkIota} builds the redex $rec\,ps\,Ms\,ms\,is\,(ctor\,cps\,fs)$ over free variables,
+  reduces it with \texttt{inductiveReduceRec} (\ref{def:kernel-inductive-reduce-rec}), translates
+  both redex and reduct back into \texttt{VExpr} under a de Bruijn map for those variables,
+  matches the redex against the pattern of \texttt{SimplePattern.iota} at the recursor's major
+  index and the constructor's parameter-plus-field count, and requires
+  $\mathtt{iotaRHS}\dots.\mathrm{apply}$ on that match to be \emph{syntactically} the kernel's
+  reduct; the stored template must be \texttt{Closed} for the builder to apply at all.
+  \texttt{checkIotaAuto} reads the constructor's levels and parameters off the recursor's major
+  premise, so that the auxiliary recursors of nested blocks, which fire on a constructor whose
+  parameters are not the recursor's, are covered generically.
+  \reviewnote{The oracle is lean4lean's own \texttt{inductiveReduceRec}
+  (\srcloc{Lean4Lean/Inductive/Reduce.lean}{100}), not Lean's C++ kernel, so both sides of the
+  comparison live in this repository and a shared misreading of the kernel's argument slicing
+  would not be caught. The constant-application guard on the major premise
+  (\srcloc{Lean4Lean/Tests/IotaShape.lean}{306}) is one of the two \texttt{trproj} edits here.}
+\end{example}
+
+\begin{example}[The remaining per-recursor clauses]
+  \label{def:iotashape-checkmore}
+  \lean{Lean4Lean.Tests.IotaShape.checkTypesHaveRec, Lean4Lean.Tests.IotaShape.checkMore}
+  \leanok
+  \uses{def:ind-major-former, def:ind-ctor-shape, def:closedn, def:meta-ofexpr}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{171}
+  \thesisref{axioms.tex \S2.6.3, the recursor.}
+  \texttt{checkTypesHaveRec} decides \texttt{types\_have\_rec}, that the recursor generated for
+  $I$ eliminates $I$ itself, through \texttt{majorFormer?}. \texttt{checkMore} decides the clauses
+  \ref{def:iotashape-checkshapes} leaves out: \texttt{rec\_params} (the recursor's parameter count
+  is the block's), \texttt{rules\_nodup} (no two rules share a constructor),
+  \texttt{rules\_own\_params} (every rule's constructor records the recursor's parameter count),
+  the \texttt{CtorShape} of each rule's constructor type, and closedness of every rule reduct.
+\end{example}
+
+\begin{example}[Which clause of \texttt{LargeElim} applies]
+  \label{def:iotashape-largeelim}
+  \lean{Lean4Lean.Tests.IotaShape.resultSort, Lean4Lean.Tests.IotaShape.largeElimClause}
+  \leanok
+  \uses{def:ind-large-elim, def:ind-field-in-indices, def:meta-ofexpr}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{196}
+  \thesisref{axioms.tex \S2.6.2, large elimination: the two reasons a type can eliminate largely.}
+  $\mathrm{resultSort}$ reads the sort a $\Pi$-telescope ends in. $\mathrm{largeElimClause}\;I$
+  returns $0$ when the block's result sort is never zero, $1$ for a single type former with no
+  constructor, $2$ for a single former with a single constructor, and $\mathrm{none}$ when no
+  clause applies. In case $2$ it also returns the fields the syntactic half leaves open, namely
+  those the constructor's result type does not mention (\texttt{VExpr.FieldInIndices}), which pass
+  the clause only if they are propositions, a typing side condition the test deliberately does not
+  decide.
+  \reviewnote{Honest about the boundary between the syntactic and the typing halves of
+  \ref{def:ind-large-elim}; the expected answers, open fields included, are pinned in
+  \ref{test:iotashape-run}.}
+\end{example}
+
+\begin{example}[The block-level clauses, and which of them a nested block fails]
+  \label{def:iotashape-blockfailures}
+  \lean{Lean4Lean.Tests.IotaShape.recsOf, Lean4Lean.Tests.IotaShape.blockFailures, Lean4Lean.Tests.IotaShape.checkBlock, Lean4Lean.Tests.IotaShape.checkBlockRejected}
+  \leanok
+  \uses{def:ind-ctor-result, def:ind-ctor-positive, def:ind-rec-shape, def:ind-major-former, def:iotashape-largeelim, structure:ind-wf}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{224}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications; axioms.tex \S2.6.2, large elimination.}
+  $\mathrm{recsOf}\;I$ enumerates the recursors of the block, $I.\mathrm{rec}$ followed by the
+  auxiliary \texttt{I.rec\_1}, \texttt{I.rec\_2}, \dots{} of a nested one. $\mathrm{blockFailures}\;I$ decides the
+  block clauses of \ref{structure:ind-wf} on the kernel's data and returns the \emph{names} of
+  those that fail: \texttt{ctors\_params}, \texttt{ctors\_result} and \texttt{ctors\_positive} per
+  constructor, then per recursor \texttt{rec\_shape}, \texttt{rec\_counts},
+  \texttt{recs\_over\_block}, \texttt{rules\_total} and the syntactic part of
+  \texttt{rules\_ctor}, and finally the syntactic half of the large-elimination clause of
+  \texttt{universes} whenever some recursor of the block asks for the extra universe parameter.
+  \texttt{checkBlock} demands the list be empty, \texttt{checkBlockRejected} that it not be.
+  \reviewnote{Returning failing clause \emph{names} rather than a Boolean makes the negative
+  controls informative, but \texttt{checkBlockRejected} only asks that \emph{some} clause fail, so
+  the docstring's expectation that a nested block fails \texttt{ctors\_positive} and
+  \texttt{recs\_over\_block} in particular is pinned by no test. For \texttt{Tree} the two
+  underlying predicates are pinned separately (\srcloc{Lean4Lean/Tests/IotaShape.lean}{584}); for
+  the other eight nested blocks of \ref{test:iotashape-run} nothing records which clause failed.}
+\end{example}
+
+\begin{example}[The full battery per inductive type]
+  \label{def:iotashape-checkall}
+  \lean{Lean4Lean.Tests.IotaShape.checkAll, Lean4Lean.Tests.IotaShape.checkNested}
+  \leanok
+  \uses{def:iotashape-checkshapes, def:iotashape-checkmore, def:iotashape-checkiota, def:iotashape-blockfailures}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{313}
+  \thesisref{no thesis counterpart; it packages the clauses of \ref{structure:ind-wf}.}
+  $\mathrm{checkAll}\;I$ runs \texttt{checkTypesHaveRec} and \texttt{checkBlock}, then
+  \texttt{checkShapes}, \texttt{checkMore} and \texttt{checkIotaAuto} on every recursor of the
+  block and every rule of each. $\mathrm{checkNested}\;I$ instead demands that the block be
+  rejected, and still compares every $\iota$ rule with the kernel's, the pattern machinery being
+  general.
+\end{example}
+
+\begin{example}[Further shapes: nested, reflexive, indexed, small-eliminating]
+  \label{def:iotashape-fixtures-nested}
+  \lean{Lean4Lean.Tests.IotaShape.TreeP, Lean4Lean.Tests.IotaShape.T2, Lean4Lean.Tests.IotaShape.T3, Lean4Lean.Tests.IotaShape.MA, Lean4Lean.Tests.IotaShape.MB, Lean4Lean.Tests.IotaShape.T4, Lean4Lean.Tests.IotaShape.Refl, Lean4Lean.Tests.IotaShape.Le, Lean4Lean.Tests.IotaShape.Dep, Lean4Lean.Tests.IotaShape.TreeQ, Lean4Lean.Tests.IotaShape.Fn, Lean4Lean.Tests.IotaShape.EvI, Lean4Lean.Tests.IotaShape.OdI, Lean4Lean.Tests.IotaShape.PropLarge, Lean4Lean.Tests.IotaShape.Wrap, Lean4Lean.Tests.IotaShape.SigmaLike}
+  \leanok
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{339}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications.}
+  Sixteen further fixtures, chosen so that each clause of \ref{structure:ind-wf} is met from at
+  least one side: nesting through one or more type formers (\texttt{TreeP}, \texttt{T2},
+  \texttt{T3}, \texttt{TreeQ}), nesting through an indexed family (\texttt{T4}), mutual and nested
+  at once (\texttt{MA}/\texttt{MB}), reflexive constructors whose minor premise carries an
+  inductive-hypothesis binder after the fields (\texttt{Refl}, \texttt{Fn}), an indexed
+  \texttt{Prop} family (\texttt{Le}), a dependent structure (\texttt{Dep}), a mutual indexed
+  \texttt{Type} block (\texttt{EvI}/\texttt{OdI}), and three \texttt{Prop} inductives on either
+  side of the elimination boundary: \texttt{PropLarge} and \texttt{SigmaLike}, whose non-proof
+  field is not in the result type, eliminate only into \texttt{Prop}, while \texttt{Wrap}, whose
+  single field is a proof, is subsingleton-eliminating and carries the extra universe parameter.
+  \reviewnote{The module docstring (\srcloc{Lean4Lean/Tests/IotaShape.lean}{336}) groups all three
+  as ``small-eliminating \texttt{Prop} inductives''. \texttt{Wrap.rec} in fact eliminates into
+  $\mathrm{Sort}\;u$; only the wording is wrong, and the fixture is the one of the three that
+  supplies the large-eliminating case.}
+\end{example}
+
+\section{Negative controls and the test battery}
+
+Two declarations Lean's elaborator refuses to accept are written directly as \texttt{VExpr} and
+\texttt{VInductDecl} literals, so that the clauses meant to exclude them can be run on something.
+They are the sharpest part of the file: they test not that the specification accepts what the
+kernel accepts, but that it rejects what the kernel would reject.
+
+\begin{example}[Strict positivity, decided on hand-written constructor types]
+  \label{thm:iotashape-positivity}
+  \lean{Lean4Lean.Tests.IotaShape.badCtorType, Lean4Lean.Tests.IotaShape.goodCtorType, Lean4Lean.Tests.IotaShape.badCtorType_not_positive, Lean4Lean.Tests.IotaShape.goodCtorType_positive}
+  \leanok
+  \uses{def:ind-ctor-positive, fam:shapedecide-shapes}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{397}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications: the two kinds of constructor argument.}
+  Over a fictitious type former $\mathrm{Bad}$, the constructor type
+  $(\mathrm{Bad}\to\mathrm{False})\to\mathrm{Bad}$ is \emph{not}
+  $\mathtt{CtorPositive}\;[\mathrm{Bad}]\;0$, while $(\mathrm{Nat}\to\mathrm{Bad})\to\mathrm{Bad}$
+  is. Both theorems are closed by \texttt{decide} through the instances of
+  \ref{fam:shapedecide-shapes}. This is a genuine negative control for a clause that no
+  kernel-declared type can exercise, since the elaborator will not declare a non-positive
+  inductive in the first place.
+\end{example}
+
+\begin{example}[A two-constructor \texttt{Prop} asking for large elimination]
+  \label{thm:iotashape-twoctorprop}
+  \lean{Lean4Lean.Tests.IotaShape.TwoCtorProp.PT, Lean4Lean.Tests.IotaShape.TwoCtorProp.RT, Lean4Lean.Tests.IotaShape.TwoCtorProp.RV, Lean4Lean.Tests.IotaShape.TwoCtorProp.rhs1, Lean4Lean.Tests.IotaShape.TwoCtorProp.rhs2, Lean4Lean.Tests.IotaShape.TwoCtorProp.declB, Lean4Lean.Tests.IotaShape.TwoCtorProp.declB_wants_large, Lean4Lean.Tests.IotaShape.TwoCtorProp.declB_not_largeElimShape}
+  \leanok
+  \uses{def:ind-large-elim-shape, struct:vinductdecl, struct:vinductivetype, struct:vrecursor, struct:vrecrule, fam:shapedecide-shapes}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{411}
+  \thesisref{axioms.tex \S2.6.2, large elimination: a \texttt{Prop} with two constructors is not
+  subsingleton-eliminating.}
+  A hand-written \texttt{VInductDecl} for a proposition $P$ with two nullary constructors
+  $t_1,t_2$, whose recursor has one universe variable more than the block and the type
+  $\forall C{:}P\to\mathrm{Sort}\,(\mathrm{param}\;0),\;C\,t_1\to C\,t_2\to\forall p{:}P,\,C\,p$,
+  with the two rules returning the first and the second minor. Proof irrelevance identifies $t_1$
+  and $t_2$, so with both $\iota$ rules one and the same major premise reduces to two different
+  minors; with the elimination into $\mathrm{Sort}\,(\mathrm{param}\;0)$ that collapses
+  definitional equality. Two
+  \texttt{decide}d theorems: the declaration does ask for large elimination (some recursor has one
+  universe variable more than the block), and \texttt{VInductDecl.LargeElimShape}
+  (\ref{def:ind-large-elim-shape}) refuses it.
+  \reviewnote{The sharpest test in the group: it isolates which clause of \ref{structure:ind-wf}
+  is load-bearing for consistency and shows the specification catches the unsound declaration.
+  Only the syntactic half is exercised; \texttt{VInductDecl.LargeElim} itself is a typing judgment
+  and is decided nowhere.}
+\end{example}
+
+\begin{example}[The iota and shape test battery]
+  \label{test:iotashape-run}
+  \leanok
+  \uses{def:iotashape-checkall, def:iotashape-checkiota, def:iotashape-ruleshapeat, def:iotashape-largeelim, def:iotashape-fixtures-direct, def:iotashape-fixtures-nested, def:ind-rec-shape, def:ind-rule-shape, def:ind-minor-for}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/IotaShape.lean}{454}
+  \thesisref{axioms.tex \S2.6.3, the recursor; axioms.tex \S2.6.4, the computation rule (iota
+  reduction).}
+  A single \texttt{run\_meta} block of about 150 lines. It runs \texttt{checkShapes} on ten
+  recursors and \texttt{checkTypesHaveRec} on their ten type formers; then the shape controls: \texttt{RecShape} rejects
+  three wrong telescope splits of \texttt{Nat.rec}, \texttt{RuleShape} rejects a zero field count
+  and a wrong minor count for the \texttt{succ} rule and accepts exactly one inductive hypothesis
+  while rejecting zero and two, \texttt{CtorShape} rejects arity $2$ for \texttt{List.cons},
+  \texttt{rules\_total} rejects a \texttt{Nat} recursor lacking the \texttt{zero} rule, and
+  \texttt{recs\_elim} rejects a \texttt{Prop} elimination level for \texttt{Nat.rec} and a
+  $\mathrm{sort}\,(\mathrm{param}\;0)$ one for \texttt{Ev.rec}. Then the \S2.6.3 pins, on
+  hand-built \texttt{VExpr} literals: a reduct firing the \emph{zero} minor, a field applied to a
+  nullary minor, a \texttt{succ} rule with its inductive hypothesis dropped, a bare motive as a
+  minor premise, a major premise over the wrong type former, a \texttt{zero} minor targeting
+  $\mathit{motive}\,(\mathrm{succ}\;\mathrm{zero})$ and a minor headed by its own binder, each
+  rejected, with the kernel's own \texttt{zero} rule and a hand-built \texttt{Nat.rec} telescope
+  accepted as the positive side. Then \texttt{checkIota} on twelve rules, including both rules of
+  the auxiliary \texttt{Tree.rec\_1}; six \texttt{largeElimClause} expectations
+  (\texttt{Nat}, \texttt{False}, \texttt{Eq}, \texttt{And}, \texttt{Acc}, \texttt{Or}); the
+  documented \texttt{Tree} nested control; and finally \texttt{checkAll} on forty-eight type
+  formers and \texttt{checkNested} on nine nested blocks.
+  \reviewnote{Nearly every assertion comes with a matching negative control, which is what makes
+  \ref{structure:ind-wf} credible as a \emph{tight} specification rather than merely a satisfiable
+  one. Two caveats: it is one \texttt{run\_meta} block, so a failure reports only the first
+  mismatch and the remaining assertions are never reached; and this node carries no
+  \texttt{\textbackslash lean} link because a \texttt{run\_meta} block declares no constant. The
+  control at \srcloc{Lean4Lean/Tests/IotaShape.lean}{538} is the second \texttt{trproj} line pair
+  in the file.}
+\end{example}
+
+\section{The kernel side: validating the expansion}
+
+\srcloc{Lean4Lean/Tests/ProjShape.lean}{1} is the only place in the development where the
+projection expansion is confronted with the actual Lean kernel. It is short and high-value: for
+each structure and field it reads the constructor telescope off the kernel the way
+\texttt{inferProj} (\ref{def:kernel-infer-proj}) does, but on manifest binders only, since the
+kernel \texttt{whnf}s at each one (\ref{def:proj-inst-pis}), builds \ref{def:proj-fn} and
+\ref{def:proj-motive-body} over the parameter variables, and then runs three independent kernel
+checks.
+
+\begin{example}[Test structures: a three-field chain and a reflexive structure]
+  \label{def:projshape-fixtures}
+  \lean{Lean4Lean.Tests.ProjShape.V3, Lean4Lean.Tests.ProjShape.Refl}
+  \leanok
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjShape.lean}{33}
+  \thesisref{no counterpart; test fixtures.}
+  \texttt{V3} is the three-field structure with fields $n:\mathrm{Nat}$, $v:\mathrm{Fin}\;n$ and
+  $h:v.\mathrm{val}<n$, so its last field type mentions two earlier fields, one of them inside the
+  other's motive. \texttt{Refl} is the reflexive structure with the single field
+  $\mathrm{next}:\mathrm{Nat}\to\mathrm{Refl}$; it is the negative control whose recursor's minor
+  premise carries an inductive-hypothesis binder and is therefore outside the scope of
+  \ref{struct:trprojctor}.
+\end{example}
+
+\begin{example}[Back-translation to kernel expressions]
+  \label{fam:projshape-back-translation}
+  \lean{Lean4Lean.Tests.ProjShape.toLevel, Lean4Lean.Tests.ProjShape.toExpr, Lean4Lean.Tests.ProjShape.binders}
+  \leanok
+  \uses{ind:vexpr, ind:vlevel, def:meta-ofexpr}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjShape.lean}{44}
+  \thesisref{no counterpart; test scaffolding.}
+  $\mathrm{toLevel}\;ls$ inverts \texttt{VLevel.ofLevel}, sending $\mathrm{param}\;i$ to the
+  universe name $ls[i]$; $\mathrm{toExpr}\;ls$ maps a \texttt{VExpr} back to an \texttt{Expr} with
+  dummy binder names; $\mathrm{binders}\;ty\;n$ reads the leading $n$ binders of a kernel type.
+  Together they let a model-side term be handed to the real kernel.
+  \reviewnote{The \texttt{param} case of \texttt{toLevel} uses
+  \texttt{ls.getD i .anonymous}, so a level index the structure's universe names do not support
+  silently becomes the anonymous universe rather than an error.}
+\end{example}
+
+\begin{example}[Kernel validation of the projection expansion]
+  \label{def:projshape-checkproj}
+  \lean{Lean4Lean.Tests.ProjShape.checkProj}
+  \leanok
+  \uses{def:proj-fn, def:proj-motive-body, def:proj-inst-pis, def:proj-binder-arity, def:pi-telescope, def:meta-ofexpr, def:kernel-infer-proj, fam:projshape-back-translation}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjShape.lean}{68}
+  \thesisref{axioms.tex \S2.6.3, the recursor; typesys.tex \S3.1, the projection
+  $\mathrm{inv}_x$ of $\mathrm{acc}\,x$ through $\mathrm{rec}_{\mathrm{acc}}$.}
+  $\mathrm{checkProj}\;S\;i\;lvls$ translates the constructor type with \texttt{Meta.ofExpr},
+  checks \texttt{CtorHeaded}, instantiates the parameters with \ref{def:proj-inst-pis}, takes the
+  field telescope with \texttt{piBinders} and checks it against the kernel's
+  \texttt{numFields}. It then checks
+  $rty.\mathrm{binderArity?}(np+1)=\mathrm{some}\;\mathrm{numFields}$ for the recursor's minor and
+  performs three kernel checks: the real kernel accepts
+  $\lambda\,ps\,(x{:}S\,ps).\;P_i\,x$ at type
+  $\forall ps\,(x{:}S\,ps),\;\mathrm{projMotiveBody}$ as a definition through
+  \texttt{Environment.addDeclCore}; that type is \texttt{isDefEq} to the kernel's own
+  $\mathrm{inferType}\,(\mathtt{.proj}\;S\;i\;x)$; and $P_i\,(\mathrm{mk}\;ps\;fs)$
+  \texttt{whnf}-reduces \emph{syntactically} to $fs[i]$.
+  \reviewnote{Three caveats. The second check uses \texttt{isDefEq} (as the module docstring says),
+  so it is agreement up to \emph{kernel} conversion, which may use structure eta and projection
+  reduction that the model's \texttt{IsDefEq} deliberately lacks. The type it compares is built
+  from \ref{def:proj-motive-body}, but the docstring and the error message call it
+  \texttt{projTy}, a different definition (\ref{def:proj-ty}) that no lemma relates to it. And
+  \texttt{uss} is built with \texttt{(VLevel.ofLevel lps (lvls j)).getD .zero}
+  (\srcloc{Lean4Lean/Tests/ProjShape.lean}{78}), silently defaulting a mistyped level argument to
+  zero.}
+\end{example}
+
+\begin{example}[The kernel-side test battery for projections]
+  \label{test:projshape-run}
+  \leanok
+  \uses{def:projshape-checkproj, def:proj-binder-arity, def:projshape-fixtures}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjShape.lean}{121}
+  \thesisref{axioms.tex \S2.6.3, the recursor.}
+  A \texttt{run\_meta} block running \ref{def:projshape-checkproj} on eleven structure-and-field
+  pairs: \texttt{Prod} 0 and 1, \texttt{Sigma} 0 and 1, \texttt{PSigma} 1, \texttt{Subtype} 0 and
+  1, \texttt{Fin} 1, \texttt{And} 1, and \texttt{V3} 1 and 2. These cover a constant motive,
+  dependent motives at two distinct universes, small elimination in a \texttt{Prop} second field,
+  and a chain whose last motive mentions two earlier projections. Two negative controls follow: a
+  single level list for every field is rejected by the kernel at \texttt{Sigma.snd}, and
+  $\mathrm{binderArity?}\;1$ of the reflexive \texttt{Refl.rec}'s minor is $2$, not $1$. The
+  assertions run at elaboration time, so a regression fails the build.
+  \reviewnote{The \texttt{Sigma.snd} control (\srcloc{Lean4Lean/Tests/ProjShape.lean}{136}) wraps
+  the call in \texttt{try \dots catch \_ => pure false}, so \emph{any} failure inside
+  \texttt{checkProj} makes it pass vacuously. Also, this node has no
+  \texttt{\textbackslash lean} link because a \texttt{run\_meta} block declares no constant.}
+\end{example}
+
+\begin{example}[The de Bruijn form of the \texttt{Sigma.snd} expansion]
+  \label{test:projshape-sigmasnd}
+  \lean{Lean4Lean.Tests.ProjShape.usS, Lean4Lean.Tests.ProjShape.uss, Lean4Lean.Tests.ProjShape.ps, Lean4Lean.Tests.ProjShape.Fs, Lean4Lean.Tests.ProjShape.structTy, Lean4Lean.Tests.ProjShape.P₀}
+  \leanok
+  \uses{def:proj-fn, def:proj-motive-body, def:proj-ty, def:proj-inst-pis}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjShape.lean}{150}
+  \thesisref{Wtypes.tex \S5.1, the primitive $\Sigma$ rules $\pi_1\,p:\alpha$ and
+  $\pi_2\,p:\beta[\pi_1\,p/x]$.}
+  Over $\Gamma \vdash A:\mathrm{Type}\;u,\;B:A\to\mathrm{Type}\;v$ (as $\mathrm{bvar}\;1$ and
+  $\mathrm{bvar}\;0$) the section fixes the hand-written first projection
+  $P_0 = \mathrm{Sigma.rec}.\{u+1,u,v\}\;A\;B\;(\lambda \_.\,A)\;(\lambda a\,b.\,a)$, and five
+  anonymous examples check: that \texttt{instPis} fails on a non-$\Pi$ head; that
+  $\mathrm{projFn}\dots 0$ is $P_0$; that the motive \emph{body} of field $1$ over $\Gamma,x$
+  is $B\,(P_0\,x)$;
+  that $\mathrm{projFn}\dots 1$ uses the \emph{other} level list $\{v+1,u,v\}$; and that
+  $\mathrm{projTy}\dots 1\;e = B\,(P_0\,e)$. All but the last are closed by \texttt{decide}; the
+  last by \texttt{simp}.
+  \reviewnote{This is the only use of \ref{def:proj-ty} anywhere. The top-level names
+  \texttt{ps}, \texttt{Fs}, \texttt{uss}, \texttt{usS} and \texttt{structTy} sit in the test
+  namespace but are very broad for globally visible definitions.}
+\end{example}
+
+\section{The model side: a structure with a constant motive}
+
+\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{1} is the model-side counterpart of the previous section:
+it builds two inductive blocks by hand through \texttt{VEnv.addInduct} (\ref{def:ind-add-induct}),
+so that each block's $\iota$ rule is registered the way a translated environment registers one, and
+derives each projection's typing premise from the forward rules of \texttt{IsDefEq}
+(\ref{def:isdefeq}) alone. The \texttt{Plain} namespace is the easy half: a two-field structure
+whose fields have the same type, so both motives are constant.
+
+\begin{example}[A hand-built two-field structure block and its environment]
+  \label{def:projinhabit-plain-block}
+  \lean{Lean4Lean.Tests.ProjInhabit.Plain.l1, Lean4Lean.Tests.ProjInhabit.Plain.Ac, Lean4Lean.Tests.ProjInhabit.Plain.Sc, Lean4Lean.Tests.ProjInhabit.Plain.mkc, Lean4Lean.Tests.ProjInhabit.Plain.ctorTy, Lean4Lean.Tests.ProjInhabit.Plain.motiveTy, Lean4Lean.Tests.ProjInhabit.Plain.mkSpine, Lean4Lean.Tests.ProjInhabit.Plain.minorTy, Lean4Lean.Tests.ProjInhabit.Plain.recTy, Lean4Lean.Tests.ProjInhabit.Plain.ruleRhs, Lean4Lean.Tests.ProjInhabit.Plain.decl, Lean4Lean.Tests.ProjInhabit.Plain.env0?, Lean4Lean.Tests.ProjInhabit.Plain.env0_isSome, Lean4Lean.Tests.ProjInhabit.Plain.env}
+  \leanok
+  \uses{def:ind-add-induct, struct:vinductdecl, struct:venv, def:venv-basic}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{27}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications; axioms.tex \S2.6.3, the recursor.}
+  A \texttt{VInductDecl} with no universe variables and no parameters, one type former
+  $S:\mathrm{Sort}\;1$ with the single constructor
+  $S.\mathrm{mk} : A\to A\to S$, and one recursor $S.\mathrm{rec}$ with one universe variable, one
+  motive, one minor and no indices, whose single rule has the template
+  $\lambda C\,m\,a\,b.\;m\,a\,b$. The environment is
+  $\mathtt{VEnv.empty.addConst}\;A \mathbin{>\!\!>\!\!=} \mathtt{addInduct}\;\mathit{decl}$, shown
+  to succeed by \texttt{rfl}.
+  \reviewnote{\texttt{VEnv.addInduct} (\srcloc{Lean4Lean/Theory/Inductive.lean}{316}) checks only
+  name clashes and closedness of the rule reducts, never well-formedness, and neither
+  $\mathtt{VInductDecl.WF}\;\mathit{decl}\;\mathit{env}$ nor
+  $\mathit{env}.\mathtt{WF}$ is ever proved here. The witnesses below therefore establish that the
+  premises of \ref{struct:trprojctor} are simultaneously satisfiable, not that they are satisfiable
+  in a well-formed environment.}
+\end{example}
+
+\begin{example}[Constant lookups and the registered iota rule]
+  \label{fam:projinhabit-plain-lookups}
+  \lean{Lean4Lean.Tests.ProjInhabit.Plain.hA, Lean4Lean.Tests.ProjInhabit.Plain.hS, Lean4Lean.Tests.ProjInhabit.Plain.hmk, Lean4Lean.Tests.ProjInhabit.Plain.hrec, Lean4Lean.Tests.ProjInhabit.Plain.hclosed, Lean4Lean.Tests.ProjInhabit.Plain.patKey, Lean4Lean.Tests.ProjInhabit.Plain.rhsPair, Lean4Lean.Tests.ProjInhabit.Plain.hpats}
+  \leanok
+  \uses{def:projinhabit-plain-block, def:pattern-iota-rhs, inductive:simple-pattern, struct:venv}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{55}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  The four facts $\mathit{env}.\mathrm{constants}\;c=\mathrm{some}\;\dots$ for $A$, $S$,
+  $S.\mathrm{mk}$ and $S.\mathrm{rec}$, all by \texttt{rfl}; closedness of the rule template by
+  \texttt{decide}; and $\mathit{env}.\mathrm{pats}\;\mathit{patKey}\;\mathit{rhsPair}$ for the key
+  $\mathtt{SimplePattern.iota}\;S.\mathrm{rec}\;(0+1+1+0)\;S.\mathrm{mk}\;(0+2)$ with the reduct
+  built by \texttt{SimplePattern.iotaRHS} (\ref{def:pattern-iota-rhs}). That key is exactly what
+  \texttt{TrProjCtor.pat} demands.
+\end{example}
+
+\begin{example}[The expansion terms for both fields]
+  \label{def:projinhabit-plain-expansion}
+  \lean{Lean4Lean.Tests.ProjInhabit.Plain.uss, Lean4Lean.Tests.ProjInhabit.Plain.recC, Lean4Lean.Tests.ProjInhabit.Plain.M0, Lean4Lean.Tests.ProjInhabit.Plain.sel0, Lean4Lean.Tests.ProjInhabit.Plain.sel1, Lean4Lean.Tests.ProjInhabit.Plain.minorTyM}
+  \leanok
+  \uses{def:proj-fn, def:proj-motive-body, def:projinhabit-plain-block}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{70}
+  \thesisref{no counterpart; an instance of the expansion.}
+  The constant motive $M_0=\lambda x{:}S.\,A$ and the two selectors
+  $\mathit{sel}_0=\lambda a\,b.\,a$, $\mathit{sel}_1=\lambda a\,b.\,b$, with four anonymous
+  examples checking by \texttt{decide} that
+  $\mathrm{projFn}\;S\;[]\;\mathit{uss}\;[]\;[A,A]\;i = S.\mathrm{rec}\,[1]\;M_0\;\mathit{sel}_i$
+  and that $\mathrm{projMotiveBody}\dots i = A$ for $i=0,1$.
+  \reviewnote{$\mathit{uss}$ is the constant function $\lambda \_.\,[l_1]$, so the per-field level
+  list, the whole reason \ref{def:proj-fn} takes $uss$ as a function at all, is not exercised on the
+  model side anywhere in this file.}
+\end{example}
+
+\begin{example}[Typing derivation of the constant-motive expansion]
+  \label{fam:projinhabit-plain-typing}
+  \lean{Lean4Lean.Tests.ProjInhabit.Plain.lvl1WF, Lean4Lean.Tests.ProjInhabit.Plain.hAt, Lean4Lean.Tests.ProjInhabit.Plain.hSt, Lean4Lean.Tests.ProjInhabit.Plain.hmkt, Lean4Lean.Tests.ProjInhabit.Plain.hrect, Lean4Lean.Tests.ProjInhabit.Plain.hM, Lean4Lean.Tests.ProjInhabit.Plain.hspine, Lean4Lean.Tests.ProjInhabit.Plain.hbody0, Lean4Lean.Tests.ProjInhabit.Plain.hselnat0, Lean4Lean.Tests.ProjInhabit.Plain.hselnat1, Lean4Lean.Tests.ProjInhabit.Plain.hminorEq, Lean4Lean.Tests.ProjInhabit.Plain.hsel0, Lean4Lean.Tests.ProjInhabit.Plain.hsel1, Lean4Lean.Tests.ProjInhabit.Plain.hstep1, Lean4Lean.Tests.ProjInhabit.Plain.hbetax, Lean4Lean.Tests.ProjInhabit.Plain.htyEq, Lean4Lean.Tests.ProjInhabit.Plain.hProjFn0, Lean4Lean.Tests.ProjInhabit.Plain.hProjFn1}
+  \leanok
+  \uses{def:isdefeq, def:projinhabit-plain-expansion, def:projinhabit-plain-block}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{84}
+  \thesisref{steps (a) and (c) of the derivation sketched at
+  \srcloc{Lean4Lean/Theory/Proj.lean}{38}; axioms.tex \S2.6.3, the recursor.}
+  Seventeen \texttt{IsDefEq} derivations, each stated for an arbitrary ambient context $\Gamma$,
+  next to the level-well-formedness fact \texttt{lvl1WF}, culminating in
+  $\mathit{env} \vdash_\Gamma S.\mathrm{rec}\,[1]\;M_0\;\mathit{sel}_i : \forall x{:}S,\,A$. The
+  pattern is: type the motive with \texttt{lamDF}; type the selector at its natural type
+  $\forall a\,b,\,A$; convert that type to the recursor's minor type by $\beta$ under the field
+  binders (\texttt{forallEDF}, \texttt{beta}, \texttt{symm}); apply with \texttt{appDF}; convert
+  the result type by $\beta$ at the major with \texttt{defeqDF}. The proofs are pure term-mode
+  applications of \texttt{constDF}, \texttt{lamDF}, \texttt{appDF}, \texttt{forallEDF},
+  \texttt{defeqDF}, \texttt{beta} and \texttt{bvar}; the only tactic in the group is the
+  \texttt{cases} inside \texttt{lvl1WF}.
+  \reviewnote{Readable and well factored, but every lemma is indexed by $\Gamma$ and re-proved from
+  scratch rather than weakened from a fixed context: eighteen declarations for one structure.}
+\end{example}
+
+\begin{example}[\texttt{TrProjCtor} is inhabited for field 0]
+  \label{thm:projinhabit-plain-inhab0}
+  \lean{Lean4Lean.Tests.ProjInhabit.Plain.inhab0}
+  \leanok
+  \uses{struct:trprojctor, fam:projinhabit-plain-typing, fam:projinhabit-plain-lookups, def:proj-binder-arity, def:proj-inst-pis}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{151}
+  \thesisref{typesys.tex \S3.1, the projection $\mathrm{inv}_x$ of $\mathrm{acc}\,x$ through
+  $\mathrm{rec}_{\mathrm{acc}}$.}
+  $\mathtt{TrProjCtor}\;\mathit{env}\;0\;[S]\;S\;0\;(\mathrm{bvar}\;0)\;(S.\mathrm{rec}\,[1]\;M_0\;\mathit{sel}_0\;(\mathrm{bvar}\;0))\;S.\mathrm{mk}\;[]\;\mathit{uss}\;[]\;0\;[A,A]$
+  holds: every clause of \ref{struct:trprojctor} is discharged. The term is an
+  anonymous constructor: \texttt{pat} from the registered rule of
+  \ref{fam:projinhabit-plain-lookups}, \texttt{params\_length}, \texttt{ctor},
+  \texttt{minor\_arity} and \texttt{eq} by \texttt{rfl} (with \texttt{CtorHeaded} by
+  \texttt{decide}), \texttt{field\_lt} by \texttt{decide}, \texttt{major\_ty} by \texttt{bvar}, and
+  \texttt{fn\_ty} from \ref{fam:projinhabit-plain-typing}.
+  \reviewnote{This is the real content of the file: it shows \texttt{TrProjCtor} is not vacuous.
+  It does \emph{not} show that a kernel-accepted projection yields one; that is the
+  \texttt{sorry}-ed \ref{thm:vtc-inferproj-struct}.}
+\end{example}
+
+\begin{example}[The same for field 1, and the packaged \texttt{TrProj}]
+  \label{thm:projinhabit-plain-inhab1}
+  \lean{Lean4Lean.Tests.ProjInhabit.Plain.inhab1, Lean4Lean.Tests.ProjInhabit.Plain.trProj0}
+  \leanok
+  \uses{thm:projinhabit-plain-inhab0, def:trproj}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{164}
+  \thesisref{no counterpart; a second instance of the same shape.}
+  \texttt{inhab1} is the structure update $\{\;\mathtt{inhab0}\;\mathtt{with}\;
+  \mathtt{field\_lt},\,\mathtt{fn\_ty},\,\mathtt{eq}\;\}$: the second field of the same structure,
+  whose type also does not mention the first, so the motive is again constant. \texttt{trProj0}
+  packs \texttt{inhab0} into the existential \texttt{TrProj} (\ref{def:trproj}).
+  \reviewnote{Asymmetric with the \texttt{Dependent} namespace, which packages \texttt{trProjDep1}
+  but not \texttt{trProjDep0}; neither \texttt{trProj1} nor \texttt{trProjDep0} exists.}
+\end{example}
+
+\section{The model side: a structure with a dependent motive}
+
+The \texttt{Dependent} namespace is the interesting half. To type the second selector at the minor
+type $\forall a\,b,\;M_{21}\,(\mathrm{mk}\;a\;b)$ one must show
+$B\,a \equiv B\,(P_0\,(\mathrm{mk}\;a\;b))$, that is, that the \emph{first} projection computes on
+the generic constructor spine. That is where the registered $\iota$ rule is actually fired.
+
+\begin{example}[A hand-built Sigma-shaped block]
+  \label{def:projinhabit-dep-block}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.Bc, Lean4Lean.Tests.ProjInhabit.Dependent.Bx, Lean4Lean.Tests.ProjInhabit.Dependent.BTy, Lean4Lean.Tests.ProjInhabit.Dependent.ctorTy2, Lean4Lean.Tests.ProjInhabit.Dependent.motiveTy2, Lean4Lean.Tests.ProjInhabit.Dependent.motiveTy2', Lean4Lean.Tests.ProjInhabit.Dependent.minorTy2, Lean4Lean.Tests.ProjInhabit.Dependent.recTy2, Lean4Lean.Tests.ProjInhabit.Dependent.ruleRhs2, Lean4Lean.Tests.ProjInhabit.Dependent.decl2, Lean4Lean.Tests.ProjInhabit.Dependent.env0?, Lean4Lean.Tests.ProjInhabit.Dependent.env, Lean4Lean.Tests.ProjInhabit.Dependent.env0_isSome}
+  \leanok
+  \uses{def:ind-add-induct, struct:vinductdecl, def:venv-basic}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{181}
+  \thesisref{axioms.tex \S2.6.1, inductive specifications.}
+  The same construction for $S_2:\mathrm{Sort}\;1$ with constructor
+  $S_2.\mathrm{mk} : (a{:}A)\to B\,a\to S_2$, over an environment that also declares
+  $B : A\to\mathrm{Sort}\;1$. The second field's type mentions the first, which is what forces the
+  dependent motive $\lambda x.\,B\,(P_0\,x)$ and hence the $\iota$ step below.
+  \reviewnote{Near-verbatim duplication of the \texttt{Plain} namespace: the same block
+  construction re-declared, mostly with a \texttt{2} suffix. Untracked near-copies of both namespaces also live in
+  \texttt{review-artifacts/inhabitation/}.}
+\end{example}
+
+\begin{example}[Constant lookups and the iota rule for the dependent block]
+  \label{fam:projinhabit-dep-lookups}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hA, Lean4Lean.Tests.ProjInhabit.Dependent.hB, Lean4Lean.Tests.ProjInhabit.Dependent.hS2, Lean4Lean.Tests.ProjInhabit.Dependent.hmk2, Lean4Lean.Tests.ProjInhabit.Dependent.hrec2, Lean4Lean.Tests.ProjInhabit.Dependent.hclosed2, Lean4Lean.Tests.ProjInhabit.Dependent.patKey2, Lean4Lean.Tests.ProjInhabit.Dependent.rhsPair2, Lean4Lean.Tests.ProjInhabit.Dependent.hpats2}
+  \leanok
+  \uses{def:projinhabit-dep-block, def:pattern-iota-rhs, inductive:simple-pattern, struct:venv}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{215}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  As in \ref{fam:projinhabit-plain-lookups}: five \texttt{rfl} lookups, closedness of the template
+  by \texttt{decide}, and the registered $\iota$ entry at the key
+  $\mathtt{iota}\;S_2.\mathrm{rec}\;2\;S_2.\mathrm{mk}\;2$.
+\end{example}
+
+\begin{example}[The dependent expansion terms]
+  \label{def:projinhabit-dep-expansion}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.uss, Lean4Lean.Tests.ProjInhabit.Dependent.rec2C, Lean4Lean.Tests.ProjInhabit.Dependent.M20, Lean4Lean.Tests.ProjInhabit.Dependent.sel20, Lean4Lean.Tests.ProjInhabit.Dependent.sel21, Lean4Lean.Tests.ProjInhabit.Dependent.P0', Lean4Lean.Tests.ProjInhabit.Dependent.M21, Lean4Lean.Tests.ProjInhabit.Dependent.P1', Lean4Lean.Tests.ProjInhabit.Dependent.minorTyM20, Lean4Lean.Tests.ProjInhabit.Dependent.minorTyM21}
+  \leanok
+  \uses{def:proj-fn, def:proj-motive-body, def:proj-motive-body-of, def:projinhabit-dep-block}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{231}
+  \thesisref{Wtypes.tex \S5.1, $\pi_2\,p:\beta[\pi_1\,p/x]$.}
+  $P_0$ with the constant motive $M_{20}=\lambda x{:}S_2.\,A$, and $P_1$ with the \emph{dependent}
+  motive $M_{21}=\lambda x.\,B\,(P_0\,x)$. Four anonymous examples check by \texttt{decide} that
+  \ref{def:proj-fn} and \ref{def:proj-motive-body} at $i=0,1$ are exactly these terms, that is,
+  that the de Bruijn bookkeeping of \ref{def:proj-motive-body-of} ($\mathrm{liftN}\;1\;i$ followed
+  by $\mathrm{instFields}$ with each $P_j$ lifted past $x$) really produces
+  $\lambda x.\,B\,(P_0\,x)$.
+\end{example}
+
+\begin{example}[The level-instantiated iota template and its reduction stages]
+  \label{def:projinhabit-dep-template}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.T, Lean4Lean.Tests.ProjInhabit.Dependent.bodyT, Lean4Lean.Tests.ProjInhabit.Dependent.inner3, Lean4Lean.Tests.ProjInhabit.Dependent.T1, Lean4Lean.Tests.ProjInhabit.Dependent.T2, Lean4Lean.Tests.ProjInhabit.Dependent.T3, Lean4Lean.Tests.ProjInhabit.Dependent.T5}
+  \leanok
+  \uses{def:instl, def:projinhabit-dep-block}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{248}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  $T$ is the rule template level-instantiated at $[l_1]$ (checked by \texttt{decide}), and
+  $\mathit{bodyT}$, $\mathit{inner3}$, $T_1$, $T_2$, $T_3$, $T_5$ name the intermediate terms of
+  the six-step $\beta$-reduction of $T\;M_{20}\;\mathit{sel}_{20}\;a\;b$.
+  \reviewnote{The numbering skips $T_4$ and there is no \texttt{hc4}, but neither is a gap: only
+  the $\lambda$-headed intermediates get a name, and the reduct of $\beta_4$ is the application
+  $\mathit{sel}_{20}\,a\,b$; \texttt{hbeta4} and \texttt{hbeta6} are stated on the full spine
+  already, so they need no congruence wrapper.}
+\end{example}
+
+\begin{example}[Basic typings for the dependent block]
+  \label{fam:projinhabit-dep-basic-typing}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.lvl1WF, Lean4Lean.Tests.ProjInhabit.Dependent.hAt, Lean4Lean.Tests.ProjInhabit.Dependent.hBt, Lean4Lean.Tests.ProjInhabit.Dependent.hS2t, Lean4Lean.Tests.ProjInhabit.Dependent.hmk2t, Lean4Lean.Tests.ProjInhabit.Dependent.hrec2t, Lean4Lean.Tests.ProjInhabit.Dependent.hBxt, Lean4Lean.Tests.ProjInhabit.Dependent.hmk2spine, Lean4Lean.Tests.ProjInhabit.Dependent.hM20, Lean4Lean.Tests.ProjInhabit.Dependent.hbody20, Lean4Lean.Tests.ProjInhabit.Dependent.hsel20nat, Lean4Lean.Tests.ProjInhabit.Dependent.hminorEq20, Lean4Lean.Tests.ProjInhabit.Dependent.hsel20M, Lean4Lean.Tests.ProjInhabit.Dependent.hstep20, Lean4Lean.Tests.ProjInhabit.Dependent.hbetax20, Lean4Lean.Tests.ProjInhabit.Dependent.hM21body, Lean4Lean.Tests.ProjInhabit.Dependent.hM21, Lean4Lean.Tests.ProjInhabit.Dependent.hredex}
+  \leanok
+  \uses{def:isdefeq, def:projinhabit-dep-expansion}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{262}
+  \thesisref{no counterpart; instance-level typing bookkeeping.}
+  The constant typings, the generic constructor spine
+  $\Gamma,a{:}A,b{:}B\,a \vdash \mathrm{mk}\;a\;b : S_2$, the pieces of $P_0$'s typing (motive,
+  selector at its natural type and at the minor type, the partial application of the recursor), the
+  typing of the dependent motive $M_{21}$, and the well-typedness of the redex
+  $P_0\,(\mathrm{mk}\;a\;b)$. All are term-mode \texttt{IsDefEq} constructors, as in \texttt{Plain}.
+\end{example}
+
+\begin{example}[Typing of the first projection function]
+  \label{thm:projinhabit-dep-hp0ty}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hP0ty}
+  \leanok
+  \uses{fam:projinhabit-dep-basic-typing, def:isdefeq}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{316}
+  \thesisref{step (c) of the derivation at \srcloc{Lean4Lean/Theory/Proj.lean}{49}.}
+  $\mathit{env} \vdash_\Gamma P_0 : \forall x{:}S_2,\,A$ in any context: the constant-motive case,
+  which is the prerequisite for the dependent motive of field 1 to be well formed. The proof is
+  \texttt{defeqDF} of $\texttt{forallEDF}\;\mathtt{hS2t}\;\mathtt{hbetax20}$ onto
+  $\texttt{appDF}\;\mathtt{hstep20}\;\mathtt{hsel20M}$.
+\end{example}
+
+\begin{example}[The iota pattern matches the first projection of the spine]
+  \label{thm:projinhabit-dep-hmatch}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hmatch}
+  \leanok
+  \uses{inductive:pattern-matches, def:pattern-iota-rhs, fam:projinhabit-dep-lookups}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{337}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  There is an assignment $m_2$ with
+  $\mathit{patKey}_2.\mathrm{Matches}\;(P_0\,(\mathrm{mk}\;a\;b))\;[l_1]\;m_2$ whose reduct
+  $\mathit{rhsPair}_2.1.\mathrm{apply}$ is the template applied to the matched arguments,
+  $T\;M_{20}\;\mathit{sel}_{20}\;(\mathrm{bvar}\;1)\;(\mathrm{bvar}\;0)$. The proof refines with
+  the explicit derivation
+  $\mathtt{.app\ (.var\ (.var\ .const))\ (.var\ (.var\ .const))}$ and closes by \texttt{rfl}.
+  \reviewnote{A good concrete illustration of the pattern machinery; the closing \texttt{rfl} is a
+  nontrivial kernel computation over the reduct's \texttt{RHS.apply}.}
+\end{example}
+
+\begin{example}[The iota step on the generic constructor spine]
+  \label{thm:projinhabit-dep-hiota}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hiota}
+  \leanok
+  \uses{rule:isdefeq-pat, thm:projinhabit-dep-hmatch, fam:projinhabit-dep-basic-typing, fam:projinhabit-dep-lookups}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{344}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  $\mathit{env} \vdash_{\Gamma,a{:}A,b{:}B\,a} P_0\,(\mathrm{mk}\;a\;b) \equiv T\;M_{20}\;\mathit{sel}_{20}\;a\;b : A$.
+  The proof obtains the
+  match of \ref{thm:projinhabit-dep-hmatch}, fires \texttt{VEnv.IsDefEq.pat}
+  (\ref{rule:isdefeq-pat}) at the registered rule with the redex's typing, empty side conditions,
+  and rewrites by the computed reduct.
+  \reviewnote{This is the one place in the whole group where the model's $\iota$ rule is actually
+  fired; everything else is $\beta$ and conversion.}
+\end{example}
+
+\begin{example}[Step-by-step reduction of the iota reduct]
+  \label{fam:projinhabit-dep-beta-chain}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hbvarC, Lean4Lean.Tests.ProjInhabit.Dependent.hCapp, Lean4Lean.Tests.ProjInhabit.Dependent.hminorTy2wf, Lean4Lean.Tests.ProjInhabit.Dependent.hbvarM, Lean4Lean.Tests.ProjInhabit.Dependent.hmSpine1, Lean4Lean.Tests.ProjInhabit.Dependent.hmSpine2, Lean4Lean.Tests.ProjInhabit.Dependent.hbodyT, Lean4Lean.Tests.ProjInhabit.Dependent.hbeta1, Lean4Lean.Tests.ProjInhabit.Dependent.hc1, Lean4Lean.Tests.ProjInhabit.Dependent.hbvarM', Lean4Lean.Tests.ProjInhabit.Dependent.hmSpine1', Lean4Lean.Tests.ProjInhabit.Dependent.hmSpine2', Lean4Lean.Tests.ProjInhabit.Dependent.hinner3, Lean4Lean.Tests.ProjInhabit.Dependent.hbeta2, Lean4Lean.Tests.ProjInhabit.Dependent.hc2, Lean4Lean.Tests.ProjInhabit.Dependent.hinnerT2, Lean4Lean.Tests.ProjInhabit.Dependent.hbeta3, Lean4Lean.Tests.ProjInhabit.Dependent.hc3, Lean4Lean.Tests.ProjInhabit.Dependent.hbeta4, Lean4Lean.Tests.ProjInhabit.Dependent.hbeta5, Lean4Lean.Tests.ProjInhabit.Dependent.hc5, Lean4Lean.Tests.ProjInhabit.Dependent.hbeta6}
+  \leanok
+  \uses{def:isdefeq, def:projinhabit-dep-template}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{353}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  Twenty-two lemmas typing every intermediate term and every congruence of the reduction
+  $T\;M_{20}\;\mathit{sel}_{20}\;a\;b \to^{*} a$: each $\beta$ step needs its body typed under its
+  binder (\texttt{hbodyT}, \texttt{hinner3}, \texttt{hinnerT2}) and each congruence re-applies
+  \texttt{appDF} at the current type. Only \texttt{beta}, \texttt{appDF}, \texttt{lamDF},
+  \texttt{forallEDF} and \texttt{bvar} are used, with no tactics.
+  \reviewnote{Very verbose, twenty-two declarations for six $\beta$ steps, because \texttt{IsDefEq}
+  has no \texttt{betaN} or \texttt{whnf} combinator usable here: \texttt{VEnv.IsDefEqU.betaN}
+  exists (\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{994}, added on the same branch) but
+  needs \texttt{VEnv.WF}, which these hand-built environments do not have.}
+\end{example}
+
+\begin{example}[The first projection computes on the spine]
+  \label{thm:projinhabit-dep-hproj0red}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hproj0red}
+  \leanok
+  \uses{thm:projinhabit-dep-hiota, fam:projinhabit-dep-beta-chain, def:isdefeq}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{485}
+  \thesisref{axioms.tex \S2.6.4, the computation rule (iota reduction).}
+  $\mathit{env} \vdash_{\Gamma,a{:}A,b{:}B\,a} P_0\,(\mathrm{mk}\;a\;b) \equiv a : A$: the full
+  $\iota$ and $\beta$ chain. The proof is seven \texttt{trans} steps chaining
+  \ref{thm:projinhabit-dep-hiota}, the congruences \texttt{hc1}, \texttt{hc2}, \texttt{hc3},
+  \texttt{hc5} (two of them re-typed by \texttt{defeqDF hbody20}) and the $\beta$ steps
+  \texttt{hbeta4} and \texttt{hbeta6}. This is the model-side counterpart of the kernel
+  \texttt{whnf} check inside \ref{def:projshape-checkproj}.
+\end{example}
+
+\begin{example}[The typing premise for the dependent field]
+  \label{thm:projinhabit-dep-hp1ty}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.hP1ty, Lean4Lean.Tests.ProjInhabit.Dependent.hsel21nat, Lean4Lean.Tests.ProjInhabit.Dependent.hbody21, Lean4Lean.Tests.ProjInhabit.Dependent.hbodyEq21, Lean4Lean.Tests.ProjInhabit.Dependent.hminorEq21, Lean4Lean.Tests.ProjInhabit.Dependent.hsel21M, Lean4Lean.Tests.ProjInhabit.Dependent.hstep21, Lean4Lean.Tests.ProjInhabit.Dependent.hbetax21}
+  \leanok
+  \uses{thm:projinhabit-dep-hproj0red, def:isdefeq, def:projinhabit-dep-expansion}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{531}
+  \thesisref{step (b) of the derivation at \srcloc{Lean4Lean/Theory/Proj.lean}{45};
+  Wtypes.tex \S5.1, $\pi_2\,p:\beta[\pi_1\,p/x]$.}
+  $\mathit{env} \vdash_\Gamma P_1 : \forall x{:}S_2,\;B\,(P_0\,x)$. The second selector has natural
+  type $\forall a\,b,\;B\,a$; converting it to the minor type
+  $\forall a\,b,\;M_{21}\,(\mathrm{mk}\;a\;b)$ requires exactly
+  $B\,a \equiv B\,(P_0\,(\mathrm{mk}\;a\;b))$, obtained from \ref{thm:projinhabit-dep-hproj0red}
+  under an \texttt{appDF} congruence (\texttt{hbodyEq21}); then \texttt{forallEDF} and
+  \texttt{defeqDF} give the minor typing, \texttt{appDF} applies the recursor, and a final
+  \texttt{defeqDF} by $\beta$ at the major gives the dependent typing.
+  \reviewnote{This is the technical heart of the projection design: it mechanises, on an instance,
+  the claim that the dependent motive is typable using only $\beta$ and the registered $\iota$ rule
+  --- no structure eta, no K-like reduction, no injectivity.}
+\end{example}
+
+\begin{example}[\texttt{TrProjCtor} and \texttt{TrProj} for both fields of the dependent block]
+  \label{thm:projinhabit-dep-inhab}
+  \lean{Lean4Lean.Tests.ProjInhabit.Dependent.inhabDep0, Lean4Lean.Tests.ProjInhabit.Dependent.inhabDep1, Lean4Lean.Tests.ProjInhabit.Dependent.trProjDep1}
+  \leanok
+  \uses{struct:trprojctor, def:trproj, thm:projinhabit-dep-hp0ty, thm:projinhabit-dep-hp1ty, fam:projinhabit-dep-lookups}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{538}
+  \thesisref{typesys.tex \S3.1, the projection $\mathrm{inv}_x$ of $\mathrm{acc}\,x$ through
+  $\mathrm{rec}_{\mathrm{acc}}$.}
+  \texttt{inhabDep0} and \texttt{inhabDep1} inhabit
+  $\mathtt{TrProjCtor}\;\mathit{env}\;0\;[S_2]\;S_2\;i\;(\mathrm{bvar}\;0)\;(P_i\,(\mathrm{bvar}\;0))\;S_2.\mathrm{mk}\;[]\;\mathit{uss}\;[]\;0\;[A, B\,a]$,
+  the second with
+  the dependent motive; \texttt{trProjDep1} packs the latter into \texttt{TrProj}. The proofs are
+  anonymous constructors as in \ref{thm:projinhabit-plain-inhab0}, with \texttt{fn\_ty} taken from
+  \ref{thm:projinhabit-dep-hp0ty} and \ref{thm:projinhabit-dep-hp1ty}.
+  \reviewnote{Together with \ref{thm:projinhabit-plain-inhab0} and
+  \ref{thm:projinhabit-plain-inhab1} these are the only evidence that \texttt{TrProjCtor} is
+  satisfiable. They cover a constant and a dependent motive, but not: parameters ($np=0$ in both),
+  a non-trivial $usS$, a per-field $uss$, or more than two fields, so
+  \ref{fam:proj-fn-subst} never meets a non-trivial instance in any test.}
+\end{example}
+
+\begin{example}[Axiom profile of the witnesses and of projection reduction]
+  \label{test:projinhabit-axioms}
+  \leanok
+  \uses{thm:tr-env-proj-defeq, thm:wf-patsstrong, thm:projinhabit-dep-inhab, thm:projinhabit-plain-inhab0}
+  \contrib{trproj}\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{562}
+  \thesisref{no counterpart; a trust-boundary guard.}
+  Five \texttt{\#guard\_msgs in \#print axioms} blocks. The four witnesses
+  (\texttt{Plain.inhab0}, \texttt{Plain.inhab1}, \texttt{Dependent.inhabDep0},
+  \texttt{Dependent.inhabDep1}) depend only on \texttt{[propext, Quot.sound]}: they are sorry-free.
+  The fifth pins the axiom list of \texttt{Lean4Lean.TrEnv.proj\_defeq}
+  (\ref{thm:tr-env-proj-defeq}), which includes \texttt{sorryAx}, plus three
+  \texttt{Lean.PersistentHashMap} axioms from the kernel environment lemmas. This, and not a
+  literal \texttt{sorry}, is where the module records its dependence on open obligations: the file
+  is sorry-free, but the theorem it is evidence for is not.
+  \axfoot{sorryAx, reached through \texttt{VEnv.WF.orderedStrong} from \texttt{VEnv.WF.patsStrong}
+  (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}); also propext, Classical.choice,
+  Quot.sound and three \texttt{Lean.PersistentHashMap} axioms.}
+  \reviewnote{Hardcoding the full seven-element axiom list makes the guard brittle: any unrelated
+  upstream proof that gains or loses an axiom forces an edit here. And the prose attribution of the
+  \texttt{sorryAx} to unique typing, $\Pi$-injectivity and \texttt{VEnv.WF.patsStrong} is a claim
+  the guard cannot check; the axiom census traces the dependency only through
+  \texttt{VEnv.WF.orderedStrong} to \texttt{VEnv.WF.patsStrong}, the one literal \texttt{sorry}
+  involved. This node carries no \texttt{\textbackslash lean} link because a
+  \texttt{\#guard\_msgs} block declares no constant; the theorem the fifth block pins belongs to
+  Chapter~\ref{chap:trenv} (\ref{thm:tr-env-proj-defeq}).}
+\end{example}
+
+\section{Contribution summary}
+
+Two contributions meet in this group, and the whole of it is contributed. The \texttt{trproj}
+branch adds \texttt{Lean4Lean/Theory/Proj.lean} in full. Its content is one design decision and
+its consequences: a kernel projection is not a new node of \texttt{VExpr} (\ref{ind:vexpr}) but an
+application of the recursor the kernel already generates for the structure. That buys a great
+deal. \texttt{IsDefEq} (\ref{def:isdefeq}) gains no rule, so no metatheory has to be redone, and a
+projection computes because the structure's $\iota$ rule computes, not because a projection rule
+was added. The expansion is spelled out by \ref{def:proj-field-selector} through
+\ref{def:proj-fn}, its type by \ref{def:proj-motive-body} and \ref{def:proj-ty}, and the
+de Bruijn metatheory those builders need by \ref{fam:proj-foldr-lam} through
+\ref{fam:proj-motivebody-subst}, all stated once against \texttt{Subst} (\ref{def:subst}) and
+specialised to weakening and instantiation afterwards.
+
+It connects downstream at three points. \texttt{TrProjCtor} (\ref{struct:trprojctor}) in
+Chapter~\ref{chap:trexpr} is the consumer: its \texttt{eq} clause is \ref{def:proj-fn}, its
+\texttt{fn\_ty} clause is \ref{def:proj-motive-body}, its \texttt{ctor} clause is
+\ref{def:proj-inst-pis} and its \texttt{minor\_arity} clause is \ref{def:proj-binder-arity}. The
+four forms of \ref{fam:proj-fn-subst} are exactly what \texttt{TrProj.weak'},
+\texttt{TrProj.instN} and \texttt{TrProj.instL} consume. And
+\ref{thm:proj-instfields-minor-spine}, with \ref{thm:proj-instfields-bvar} beneath it, is the
+arithmetic \texttt{TrEnv.proj\_defeq} (\ref{thm:tr-env-proj-defeq}) needs to compute the $\iota$
+reduct of a structure's rule. The same branch adds the three modules that make the design
+falsifiable: \ref{def:projshape-checkproj} confronts the expansion with the real Lean kernel on
+eleven structure-and-field pairs, and \ref{thm:projinhabit-plain-inhab0},
+\ref{thm:projinhabit-plain-inhab1} and \ref{thm:projinhabit-dep-inhab} inhabit
+\texttt{TrProjCtor}, the last of these resting on \ref{thm:projinhabit-dep-hp1ty}, which
+mechanises on an instance the claim that the dependent motive is typable using only $\beta$ and a
+registered $\iota$ rule.
+
+The \texttt{iota} branch contributes the two specification tests.
+\ref{fam:shapedecide-deceq} through \ref{fam:shapedecide-shapes} make every syntactic predicate of
+Chapter~\ref{chap:inductive} executable without moving it out of \texttt{Prop} in the library, and
+\ref{def:iotashape-ruleshapeat} through \ref{test:iotashape-run} decide every \emph{syntactic}
+clause of \ref{structure:ind-wf} on the kernel's own data, compare the model's $\iota$ reduct with the
+executable kernel's on twelve rules (\ref{def:iotashape-checkiota}, sound by
+\ref{thm:iotashape-matchpat-sound}), and supply the negative controls
+(\ref{thm:iotashape-positivity}, \ref{thm:iotashape-twoctorprop}) that make the specification look
+tight rather than merely satisfiable. The \texttt{trproj} contribution to those two files is
+fifteen lines: eleven in \texttt{Tests/ShapeDecide.lean} (the head-constructor tests of
+\ref{fam:shapedecide-head}, which \texttt{TrProjCtor.ctor} needs, and the \texttt{some} branch of
+the option instance), and four in \texttt{Tests/IotaShape.lean} (the constant-application guard
+inside \texttt{checkIotaAuto} and one minor-premise control in \ref{test:iotashape-run}).
+
+What remains open is the bridge from the kernel. \texttt{inferProj.WF\_struct}
+(\ref{thm:vtc-inferproj-struct}) is \texttt{sorry}, so nothing yet shows that a kernel-accepted
+projection yields a \texttt{TrProjCtor}; the general construction exists as a fifteen-line
+informal derivation in the module docstring of \texttt{Theory/Proj.lean} and is mechanised only on
+the two hand-built instances of \ref{def:projinhabit-plain-block} and
+\ref{def:projinhabit-dep-block}, whose environments are never shown well formed. \ref{def:proj-ty}
+is not connected to \ref{def:proj-motive-body} by any lemma. The witnesses cover neither
+parameters nor a non-trivial per-field level list, so \ref{fam:proj-fn-subst} is never exercised
+on a non-trivial instance. Structure eta is outside what this representation can express, and the
+docstring says so. On the \texttt{iota} side, nothing derives \ref{structure:ind-wf} from the
+repository's own inductive checker, so \ref{test:iotashape-run} remains evidence about the
+specification rather than a proof about it.
+
+\section{Review notes}
+\label{sec:proj-review}
+
+\begin{itemize}
+\item \textbf{Medium.} \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{398}: the whole
+projection story rests on \texttt{inferProj.WF\_struct} (\ref{thm:vtc-inferproj-struct}), which is
+\texttt{sorry}. Its proof exists as a fifteen-line informal derivation in the module docstring of
+\srcloc{Lean4Lean/Theory/Proj.lean}{38} and is mechanised only on the two instances of
+\texttt{Tests/ProjInhabit.lean}. Nothing in the development shows that a kernel-accepted
+projection yields a \texttt{TrProjCtor}, so \texttt{TrExprS.proj} is never inhabited from a real
+term.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Proj.lean}{127}: \texttt{VExpr.projTy}
+(\ref{def:proj-ty}) has no consumer in the library, only
+\srcloc{Lean4Lean/Tests/ProjShape.lean}{178}, and the identity its docstring asserts,
+$\mathrm{projTy}\dots e=(\mathrm{projMotiveBody}\dots i).\mathrm{inst}\;e$, is never proved. The
+model types a projection through \ref{def:proj-motive-body}, so the definition the prose uses to
+explain \texttt{inferProj} is formally disconnected from the one \texttt{TrProjCtor.fn\_ty} uses.
+The confusion is visible in the test: the module docstring and the error message at
+\srcloc{Lean4Lean/Tests/ProjShape.lean}{114} say the kernel comparison checks \texttt{projTy},
+while the type actually handed to the kernel is built from \texttt{projMotiveBody}.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{49}: \texttt{VEnv.addInduct}
+(\srcloc{Lean4Lean/Theory/Inductive.lean}{316}) checks only name clashes and closedness of the
+rule reducts, never well-formedness, and neither
+$\mathtt{VInductDecl.WF}\;\mathit{decl}\;\mathit{env}$ nor $\mathit{env}.\mathtt{WF}$ is ever
+proved for the two hand-built environments. The witnesses therefore establish that the premises of
+\ref{struct:trprojctor} are simultaneously satisfiable, not that they are satisfiable in a
+well-formed environment; in particular \ref{thm:tr-env-proj-defeq}, which needs a \texttt{TrEnv},
+is not exercised end to end on them.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{70}: both blocks set
+$\mathit{uss}$ to the constant $\lambda\_.\,[l_1]$ and both have no parameters
+($np=0$, $usS=[]$). The per-field level list, which is the reason \ref{def:proj-fn} and
+\ref{def:proj-fns} take $uss$ as a function at all and the case the module docstring highlights
+($\mathrm{Sigma.fst}$ at $u+1$ against $\mathrm{Sigma.snd}$ at $v+1$), is exercised only on the
+kernel side (\srcloc{Lean4Lean/Tests/ProjShape.lean}{126}). So \ref{fam:proj-fn-subst} never meets
+a non-trivial instance in any test.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjShape.lean}{136}: the \texttt{Sigma.snd}
+level-list negative control wraps \texttt{checkProj} in \texttt{try \dots catch \_ => pure false},
+so \emph{any} failure inside \texttt{checkProj} (a renamed constant, a \texttt{CtorHeaded}
+failure, a field-count mismatch) makes the control pass vacuously.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjShape.lean}{78}:
+\texttt{(VLevel.ofLevel lps (lvls j)).getD .zero} silently substitutes the zero level when the
+caller passes a level the structure's universe names do not support, so a mistyped test argument
+degrades into a different, possibly still passing, test rather than an error.
+\texttt{toLevel}'s \texttt{ls.getD i .anonymous} (\srcloc{Lean4Lean/Tests/ProjShape.lean}{49}) has
+the same shape.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjShape.lean}{113}: the agreement between
+\ref{def:proj-motive-body} and the kernel's \texttt{inferProj} is checked with \texttt{isDefEq},
+which on the kernel side may use structure eta and projection reduction that the model's
+\texttt{IsDefEq} deliberately lacks. The check is the right one, since the kernel's type mentions
+\texttt{.proj} nodes the model cannot spell, and the module docstring does say \texttt{isDefEq};
+but what it establishes is agreement up to \emph{kernel} conversion, which is strictly weaker than
+anything the model can reproduce.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{586}: the
+\texttt{\#guard\_msgs in \#print axioms} block for \texttt{TrEnv.proj\_defeq} hardcodes a
+seven-element axiom list including \texttt{sorryAx} and three
+\texttt{Lean.PersistentHashMap} axioms. It is brittle, since any unrelated upstream proof change
+forces an edit here, and the prose attribution of the \texttt{sorryAx} to unique typing,
+$\Pi$-injectivity and \texttt{VEnv.WF.patsStrong} is a claim the guard cannot verify.
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Proj.lean}{111}: \ref{def:proj-fns} mentions
+$\mathrm{projFns}\dots i$ twice in its own defining equation, so the expansion of field $i$ is
+exponential in $i$, every motive embedding all earlier projection functions in full, and every
+substitution lemma about it must apply its induction hypothesis twice. An accumulating fold would
+be linear.
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Proj.lean}{195}: \ref{def:proj-inst-fields} is a
+\emph{second} telescope-substitution convention alongside the master \texttt{VExpr.insts}, which
+substitutes at index $0$ once per binder. The section docstring argues convincingly that neither
+is a special case of the other, but no lemma relates them, so the two conventions only ever meet
+through raw \texttt{inst}.
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Proj.lean}{136}: \ref{def:proj-binder-arity} pins
+only the \emph{number} of binders of the recursor's minor premise, not their types, yet its
+docstring and \texttt{TrProjCtor.minor\_arity} read it as ``has exactly the \texttt{nf} fields as
+binders''. The gap is closed in \ref{thm:tr-env-proj-defeq} by the kernel-side structure facts,
+but the documentation overstates what the predicate checks.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{179}: the \texttt{Plain} and
+\texttt{Dependent} namespaces duplicate about twenty near-identical declarations, and
+\texttt{Dependent} subsumes \texttt{Plain} except for the two-fields-of-the-same-type case.
+Untracked near-copies of both live in \texttt{review-artifacts/inhabitation/}.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{172}: the packaging is asymmetric.
+\texttt{Plain} exposes \texttt{trProj0} but no \texttt{trProj1}, while \texttt{Dependent} exposes
+\texttt{trProjDep1} but no \texttt{trProjDep0}, so neither namespace packages both of its fields
+as a \texttt{TrProj}. (The gaps at $T_4$ and \texttt{hc4} in the $\beta$ chain are not defects:
+see \ref{def:projinhabit-dep-template}.)
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{353}: the derivations are correct
+but extremely verbose, twenty-two declarations for a six-step $\beta$-reduction
+(\ref{fam:projinhabit-dep-beta-chain}), because \texttt{IsDefEq} has no \texttt{betaN} combinator
+usable at this level: \texttt{VEnv.IsDefEqU.betaN} needs \texttt{VEnv.WF}, which these hand-built
+environments do not have.
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Proj.lean}{140}: dead or unused code.
+\ref{def:proj-ty} has no library consumer, and \texttt{projMotiveBody\_zero} and
+\texttt{instFields\_nil} are marked \texttt{@[simp]} but are never invoked explicitly anywhere.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/ShapeDecide.lean}{20}: all twenty-two instances of the
+file are \emph{global} \texttt{Decidable} instances, twenty-one of them in the
+\texttt{Lean4Lean.VExpr} namespace and one on \texttt{VInductDecl.LargeElimShape}, declared from a
+\texttt{Tests} module. That is safe today only because nothing in the library imports the module;
+any future library import would silently expose typeclass resolution to these potentially
+expensive decision procedures. The widest of them is not about a library predicate at all:
+\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{27} decides $\exists a,\;o=\mathrm{some}\;a\wedge P\,a$
+for any \texttt{Option} and any decidable $P$. The module docstring explains the placement but not
+this risk.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/IotaShape.lean}{151}: \ref{def:iotashape-checkiota}
+compares \texttt{SimplePattern.iotaRHS} against lean4lean's own \texttt{inductiveReduceRec}
+(\srcloc{Lean4Lean/Inductive/Reduce.lean}{100}), not against Lean's C++ kernel. Both sides of the
+oracle live in this repository, so a shared misreading of the kernel's argument slicing would not
+be detected; the $\iota$ step itself, \texttt{inductiveReduceRecCore}
+(\srcloc{Lean4Lean/Inductive/Reduce.lean}{75}), is the twenty-one lines of that file written on
+\texttt{trproj}.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/IotaShape.lean}{86}: the \texttt{recs\_elim} check of
+\ref{def:iotashape-checkshapes} assumes the recursor's extra universe parameter is at index $0$ of
+its \texttt{levelParams}, which is how Lean generates recursors but is nowhere checked.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/IotaShape.lean}{295}: \texttt{checkBlockRejected}
+(\ref{def:iotashape-blockfailures}) only asks that \emph{some} block clause fail. Which clauses a
+nested block is expected to fail, \texttt{ctors\_positive} and \texttt{recs\_over\_block}, is
+asserted in the docstring and pinned in no test. For \texttt{Tree} the two predicates are checked
+directly (\srcloc{Lean4Lean/Tests/IotaShape.lean}{584}); for the other eight nested blocks the
+returned clause names are discarded.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/IotaShape.lean}{336}: the fixture docstring calls
+\texttt{PropLarge}, \texttt{Wrap} and \texttt{SigmaLike} ``small-eliminating \texttt{Prop}
+inductives''. \texttt{Wrap p}, whose single field is a proof of \texttt{p}, is
+subsingleton-eliminating: \texttt{Wrap.rec} eliminates into $\mathrm{Sort}\;u$ and carries the
+extra universe parameter. Only the wording is wrong; the fixture is in fact the large-eliminating
+case of the three, and is covered by \texttt{checkAll}.
+\item \textbf{Low.} \srcloc{Lean4Lean/Tests/IotaShape.lean}{454}: \ref{test:iotashape-run} is one
+\texttt{run\_meta} block of about 150 lines, so a failure reports only the first mismatch and the
+remaining assertions, including all the negative controls after it, are never reached.
+\item \textbf{Low.} \srcloc{.github/workflows/ci.yml}{25}: the comment states that
+\texttt{Lean4Lean.Tests} is among the \texttt{defaultTargets}, but
+\srcloc{lakefile.toml}{2} lists only \texttt{Lean4Lean}, \texttt{lean4lean},
+\texttt{Lean4Lean.Theory} and \texttt{Lean4Lean.Verify}. The test modules of this chapter are in
+fact built by the separate \texttt{lake build Lean4Lean.Tests} step, so nothing is unchecked, but
+the comment is wrong.
+\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Proj.lean}{1}: the thesis citations attached to the
+projection work are individually accurate but are borrowed idioms rather than inherited results.
+The thesis's $\mathrm{inv}_x$ (typesys.tex \S3.1) is introduced to prove conversion
+\emph{undecidable}, and the $\pi_2$ rule (Wtypes.tex \S5.1) belongs to the W-type system that
+\emph{replaces} general inductives, which lean4lean does not formalise. Neither is a statement
+this development inherits.
+\end{itemize}

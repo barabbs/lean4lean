@@ -1,0 +1,1141 @@
+\chapter{Experimental: reduction and stratification}
+\label{chap:experimental-reduction}
+
+\texttt{Lean4Lean/Experimental/} holds sixteen research modules that are not in the dependency cone
+of anything shipping. Four of them (the logical-relation line) are Chapter~\ref{chap:experimental-logrel};
+the remaining twelve, 6\,321 lines, are this chapter. They fall into two clusters. The
+\emph{\texttt{VExpr} cluster} works over the real model syntax and is an earlier, freestanding copy of
+the Church-Rosser and stratification material: \srcloc{Lean4Lean/Experimental/NormalEq.lean}{1} (513
+lines) and \srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{1} (913 lines), both headed
+\texttt{TODO: remove, this is now part of ChurchRosser.lean}, plus
+\srcloc{Lean4Lean/Experimental/Stratified.lean}{1} (340 lines),
+\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{1} (324 lines) and
+\srcloc{Lean4Lean/Experimental/Stronger.lean}{1} (628 lines). The \emph{\texttt{SExpr} and
+normalization cluster} works over a separate quotiented syntax and over five unfinished semantic
+models: \srcloc{Lean4Lean/Experimental/SExpr.lean}{1} (1\,324 lines),
+\srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{1} (266),
+\srcloc{Lean4Lean/Experimental/StepIndexed.lean}{1} (88),
+\srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{1} (489),
+\srcloc{Lean4Lean/Experimental/DomainTheory.lean}{1} (242),
+\srcloc{Lean4Lean/Experimental/Thierry.lean}{1} (363) and
+\srcloc{Lean4Lean/Experimental/Thierry2.lean}{1} (831).
+
+\emph{Thesis correspondence.} The \texttt{VExpr} cluster is a direct formalization of
+\texttt{unique.tex}: \texttt{NormalEq} is the proof-irrelevance relation $\equiv_p$ of
+\S\texttt{sec:kappa}, \texttt{ParRed} and \texttt{CParRed} are $\gg_\kappa$ and $\ggg_\kappa$ of
+\S\texttt{sec:church\_rosser}, and \texttt{HasType1}/\texttt{IsDefEq1} are one layer of the
+stratification $\vdash_n$ of \S\texttt{sec:unique} that the thesis uses to break the circularity
+between unique typing and Church-Rosser. The shipping counterpart of the first two files is
+\texttt{Theory/Typing/ChurchRosser.lean} (Chapter~\ref{chap:metatheory}); the shipping route to
+unique typing is different (\texttt{HasTypeStratified}, not $\vdash_n$), so
+\texttt{Stratified.lean} has no shipping counterpart at all. The normalization cluster corresponds
+to \texttt{normalization.tex}, which is a 22-line stub ending in the word \texttt{UNFINISHED}; there
+is accordingly nothing to check these files against.
+
+\emph{What the branches contributed.} \texttt{trproj} changed nothing here. \texttt{iota} changed 28
+lines across five files: one field plus one supporting import in \texttt{NormalEq.lean}, eight
+lines in \texttt{ParallelReduction.lean}, nine in \texttt{Stratified.lean}, eight in
+\texttt{StratifiedUntyped.lean} and one in \texttt{Stronger.lean}. Every one of them is the minimum
+needed to keep an unrelated experiment compiling after \texttt{VEnv} grew a \texttt{pats} field
+(\ref{struct:venv}) and \texttt{VEnv.IsDefEq} grew a \texttt{pat} constructor
+(\ref{rule:isdefeq-pat}). \texttt{Lean4Lean.Experimental} is not a \texttt{lake} default target, but
+the CI workflow builds it explicitly, which is what forces the maintenance.
+
+\emph{Assessment.} The one place in this group where real design judgement was required is the
+stratification of the $\iota$ rule's premises in \texttt{IsDefEq1} (\ref{inductive:expb-isdefeq1}),
+and it was made correctly: the typing premise goes to the abstract \texttt{HasType1} parameter, as
+\texttt{beta}/\texttt{eta}/\texttt{proofIrrel} do, while the side-condition premises stay recursive,
+as \texttt{appDF}/\texttt{trans} do; the pair \ref{thm:expb-induction1} and
+\ref{thm:expb-isdefeq1-induction} shows the new rule round-trips. Everything else falls into three
+groups: the \texttt{Typing.pat\_env} field and the \texttt{pat} case of
+\texttt{VEnv.IsDefEqU.church\_rosser} (\ref{thm:expb-isdefequ-church-rosser}) are verbatim duplicates
+of code the branch already wrote in \texttt{ChurchRosser.lean}; \texttt{StratifiedUntyped.lean}
+repeats the same stratification decision a second time for the type-erased judgment rather than
+making a fresh one; and \texttt{VEnv.IsDefEq.toTyping}'s \texttt{pat} case
+(\ref{thm:expb-todyping}) and the \texttt{pats \_ \_ := False} stub in \texttt{Stronger.lean}, a file
+that dead-ends, are neither a duplicate nor a repeated decision, just the minimum glue needed to keep
+each file compiling. None of the 28 lines carries a comment, and
+almost all of them land on ground that was already unproved before the branch: this chapter contains
+one file-local \texttt{sorry} in each of \texttt{Stratified.lean} and \texttt{StratifiedUntyped.lean},
+two in \texttt{ParallelReduction.lean}, four in \texttt{Stronger.lean} and thirty in
+\texttt{SExpr.lean}, all of them master. Two files, \texttt{Thierry.lean} and \texttt{Thierry2.lean},
+declare \texttt{axiom mySorry : $\alpha$} and are therefore inconsistent by construction.
+
+\section{The abstract typing interface and proof irrelevance}
+
+\begin{definition}[Pointwise definitionally-equal contexts, \texttt{IsDefEqCtx}]
+\label{inductive:expb-isdefeqctx}
+\lean{Lean4Lean.IsDefEqCtx}
+\leanok
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{11}
+For a fixed relation \texttt{IsDefEqU} and prefix $\Gamma_0$, \texttt{IsDefEqCtx IsDefEqU} $\Gamma_0\,
+\Gamma_1\,\Gamma_2$ is generated by \texttt{zero}, which relates $\Gamma_0$ to itself, and
+\texttt{succ}, which extends a related pair $\Gamma_1,\Gamma_2$ by hypotheses $A_1, A_2$ with
+\texttt{IsDefEqU} $\Gamma_1\,A_1\,A_2$. It is the context-conversion relation used by the
+\texttt{DFC} lemmas below.
+\end{definition}
+
+\begin{definition}[Abstract typing interface \texttt{Typing}, with the $\iota$-rule field]
+\label{structure:expb-typing}
+\lean{Lean4Lean.Typing, Lean4Lean.Typing.pat_env, Lean4Lean.Typing.HasType}
+\leanok
+\uses{ind:vexpr, struct:venv, inductive:pattern-core, inductive:pattern-rhs, inductive:expb-isdefeqctx}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/NormalEq.lean}{20}
+\thesisref{unique.tex \S\texttt{sec:kappa} and \S\texttt{sec:church\_rosser}: the properties assumed
+of $\vdash_n$ before the Church-Rosser argument is run.}
+\texttt{Typing} is a record bundling an environment \texttt{env}, a universe count, a typed relation
+$\Gamma\vdash e_1\equiv e_2 : A$ and its erased form $\Gamma\vdash e_1\equiv e_2$, together with
+every property the Church-Rosser argument needs: congruence and structural rules, $\beta$, $\eta$,
+proof irrelevance, weakening and its inverse, substitution, level instantiation, context conversion
+(\texttt{isDefEq\_DFC}), regularity (\texttt{has\_type}, \texttt{is\_type}), head inversions
+(\texttt{bvar\_inv}, \texttt{sort\_inv}, \texttt{const\_inv}, \texttt{forallE\_inv},
+\texttt{app\_inv}, \texttt{lam\_inv}), unique typing (\texttt{uniq}) and definitional inversion
+(\texttt{univ\_defInv}, \texttt{forallE\_defInv}). It also carries an abstract family
+\texttt{Pat p r} of reduction rules with their regularity (\texttt{pat\_wf}), uniqueness
+(\texttt{pat\_uniq}), neutrality (\texttt{pat\_onArgs}) and a realization
+\texttt{extra\_pat} of definitional axioms by patterns. The \texttt{iota} branch adds the field
+\texttt{pat\_env : env.pats p r} $\to$ \texttt{Pat p r}, saying that every reduction rule registered
+in the environment is one of the abstract rules. \texttt{Typing.HasType} abbreviates the reflexive
+instance of the typed relation.
+\reviewnote{No term of type \texttt{Lean4Lean.Typing} exists anywhere in the repository, so the new
+obligation is never discharged here; its real counterpart is the class field
+\texttt{VEnv.Params.pat\_env} (\ref{axiom:cr-params-pat-env}), which is discharged with
+\texttt{pat\_env := id}. Unlike that one, this field has no docstring.}
+\end{definition}
+
+\begin{lemma}[Pattern-side helpers for the interface]
+\label{family:expb-normaleq-pattern-aux}
+\lean{Lean4Lean.Typing.symm_ctx, Lean4Lean.Typing.IsDefEqU.weakN, Lean4Lean.Typing.IsDefEq.weakN, Lean4Lean.Typing.IsDefEqU.instN, Lean4Lean.Typing.IsDefEq.instN, Lean4Lean.Pattern.Check.OK.weakN, Lean4Lean.Pattern.Check.OK.instN, Lean4Lean.Typing.IsDefEqU.apply_pat, Lean4Lean.Pattern.Matches.hasType}
+\leanok
+\uses{structure:expb-typing, inductive:pattern-rhs, inductive:pattern-matches}
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{104}
+\texttt{symm\_ctx} symmetrises \texttt{IsDefEqCtx}; the four \texttt{weakN}/\texttt{instN} lemmas
+unpack the corresponding interface fields; \texttt{Check.OK.weakN} and \texttt{Check.OK.instN}
+transport the side-condition predicate of a pattern rule through weakening and substitution;
+\texttt{IsDefEqU.apply\_pat} says that instantiating a rule right-hand side at pointwise
+definitionally equal metavariable assignments gives definitionally equal results; and
+\texttt{Matches.hasType} says every metavariable captured by a match of a well-typed term is itself
+typeable.
+\end{lemma}
+\begin{proof}
+\uses{structure:expb-typing}
+\leanok
+The transport lemmas are \texttt{Check.OK.map} applied to the weakening/substitution fields, after
+rewriting with \texttt{Pattern.RHS.liftN\_apply} and \texttt{Pattern.RHS.instN\_apply};
+\texttt{apply\_pat} and \texttt{Matches.hasType} are inductions on the right-hand side resp.\ the
+match, both using the interface's \texttt{app\_inv}.
+\end{proof}
+
+\begin{definition}[The proof-irrelevance relation, \texttt{NormalEq}]
+\label{inductive:expb-normaleq}
+\lean{Lean4Lean.NormalEq}
+\leanok
+\uses{structure:expb-typing}
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{165}
+\thesisref{unique.tex \S\texttt{sec:kappa}, the rule block for $\Gamma\vdash e\equiv_p e'$.}
+\texttt{NormalEq TY} $\Gamma\,e_1\,e_2$, written $\Gamma\vdash e_1\equiv_p e_2$, is generated by
+reflexivity at a well-typed term, level congruence at sorts and at constants, congruence for
+application (with both sides typed at a common $\forall A.\,B$), congruence for $\lambda$ and
+$\forall$ where the two binder types are only required to be definitionally equal to a common $A$,
+the two one-sided $\eta$ rules \texttt{etaL} and \texttt{etaR}, and proof irrelevance. It has no
+symmetry, transitivity or reduction rule: those are theorems.
+\end{definition}
+
+\begin{lemma}[Proof irrelevance implies definitional equality]
+\label{thm:expb-normaleq-defeq}
+\lean{Lean4Lean.NormalEq.defeq}
+\leanok
+\uses{inductive:expb-normaleq, structure:expb-typing}
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{202}
+\thesisref{unique.tex, the ``regularity of reductions'' lemma, item 3.}
+If $\Gamma\vdash e_1\equiv_p e_2$ then $\Gamma\vdash e_1\equiv e_2$ in the erased relation of the
+interface.
+\end{lemma}
+\begin{proof}
+\uses{structure:expb-typing}
+\leanok
+Induction on the derivation, replaying each rule with the matching interface field. The
+\texttt{lamDF} and \texttt{forallEDF} cases retype both binders at the common $A$ using
+\texttt{TY.trans} and \texttt{TY.symm}; the two $\eta$ cases combine \texttt{TY.lamDF} with
+\texttt{TY.eta} after recovering the domain from \texttt{TY.is\_type} and
+\texttt{TY.forallE\_inv}.
+\end{proof}
+
+\begin{lemma}[Structural metatheory of proof irrelevance]
+\label{family:expb-normaleq-struct}
+\lean{Lean4Lean.NormalEq.weakN, Lean4Lean.NormalEq.instN, Lean4Lean.NormalEq.instN_r, Lean4Lean.NormalEq.defeqDFC, Lean4Lean.NormalEq.defeq_l, Lean4Lean.NormalEq.weakN_inv_DFC, Lean4Lean.NormalEq.weakN_iff, Lean4Lean.NormalEq.apply_pat}
+\leanok
+\uses{inductive:expb-normaleq, structure:expb-typing, inductive:expb-isdefeqctx}
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{239}
+\thesisref{unique.tex, the ``regularity of reductions'' lemma, substitution item.}
+$\equiv_p$ is stable under weakening (\texttt{weakN}) and reflects it
+(\texttt{weakN\_inv\_DFC}, whence the equivalence \texttt{weakN\_iff}), is stable under substitution
+on either side (\texttt{instN}, \texttt{instN\_r}), transports along a definitionally equal context
+(\texttt{defeqDFC}, \texttt{defeq\_l}), and is a congruence for rule right-hand sides
+(\texttt{apply\_pat}).
+\end{lemma}
+\begin{proof}
+\uses{structure:expb-typing, thm:expb-normaleq-defeq}
+\leanok
+Each is an induction over the derivation. The two $\eta$ cases need
+\texttt{VExpr.lift\_liftN'} to re-associate the lifts. Weakening inversion is the hard one: it
+generalises simultaneously over a lifting and a context conversion and uses \texttt{TY.uniq} and
+\texttt{TY.forallE\_defInv} to recover the common types that lifting destroys.
+\end{proof}
+
+\begin{theorem}[Proof irrelevance is an equivalence relation]
+\label{thm:expb-normaleq-trans}
+\lean{Lean4Lean.NormalEq.trans, Lean4Lean.NormalEq.symm}
+\leanok
+\uses{inductive:expb-normaleq}
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{451}
+\thesisref{unique.tex, the ``regularity of reductions'' lemma, item 2.}
+$\equiv_p$ is symmetric and transitive; with the \texttt{refl} rule it is an equivalence relation on
+well-typed terms.
+\end{theorem}
+\begin{proof}
+\uses{family:expb-normaleq-struct, thm:expb-normaleq-defeq, structure:expb-typing}
+\leanok
+Symmetry is a direct induction that swaps the two sides, using \texttt{TY.trans} in the
+\texttt{forallEDF} case to move the binder equations across. Transitivity is a well-founded
+recursion on \texttt{meas} $e_1 +$ \texttt{meas} $e_2 +$ \texttt{meas} $e_3$, where the private
+measure weights a $\lambda$ by $3$ so that the $\eta$-versus-$\eta$ clash decreases; that case
+inverts the inner transitive result and closes with \texttt{NormalEq.weakN\_iff}, and the mixed
+$\lambda$-versus-$\eta$ cases retype the abstraction with \texttt{TY.forallEDF}.
+\end{proof}
+
+\section{Parallel reduction and Church-Rosser}
+
+\begin{definition}[Parallel reduction, \texttt{ParRed}]
+\label{inductive:expb-parred}
+\lean{Lean4Lean.ParRed}
+\leanok
+\uses{structure:expb-typing, inductive:pattern-matches, inductive:pattern-rhs}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{18}
+\thesisref{unique.tex \S\texttt{sec:church\_rosser}, the rule block for $\gg_\kappa$; the $\iota$
+and $K^+$ rules of the thesis are folded into the single \texttt{extra} rule.}
+$\Gamma\vdash e\gg_\kappa e'$ is reflexive on atoms and congruent in every subterm, with a
+$\beta$ rule reducing $(\lambda x{:}A.\,e_1)\,e_2$ to $e_1'[e_2'/x]$ after reducing both parts, and
+an \texttt{extra} rule: given an abstract rule \texttt{TY.Pat p r}, a match \texttt{p.Matches}
+$e\,m_1\,m_2$ whose side conditions \texttt{r.2.OK} hold in the interface, and a parallel reduction
+$m_2\,a \gg_\kappa m_2'\,a$ of every captured metavariable, $e$ reduces to
+\texttt{r.1.apply} $m_1\,m_2'$.
+\end{definition}
+
+\begin{definition}[Reducible terms, \texttt{NonNeutral}]
+\label{def:expb-nonneutral}
+\lean{Lean4Lean.NonNeutral}
+\leanok
+\uses{structure:expb-typing}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{29}
+\thesisref{unique.tex \S\texttt{sec:church\_rosser}: ``the compatibility rules only apply if none of
+the substantive rules are applicable''.}
+\texttt{NonNeutral TY} $\Gamma\,e$ holds when $e$ is syntactically a $\beta$ redex, or when some
+abstract rule matches $e$ with its side conditions satisfied.
+\end{definition}
+
+\begin{definition}[Complete parallel reduction, \texttt{CParRed}]
+\label{inductive:expb-cparred}
+\lean{Lean4Lean.CParRed}
+\leanok
+\uses{inductive:expb-parred, def:expb-nonneutral}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{33}
+\thesisref{unique.tex \S\texttt{sec:church\_rosser}, the definition of $\ggg_\kappa$.}
+$\ggg_\kappa$ has the same rules as $\gg_\kappa$ except that the congruence rules for constants and
+for applications carry the guard $\lnot$\texttt{NonNeutral}, so that a substantive rule is always
+preferred. Note that the $\lambda$ and $\forall$ congruences are unguarded, and that two overlapping
+pattern rules can still both fire, so the relation is deterministic only up to the interface's
+\texttt{pat\_uniq}.
+\end{definition}
+
+\begin{lemma}[Basic properties of the two reductions]
+\label{family:expb-parred-struct}
+\lean{Lean4Lean.ParRed.rfl, Lean4Lean.ParRed.weakN, Lean4Lean.ParRed.instN, Lean4Lean.ParRed.defeq, Lean4Lean.ParRed.hasType, Lean4Lean.ParRed.defeqDFC, Lean4Lean.ParRed.apply_pat, Lean4Lean.ParRed.weakN_inv, Lean4Lean.CParRed.toParRed, Lean4Lean.CParRed.exists, Lean4Lean.Pattern.RHS.apply_liftN}
+\leanok
+\uses{inductive:expb-parred, inductive:expb-cparred, structure:expb-typing}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{48}
+\thesisref{unique.tex, the ``properties of $\gg$'' lemma (the reflexivity, defeq, substitution,
+$\ggg\!\Rightarrow\!\gg$ and existence items).}
+$\gg_\kappa$ is reflexive on all terms, stable under weakening, substitution and context conversion,
+reflects weakening, is contained in the interface's definitional equality, and preserves typing.
+Complete reduction refines parallel reduction, and every well-typed term has a complete reduct.
+\end{lemma}
+\begin{proof}
+\uses{structure:expb-typing, def:expb-nonneutral}
+\leanok
+Each statement is an induction on the reduction, the \texttt{extra} cases going through
+\texttt{Pattern.RHS.apply\_liftN} and the interface's \texttt{pat\_wf}.
+\texttt{CParRed.exists} is instead a structural recursion on the term with a classical case split on
+\texttt{NonNeutral}.
+\end{proof}
+
+\begin{theorem}[Triangle lemma]
+\label{thm:expb-parred-triangle}
+\lean{Lean4Lean.ParRed.triangle}
+\leanok
+\uses{inductive:expb-parred, inductive:expb-cparred, inductive:expb-normaleq}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{282}
+\thesisref{unique.tex, the triangle lemma.}
+If $\Gamma\vdash e : A$, $\Gamma\vdash e\gg_\kappa e'$ and $\Gamma\vdash e\ggg_\kappa e^\bullet$,
+then there is $e^\circ$ with $\Gamma\vdash e'\gg_\kappa e^\circ$ and
+$\Gamma\vdash e^\circ\equiv_p e^\bullet$.
+\end{theorem}
+\begin{proof}
+\uses{family:expb-parred-struct, family:expb-normaleq-struct, structure:expb-typing}
+\leanok
+Well-founded recursion on the subject term, then induction on the complete reduction with inversion
+on the parallel reduction. The $\beta$ cases use \texttt{ParRed.instN}; the cases where both sides
+fire a pattern rule are aligned by the interface's \texttt{pat\_uniq}, and the cases where only one
+fires are excluded by the \texttt{NonNeutral} guards. Roughly 150 lines, the hardest proof in the
+file.
+\end{proof}
+
+\begin{theorem}[Compatibility of parallel reduction with proof irrelevance]
+\label{thm:expb-normaleq-parred}
+\lean{Lean4Lean.NormalEq.parRed, Lean4Lean.NormalEq.parRedS}
+\uses{inductive:expb-normaleq, inductive:expb-parred}
+\leanok
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{687}
+\thesisref{unique.tex, the compatibility lemma for $\gg_\kappa$ and $\equiv_p$.}
+If $\Gamma\vdash e_1\equiv_p e_3$ and $\Gamma\vdash e_3\gg_\kappa e_2$, then there is $e_4$ with
+$\Gamma\vdash e_1\gg_\kappa^{*} e_4$ and $\Gamma\vdash e_4\equiv_p e_2$. \texttt{parRedS} iterates
+this along the reflexive-transitive closure.
+\end{theorem}
+\begin{proof}
+\uses{family:expb-normaleq-struct, family:expb-parred-struct}
+\textbf{Not proved in Lean.} Two \texttt{sorry}s remain, at lines 699 and 718: exactly the cases
+where the reduction fires an \texttt{extra} (pattern) rule against a \texttt{constDF} resp.\ an
+\texttt{appDF} step of $\equiv_p$. These are the cases the thesis discharges by observing that the
+eliminator is small and the subject is therefore a proof. The proved part is an induction on the
+$\equiv_p$ derivation with inversion on the reduction; the $\beta$-versus-$\eta$ clash goes through
+\texttt{ParRedExt.parRed\_beta}, an auxiliary about reducing under a stack of applications and
+lifts (\ref{thm:parredext-parred-beta} is the shipping copy).
+\axfoot{direct sorry: ParallelReduction.lean:699 and :718}
+\end{proof}
+
+\begin{theorem}[Church-Rosser up to proof irrelevance]
+\label{thm:expb-parred-church-rosser}
+\lean{Lean4Lean.ParRed.church_rosser, Lean4Lean.ParRedS.church_rosser, Lean4Lean.Typing.CRDefEq}
+\leanok
+\uses{inductive:expb-parred, inductive:expb-normaleq, structure:expb-typing}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{431}
+\thesisref{unique.tex, the Church-Rosser theorem.}
+If $e$ is well-typed and parallel-reduces in one step to $e_1$ and to $e_2$, then $e_1$ and $e_2$
+have further one-step reducts related by $\equiv_p$. \texttt{Typing.CRDefEq} $\Gamma\,e_1\,e_2$
+packages the iterated form: both sides are typeable and reduce, along $\gg_\kappa^{*}$, to
+$\equiv_p$-related terms; \texttt{ParRedS.church\_rosser} (line 799) establishes it from a common
+ancestor.
+\end{theorem}
+\begin{proof}
+\uses{thm:expb-parred-triangle, thm:expb-normaleq-parred, family:expb-parred-struct}
+\leanok
+The one-step case is the triangle lemma applied twice at the complete reduct supplied by
+\texttt{CParRed.exists}, gluing the two results with transitivity and symmetry of $\equiv_p$. The
+iterated case is a double induction along the two closures, commuting $\equiv_p$ past a further
+reduction with \texttt{NormalEq.parRed} at each step, which is what makes the whole theorem
+conditional.
+\axfoot{sorryAx via NormalEq.parRed (ParallelReduction.lean:699, :718)}
+\end{proof}
+
+\begin{lemma}[\texttt{CRDefEq} is an equivalence contained in definitional equality]
+\label{family:expb-crdefeq}
+\lean{Lean4Lean.Typing.CRDefEq.normalEq, Lean4Lean.Typing.CRDefEq.refl, Lean4Lean.Typing.CRDefEq.defeq, Lean4Lean.Typing.CRDefEq.symm, Lean4Lean.Typing.CRDefEq.trans}
+\leanok
+\uses{thm:expb-parred-church-rosser, structure:expb-typing}
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{819}
+\texttt{CRDefEq} contains $\equiv_p$ and reflexivity at a well-typed term, is symmetric and
+transitive, and implies the interface's definitional equality.
+\end{lemma}
+\begin{proof}
+\uses{thm:expb-normaleq-parred, thm:expb-parred-church-rosser}
+\leanok
+Reflexivity, symmetry and \texttt{defeq} are unpacking (the last one chains
+\texttt{ParRedS.defeq} on both sides with \texttt{NormalEq.defeq} in the middle). Transitivity glues
+the two witnesses by applying \texttt{ParRedS.church\_rosser} to the shared middle term and then
+commuting both $\equiv_p$ witnesses past the resulting reductions with \texttt{NormalEq.parRedS}.
+\axfoot{sorryAx via NormalEq.parRed (ParallelReduction.lean:699, :718)}
+\end{proof}
+
+\begin{lemma}[Every concrete derivation is an interface derivation]
+\label{thm:expb-todyping}
+\lean{Lean4Lean.VEnv.IsDefEq.toTyping}
+\leanok
+\uses{structure:expb-typing, def:isdefeq}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{839}
+\thesisref{no thesis counterpart; this is the bridge from the concrete judgment to the abstract
+interface.}
+If $\Gamma\vdash e_1\equiv e_2 : A$ holds in \texttt{TY.env.IsDefEq}, then $e_1$ and $e_2$ are
+related by \texttt{TY.IsDefEqU} and $e_1$ has type $A$ in the interface.
+\end{lemma}
+\begin{proof}
+\uses{rule:isdefeq-pat, thm:pattern-realizes-took, structure:expb-typing}
+\leanok
+Induction on the derivation, replaying each rule through the corresponding field. The
+\texttt{iota} branch supplies the new \texttt{pat} case (lines 857--859): the rule's realizer
+premise is converted to the \texttt{Check.OK} form the interface expects by
+\texttt{Pattern.Check.Realizes.toOK} applied to the induction hypotheses of the side conditions, the
+environment rule is promoted to an abstract one by the new \texttt{pat\_env} field, and
+\texttt{pat\_wf} concludes. The second component reuses the redex's typing, which is correct because
+\texttt{IsDefEq.pat} types the reduct at the redex's type.
+\reviewnote{This bridging step has no counterpart in \texttt{Theory/Typing/ChurchRosser.lean}: that
+file proves its results directly about \texttt{env.IsDefEq} under a \texttt{[Params]} instance and
+never needs to convert into a separate abstract record. The genuine duplicate of \texttt{iota}'s
+pattern-matching plumbing is the \texttt{pat} case of \texttt{VEnv.IsDefEqU.church\_rosser} below
+(\ref{thm:expb-isdefequ-church-rosser}), which mirrors \texttt{IsDefEq.church\_rosser} in
+\texttt{ChurchRosser.lean} (lines 1390--1394) line for line.}
+\end{proof}
+
+\begin{theorem}[Church-Rosser for the concrete definitional equality]
+\label{thm:expb-isdefequ-church-rosser}
+\lean{Lean4Lean.VEnv.IsDefEqU.church_rosser}
+\leanok
+\uses{def:isdefeq, structure:expb-typing}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{861}
+\thesisref{unique.tex, the Church-Rosser theorem, transported to the concrete judgment.}
+Every derivation of $\Gamma\vdash e_1\equiv e_2 : A$ in \texttt{VEnv.IsDefEq} yields
+\texttt{TY.CRDefEq} $\Gamma\,e_1\,e_2$, that is, $e_1$ and $e_2$ reduce along $\gg_\kappa^{*}$ to
+$\equiv_p$-related terms. The shipping counterpart is \ref{thm:isdefeq-church-rosser}.
+\end{theorem}
+\begin{proof}
+\uses{thm:expb-todyping, family:expb-crdefeq, thm:expb-parred-church-rosser, rule:isdefeq-pat, thm:pattern-realizes-took}
+\leanok
+Induction on the derivation: the congruence rules use the \texttt{CRDefEq} closure lemmas, while
+$\beta$, $\eta$ and \texttt{extra} exhibit an explicit one-step reduction. The \texttt{iota} branch
+adds the \texttt{pat} case (lines 909--913), the only place in the file where an $\iota$ step has to
+be realised as an actual reduction: it takes the witness to be \texttt{ParRed.extra} firing the very
+rule \texttt{hp} (promoted by \texttt{pat\_env}, with side conditions converted by
+\texttt{Realizes.toOK}) with every metavariable reduced by \texttt{.rfl}, and closes with
+reflexivity of $\equiv_p$ at the reduct. That is exactly the shape of the pre-existing
+\texttt{extra} case three lines above.
+\axfoot{sorryAx via NormalEq.parRed (ParallelReduction.lean:699, :718)}
+\end{proof}
+
+\section{Stratified judgments}
+
+\begin{definition}[Definitional inversion predicate, \texttt{DefInv}]
+\label{def:expb-definv}
+\lean{Lean4Lean.VEnv.DefInv, Lean4Lean.VEnv.DefInv.symm}
+\leanok
+\uses{def:isdefeq}
+\srcloc{Lean4Lean/Experimental/Stratified.lean}{9}
+\thesisref{unique.tex, the definition of definitional inversion preceding the unique-typing
+theorem.}
+\texttt{DefInv env U} $\Gamma\,e_1\,e_2$ is a head-shape compatibility condition on two types: two
+$\forall$'s must have definitionally equal domains and, in the extended context, codomains; two
+sorts must have equivalent levels; a sort against a $\forall$ is \texttt{False}; every other pair is
+unconstrained. \texttt{DefInv.symm} shows the predicate is symmetric over an ordered environment,
+moving the codomain equation across the domain equation with \texttt{IsDefEq.defeqDF\_l}. Nothing in
+this file consumes \texttt{DefInv}: its intended consumers are in the commented-out block at lines
+266--293.
+\end{definition}
+
+\begin{definition}[One typing layer, \texttt{HasType1}]
+\label{inductive:expb-hastype1}
+\lean{Lean4Lean.VEnv.HasType1}
+\leanok
+\uses{struct:venv}
+\srcloc{Lean4Lean/Experimental/Stratified.lean}{30}
+\thesisref{unique.tex \S\texttt{sec:unique}, the definition of $\Gamma\vdash_n e : \alpha$.}
+\texttt{HasType1 env uvars IsDefEq1} is the typing judgment whose conversion rule appeals to an
+\emph{abstract} parameter \texttt{IsDefEq1} rather than to the real definitional equality: variable,
+constant, sort, application, abstraction, product, and a \texttt{defeq} rule taking
+\texttt{IsDefEq1} $\Gamma\,A\,B\,(\mathtt{.sort}\ u)$. Each such parameter marks one alternation
+between typing and conversion.
+\end{definition}
+
+\begin{definition}[One definitional-equality layer, \texttt{IsDefEq1}, with the $\iota$ rule]
+\label{inductive:expb-isdefeq1}
+\lean{Lean4Lean.VEnv.IsDefEq1, Lean4Lean.VEnv.IsDefEq1.pat}
+\leanok
+\uses{inductive:expb-hastype1, struct:venv, inductive:pattern-matches, def:pattern-check-realizes}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/Stratified.lean}{46}
+\thesisref{unique.tex \S\texttt{sec:unique} (the stratification) together with the $\iota$ rule of
+\S\texttt{sec:kappa}.}
+\texttt{IsDefEq1 env uvars HasType1 defEq} is definitional equality in which the typing premises
+appeal to the abstract \texttt{HasType1} and the conversion rule \texttt{defeqDF} appeals to the
+abstract \texttt{defEq}, while congruence, symmetry and transitivity recurse. The \texttt{iota}
+branch adds the constructor \texttt{pat} (lines 71--75): from \texttt{env.pats p r}, a match
+\texttt{p.Matches} $e\,m_1\,m_2$, an abstract typing $\Gamma\vdash e : A$, a realizer
+\texttt{r.2.Realizes} $m_1\,m_2\,\mathit{chk}$ and a recursive $\Gamma\vdash t.1\equiv t.2.1 :
+t.2.2$ for every triple $t$ in \textit{chk}, conclude $\Gamma\vdash e\equiv
+\mathtt{r.1.apply}\,m_1\,m_2 : A$.
+\reviewnote{The stratification choices are the delicate part and they are right: the typing premise
+is an alternation point and goes to \texttt{HasType1}, as in \texttt{beta}/\texttt{eta}/
+\texttt{proofIrrel}, while the side conditions are not and stay recursive, as in
+\texttt{appDF}/\texttt{trans}. The \texttt{Realizes}-plus-list encoding rather than
+\texttt{Check.OK} is forced by strict positivity. Neither point is commented, and the core rule this
+mirrors (\ref{rule:isdefeq-pat}) does carry a docstring.}
+\end{definition}
+
+\begin{theorem}[Every derivation decomposes into one layer]
+\label{thm:expb-induction1}
+\lean{Lean4Lean.VEnv.IsDefEq.induction1}
+\leanok
+\uses{inductive:expb-isdefeq1, inductive:expb-hastype1, struct:orderedstrong}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/Stratified.lean}{80}
+\thesisref{unique.tex \S\texttt{sec:unique}, the ``$n$-provability basics'' lemma, items 3 and 4.}
+Let \texttt{env} be \texttt{OrderedStrong}, $\Gamma$ well-formed, and let \texttt{hasType} and
+\texttt{defEq} be relations closed under the one-layer judgments (hypotheses \texttt{hty} and
+\texttt{hdf}). Then any $\Gamma\vdash e_1\equiv e_2 : A$ yields \texttt{HasType1} derivations for
+$e_1$ and $e_2$ at $A$ together with an \texttt{IsDefEq1} derivation relating them.
+\end{theorem}
+\begin{proof}
+\uses{thm:isdefeq-strong, inductive:expb-isdefeq1}
+\textbf{Not proved in Lean.} One \texttt{sorry} remains at line 96, in the \texttt{constDF} case,
+where a level-instantiation congruence for \texttt{ci.type} is needed; it predates the branch.
+Otherwise the proof strengthens the hypothesis with \texttt{IsDefEq.strong}
+(\ref{thm:isdefeq-strong}) and inducts on the strong derivation, rebuilding one layer per rule. The
+\texttt{iota} branch adds the \texttt{pat} case (lines 121--122): the strong \texttt{pat} rule
+already carries typings of both redex and reduct, so the two \texttt{HasType1} components are the
+first projections of the two induction hypotheses, and the third is \texttt{IsDefEq1.pat} with
+\texttt{hty} applied to the redex typing and the side-condition induction hypotheses.
+\axfoot{direct sorry: Stratified.lean:96 (constDF)}
+\reviewnote{Line 79 silently strengthens the exported hypothesis from \texttt{Ordered env} to
+\texttt{OrderedStrong env}. The change is forced, because on this branch \texttt{IsDefEq.strong}
+needs subject reduction for the registered $\iota$ rules (\ref{def:patsstrongon}), and
+\ref{thm:wf-orderedstrong} shows no realistic instance is lost; but no comment says so, and a reader
+diffing against master sees a weaker theorem with no rationale.}
+\end{proof}
+
+\begin{lemma}[One layer collapses back into the real judgment]
+\label{thm:expb-isdefeq1-induction}
+\lean{Lean4Lean.VEnv.IsDefEq1.induction, Lean4Lean.VEnv.HasType1.induction}
+\leanok
+\uses{inductive:expb-isdefeq1, inductive:expb-hastype1, def:isdefeq}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/Stratified.lean}{142}
+\thesisref{unique.tex \S\texttt{sec:unique}, the converse direction of the same lemma.}
+If the abstract parameters are sound for the real judgments (\texttt{hty}, \texttt{hdf}, resp.\
+\texttt{IH}), then \texttt{HasType1} implies \texttt{env.HasType} and \texttt{IsDefEq1} implies
+\texttt{env.IsDefEq}. Together with \ref{thm:expb-induction1} this shows the added \texttt{pat} layer
+rule is neither too strong nor too weak: it round-trips.
+\end{lemma}
+\begin{proof}
+\uses{rule:isdefeq-pat}
+A rule-by-rule induction in both cases. The \texttt{iota} branch adds the one-liner
+\texttt{| pat hp hm he hr \_ ihall => exact .pat hp hm (hty he) hr ihall} at line 158, sending the
+layer's rule to the core \texttt{VEnv.IsDefEq.pat} (\ref{rule:isdefeq-pat}) with the typing premise
+pushed through \texttt{hty} and the side conditions supplied by the induction hypothesis.
+Both declarations are in fact complete: their axiom sets are \texttt{propext} and
+\texttt{Quot.sound} only, with no \texttt{sorryAx}. The \texttt{leanok} marker is withheld here
+solely because the automated census attributes to this declaration range the commented-out
+continuation of the file (lines 160--340), which does contain \texttt{sorry}s.
+\end{proof}
+
+\begin{definition}[One typing layer over an erased equality, \texttt{HasTypeU1}]
+\label{inductive:expb-hastypeu1}
+\lean{Lean4Lean.VEnv.HasTypeU1}
+\leanok
+\uses{struct:venv}
+\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{17}
+\thesisref{unique.tex \S\texttt{sec:unique}.}
+As \texttt{HasType1}, except that the conversion rule appeals to an abstract \emph{type-erased}
+equality \texttt{IsDefEqU1} $\Gamma\,A\,B$.
+\end{definition}
+
+\begin{definition}[One erased equality layer, \texttt{IsDefEqU1}, with the $\iota$ rule]
+\label{inductive:expb-isdefequ1}
+\lean{Lean4Lean.VEnv.IsDefEqU1, Lean4Lean.VEnv.IsDefEqU1.pat}
+\leanok
+\uses{inductive:expb-hastypeu1, struct:venv, def:pattern-check-realizes, inductive:pattern-matches}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{33}
+\thesisref{unique.tex \S\texttt{sec:unique} with the $\iota$ rule of \S\texttt{sec:kappa}.}
+\texttt{IsDefEqU1} is the type-erased analogue of \texttt{IsDefEq1}: equivalence, congruences,
+$\beta$, $\eta$, proof irrelevance and definitional axioms, all without a type index (and hence
+without a \texttt{defeqDF} rule, so the \texttt{defEq} parameter is unused). The \texttt{iota} branch
+adds \texttt{pat} (lines 51--55) with the same premises as the typed version, the side conditions
+now being untyped equalities $\Gamma\vdash t.1\equiv t.2.1$.
+\reviewnote{In the erased setting \texttt{Realizes} constrains only $t.1$ and $t.2.1$, so the third
+component of every triple is unconstrained and the rule is a roundabout way of asserting
+\texttt{r.2.OK}. Uniformity with the typed version is a defensible reason to keep the shape, but no
+comment says so. Nothing in the file consumes the constructor: the would-be consumer
+\texttt{IsDefEqU1.induction} is inside the commented-out block at lines 121--142.}
+\end{definition}
+
+\begin{lemma}[Decomposition into one erased layer]
+\label{thm:expb-inductionu1}
+\lean{Lean4Lean.VEnv.IsDefEq.inductionU1, Lean4Lean.VEnv.HasTypeU1.induction}
+\leanok
+\uses{inductive:expb-isdefequ1, inductive:expb-hastypeu1, struct:orderedstrong}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{60}
+\thesisref{unique.tex \S\texttt{sec:unique}.}
+Under \texttt{OrderedStrong env} and a well-formed context, every $\Gamma\vdash e_1\equiv e_2 : A$
+yields \texttt{HasTypeU1} derivations of both sides at $A$ and an \texttt{IsDefEqU1} derivation
+relating them. Conversely \texttt{HasTypeU1.induction} (line 109, which keeps the weaker
+\texttt{Ordered} hypothesis) collapses a layer back to \texttt{env.HasType}.
+\end{lemma}
+\begin{proof}
+\uses{thm:isdefeq-strong}
+\textbf{Not proved in Lean.} One \texttt{sorry} remains at line 77, the same \texttt{constDF} gap as
+in \ref{thm:expb-induction1} and equally pre-existing. The rest goes through
+\texttt{IsDefEq.strong} and an induction on the strong derivation; the \texttt{iota} branch adds the
+\texttt{pat} case at lines 103--104, identical in shape to the typed version, and the same silent
+\texttt{Ordered} to \texttt{OrderedStrong} strengthening at line 59.
+\axfoot{direct sorry: StratifiedUntyped.lean:77 (constDF)}
+\end{proof}
+
+\section{Level-annotated judgments}
+
+\begin{definition}[Level-annotated environment, \texttt{VEnv'}]
+\label{structure:expb-venvprime}
+\lean{Lean4Lean.VEnv', Lean4Lean.VEnv'.VConstant, Lean4Lean.VEnv'.VDefEq, Lean4Lean.VEnv'.empty, Lean4Lean.VEnv'.LE}
+\leanok
+\uses{struct:venv}
+\srcloc{Lean4Lean/Experimental/Stronger.lean}{13}
+\texttt{VEnv'.VConstant} and \texttt{VEnv'.VDefEq} extend the model's constant and definitional-axiom
+records with the universe level of the type; \texttt{VEnv'} pairs a partial map of the former with a
+predicate on the latter, and comes with an empty environment and an extension order
+\texttt{VEnv'.LE} (reflexive and transitive).
+\end{definition}
+
+\begin{definition}[Erasure of a level-annotated environment, \texttt{VEnv'.out}]
+\label{def:expb-venvprime-out}
+\lean{Lean4Lean.VEnv'.out, Lean4Lean.VEnv'.empty_out}
+\leanok
+\uses{structure:expb-venvprime, struct:venv}
+\contrib{mixed}\srcloc{Lean4Lean/Experimental/Stronger.lean}{25}
+\texttt{VEnv'.out} forgets the level annotations: the constants are the underlying records, and the
+definitional axioms are the images of the annotated ones. \texttt{empty\_out} says the empty
+environment erases to the empty environment. The \texttt{iota} branch supplies the new field as
+\texttt{pats \_ \_ := False} (line 28), so an erased environment registers no reduction rules.
+\reviewnote{Sound but narrowing: every theorem in this file about \texttt{env.out} now speaks only
+about $\iota$-free environments, so the experiment can never be reconnected to the $\iota$
+development without giving \texttt{VEnv'} a real \texttt{pats} field. Given that the file dead-ends
+in four \texttt{sorry}s the shortcut is pragmatic, but it changes the scope of the file's theorems
+without a word of comment.}
+\end{definition}
+
+\begin{definition}[Definitional equality with explicit type levels, \texttt{IsDefEqStrong}]
+\label{inductive:expb-isdefeqstrong-lvl}
+\lean{Lean4Lean.VEnv'.IsDefEqStrong, Lean4Lean.VEnv'.Lookup, Lean4Lean.VEnv'.VCtx}
+\leanok
+\uses{structure:expb-venvprime}
+\srcloc{Lean4Lean/Experimental/Stronger.lean}{58}
+\thesisref{unique.tex \S\texttt{sec:unique}, aiming at the level clause of definitional inversion.}
+Over a context \texttt{VCtx} of (type, level) pairs, \texttt{IsDefEqStrong} $\Gamma\,e_1\,e_2\,A\,u$
+is a combined typing and equality judgment in which every judgment records the universe level $u$ of
+its ascribed type $A$, every rule carries the sort-typing witnesses of the types it mentions, and an
+extra \texttt{defeqL} rule converts along level equivalence.
+\end{definition}
+
+\begin{lemma}[Metatheory of the level-annotated judgment]
+\label{family:expb-stronger-infra}
+\lean{Lean4Lean.VEnv'.IsDefEqStrong.out, Lean4Lean.VEnv'.IsDefEqStrong.weakN, Lean4Lean.VEnv'.IsDefEqStrong.mono, Lean4Lean.VEnv'.IsDefEqStrong.weak0, Lean4Lean.VEnv'.IsDefEqStrong.instL, Lean4Lean.VEnv'.IsDefEqStrong.instN, Lean4Lean.VEnv'.IsDefEqStrong.defeqDF_l, Lean4Lean.VEnv'.IsDefEqStrong.isType', Lean4Lean.VEnv'.IsDefEqStrong.sort_invL, Lean4Lean.VEnv'.Ordered, Lean4Lean.VEnv'.CtxStrong, Lean4Lean.VEnv'.EnvStrong}
+\leanok
+\uses{inductive:expb-isdefeqstrong-lvl, def:expb-venvprime-out}
+\srcloc{Lean4Lean/Experimental/Stronger.lean}{167}
+The annotated judgment erases to the ordinary one (\texttt{out}), and is stable under weakening,
+environment extension, universe instantiation and substitution; \texttt{isType'} is regularity and
+\texttt{sort\_invL} pins the level index at a sort. \texttt{Ordered}, \texttt{CtxStrong} and
+\texttt{EnvStrong} are the corresponding environment and context invariants.
+\end{lemma}
+\begin{proof}
+\uses{def:expb-venvprime-out}
+\leanok
+Routine inductions mirroring the unannotated development in \texttt{Theory/Typing}, carrying the
+level index along.
+\end{proof}
+
+\begin{lemma}[Product inversion in the level-annotated system]
+\label{thm:expb-forallE-inv}
+\lean{Lean4Lean.VEnv'.IsDefEqStrong.forallE_inv'}
+\leanok
+\uses{inductive:expb-isdefeqstrong-lvl, family:expb-stronger-infra}
+\srcloc{Lean4Lean/Experimental/Stronger.lean}{478}
+\thesisref{unique.tex, clause 2 of definitional inversion.}
+Over an ordered environment satisfying \texttt{OnTypes (EnvStrong env)} and a strong context, if
+either side of a judgment is $\forall A.\,B$, then $A$ is a type at some level $u$ and $B$ is a type
+at some level $v$ in the context extended by $(A,u)$.
+\end{lemma}
+\begin{proof}
+\uses{family:expb-stronger-infra}
+\leanok
+Induction on the derivation, generalised over the disjunction ``left side or right side is a
+product''. The \texttt{extra} case is reduced to the environment's \texttt{EnvStrong} invariant, and
+the $\beta$ case to the substitution lemma.
+\end{proof}
+
+\begin{lemma}[Level uniqueness (abandoned)]
+\label{thm:expb-uniqL}
+\lean{Lean4Lean.VEnv'.IsDefEqStrong.uniqL'}
+\leanok
+\uses{inductive:expb-isdefeqstrong-lvl, thm:expb-forallE-inv}
+\srcloc{Lean4Lean/Experimental/Stronger.lean}{575}
+\thesisref{unique.tex, the unique-typing theorem: this is an attempt to break its circularity by
+proving the level component first.}
+For two annotated judgments in a common context, if any of the four pairings of their subject terms
+agree syntactically then their level indices are equivalent.
+\end{lemma}
+\begin{proof}
+\textbf{Not proved in Lean.} Four \texttt{sorry}s remain at lines 624--628, one of them annotated
+\texttt{looks like it needs unique typing :(}. The proof is a nested induction on both derivations;
+it goes through for variables and constants but stalls in the \texttt{appDF}-versus-\texttt{appDF}
+case, which is exactly the circularity the thesis warns about. Note also that the environment and
+context hypotheses of the statement were commented out at line 574, so the theorem as stated is
+weaker than the intended one.
+\axfoot{direct sorry: Stronger.lean:624--628}
+\end{proof}
+
+\section{The SExpr calculus and unique typing}
+
+\begin{definition}[Parameters of the \texttt{SExpr} development]
+\label{class:expb-sexpr-params}
+\lean{Lean4Lean.Params, Lean4Lean.Classification, Lean4Lean.Pattern.WF, Lean4Lean.SExpr.Params.extra_pat}
+\leanok
+\uses{struct:venv, inductive:pattern-core}
+\srcloc{Lean4Lean/Experimental/SExpr.lean}{23}
+\texttt{Params} is a class fixing an ordered environment, a universe count, an abstract family
+\texttt{Pat p r} of reduction rules, and a \texttt{classify} map sending constant names to a
+\texttt{Classification} (constructor, eta-constructor, symbol or inductive type, each with an
+arity). Its hypotheses are that every rule's pattern is simple, is well formed for the
+classification (\texttt{Pattern.WF}), and is unique among overlapping patterns. This is the
+\texttt{SExpr}-side analogue of \texttt{VEnv.Params} (\ref{class:cr-params}).
+\reviewnote{\texttt{Params.extra\_pat} is declared as a global \texttt{axiom} at line 614 rather than
+as a class field, although the commented-out block at lines 36--44 shows it was meant to be one,
+along with five further intended fields. Every result in this cluster is therefore conditional on a
+global axiom that no instance is ever required to justify.}
+\end{definition}
+
+\begin{definition}[\texttt{SExpr} syntax and its substitution calculus]
+\label{family:expb-sexpr-syntax}
+\lean{Lean4Lean.SLevel, Lean4Lean.SExpr, Lean4Lean.SExpr.lift', Lean4Lean.SExpr.ClosedN, Lean4Lean.SExpr.Subst, Lean4Lean.SExpr.subst, Lean4Lean.SExpr.Subst.comp, Lean4Lean.SExpr.inst, Lean4Lean.SExpr.Skips, Lean4Lean.SExpr.Ctx.Lift', Lean4Lean.SExpr.Ctx.Inter}
+\leanok
+\uses{class:expb-sexpr-params}
+\srcloc{Lean4Lean/Experimental/SExpr.lean}{49}
+\thesisref{typesys.tex, the weakening and substitution lemmas.}
+\texttt{SLevel} is the quotient of \texttt{VLevel} by semantic equality, chosen so that level
+congruences disappear from the judgments. \texttt{SExpr} is a de Bruijn syntax over it with a
+first-class type \texttt{Lift} of renamings, a substitution monoid \texttt{Subst} with composition,
+identity, cons, tail and truncation, and the full set of interaction laws between lifting,
+substitution and level instantiation. \texttt{Skips} records which variables a term avoids, and
+\texttt{Ctx.Lift'} and \texttt{Ctx.Inter} describe liftings of contexts and how two liftings of a
+common context intersect. This API is cross-referenced from the shipping code, at
+\srcloc{Lean4Lean/Theory/VExpr.lean}{836}, so the file is not entirely dead.
+\end{definition}
+
+\begin{definition}[The \texttt{SExpr} weak definitional equality]
+\label{inductive:expb-sexpr-isdefeq}
+\lean{Lean4Lean.SExpr.IsDefEq, Lean4Lean.SExpr.IsDefEqStrong, Lean4Lean.SExpr.IsDefEq.strong, Lean4Lean.SExpr.IsDefEqStrong.defeq}
+\leanok
+\uses{class:expb-sexpr-params, family:expb-sexpr-syntax}
+\srcloc{Lean4Lean/Experimental/SExpr.lean}{590}
+\thesisref{typesys.tex \S2, the definitional equality judgment; unique.tex \S\texttt{sec:unique}.}
+$\Gamma\vdash e_1\equiv e_2 : A$ is the usual typed equality over \texttt{SExpr} with one extra rule,
+a heterogeneous transitivity \texttt{trans'} letting the middle term of a chain of type equalities be
+typed at a different sort. \texttt{IsDefEqStrong} is the variant carrying subject-reduction witnesses
+inline, including a \texttt{const} rule that demands a \texttt{CtorBundle} exhibiting each constant's
+type as a telescope ending in an inductive head. The two bridges \texttt{IsDefEq.strong} and
+\texttt{IsDefEqStrong.defeq} between them are stated at lines 679--680 and are literally
+\texttt{:= sorry}.
+\reviewnote{This judgment has \emph{no} $\iota$ or \texttt{pat} rule: the pattern-based rule is
+commented out at lines 609--610, and reduction rules enter only through the \texttt{extra} rule over
+\texttt{env.defeqs} plus the global \texttt{Params.extra\_pat} axiom. The \texttt{iota} branch
+extended \texttt{VEnv.IsDefEq} and \texttt{VEnv.Params} but left this parallel judgment untouched,
+so the two halves of the project now model $\iota$ differently.}
+\axfoot{direct sorry: SExpr.lean:679 (IsDefEq.strong), :680 (IsDefEqStrong.defeq)}
+\end{definition}
+
+\begin{definition}[Operational judgments over \texttt{SExpr}]
+\label{family:expb-sexpr-operational}
+\lean{Lean4Lean.SExpr.WHRed, Lean4Lean.SExpr.WHRedS, Lean4Lean.SExpr.WHNF, Lean4Lean.SExpr.ParRed, Lean4Lean.SExpr.ParRedS, Lean4Lean.SExpr.InferType, Lean4Lean.SExpr.InferTypeS, Lean4Lean.SExpr.NormalEq, Lean4Lean.SExpr.CRDefEq, Lean4Lean.SExpr.Ctx.Subst, Lean4Lean.SExpr.Ctx.SubstEq}
+\leanok
+\uses{inductive:expb-sexpr-isdefeq, family:expb-sexpr-syntax}
+\srcloc{Lean4Lean/Experimental/SExpr.lean}{947}
+\thesisref{typesys.tex, the reduction and algorithmic-typing items; unique.tex
+\S\texttt{sec:church\_rosser}.}
+Weak-head reduction \texttt{WHRed} (head application, $\beta$, and an \texttt{extra} rule that fires
+an abstract \texttt{Pat} rule whose side conditions are discharged by a list of definitional
+equalities) closes to \texttt{WHRedS}; \texttt{WHNF} is its normal-form predicate.
+\texttt{WHRed.determ} establishes determinism only for the $\beta$/application fragment: all five
+case splits where an \texttt{extra} step meets anything, including another \texttt{extra} step, are
+\texttt{sorry} (lines 987, 992, 995--997). \texttt{ParRed} is the parallel version with the same \texttt{extra}
+rule. \texttt{InferType} is a syntax-directed inference relation, deterministic and stable under
+weakening and substitution, with an up-to-reduction variant \texttt{InferTypeS}. \texttt{NormalEq}
+and \texttt{CRDefEq} repeat the proof-irrelevance and Church-Rosser relations of
+Section~\ref{chap:experimental-reduction} in typed, \texttt{SExpr} form.
+\reviewnote{The soundness bridges \texttt{WHRedS.defeq} (line 1008), \texttt{InferType.hasType}
+(1091), \texttt{InferTypeS.hasType} (1167), \texttt{WHRedS.parRedS} (1182) and \texttt{Ctx.Subst.id}
+(770) are all \texttt{sorry}, as is \texttt{CRDefEq.trans} (1295), so the whole operational layer is
+stated but not connected to the declarative one. Note that the pattern rule that
+\texttt{SExpr.IsDefEq} lacks \emph{is} present here, in \texttt{WHRed} and \texttt{ParRed}: the two
+layers disagree about how reduction rules enter.}
+\end{definition}
+
+\begin{definition}[Bundled \texttt{SExpr} typing judgment, \texttt{HasTypeS}]
+\label{inductive:expb-hastypes}
+\lean{Lean4Lean.SExpr.HasTypeS}
+\leanok
+\uses{inductive:expb-sexpr-isdefeq}
+\srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{29}
+\thesisref{unique.tex \S\texttt{sec:unique}, the judgment used in the proof of unique typing ``which
+has no weakening rule''.}
+\texttt{HasTypeS} $\Gamma\,e\,A\,b$ is a typing judgment indexed by a boolean: at $b = $
+\texttt{false} the derivation is structural, exactly one syntax-directed rule with the sort
+witnesses of all types carried inline; at $b = $ \texttt{true} the conversion rule is additionally
+available, and \texttt{base} injects the structural fragment into the conversion-closed one. Its
+docstring correctly calls it the \texttt{SExpr} analogue of \texttt{HasTypeStrong} on the
+\texttt{VExpr} side, stripped of the stratification index.
+\end{definition}
+
+\begin{theorem}[Type uniqueness for the bundled judgment]
+\label{thm:expb-hastypes-uniq}
+\lean{Lean4Lean.SExpr.HasTypeS.uniq, Lean4Lean.SExpr.HasTypeS.toStructural, Lean4Lean.SExpr.HasTypeS.unfold, Lean4Lean.SExpr.HasTypeS.hasType}
+\leanok
+\uses{inductive:expb-hastypes, inductive:expb-sexpr-isdefeq}
+\srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{92}
+\thesisref{unique.tex, the unique-typing theorem.}
+Every bundled derivation projects to an \texttt{IsDefEq} derivation (\texttt{hasType}) and factors
+as a structural derivation followed by a chain of conversions (\texttt{toStructural},
+\texttt{unfold}). Consequently, for any $b_1, b_2$, from \texttt{HasTypeS} $\Gamma\,e\,A\,b_1$ and
+\texttt{HasTypeS} $\Gamma\,e\,B\,b_2$ there is $u$ with $\Gamma\vdash A\equiv B : \mathtt{.sort}\ u$.
+\end{theorem}
+\begin{proof}
+\uses{thm:expa-forallE-inv, thm:expa-sort-inv}
+\leanok
+Induction on the first derivation, reducing the second to structural form at each step and matching
+the two syntax-directed rules. The application case inverts the two product types with
+\texttt{SExpr.forallE\_inv} (\ref{thm:expa-forallE-inv}) and substitutes with
+\texttt{Ctx.SubstEq}; the sort and product cases use \texttt{SExpr.sort\_inv}
+(\ref{thm:expa-sort-inv}); the conversion case appeals to the heterogeneous \texttt{trans'}. This is
+the closest thing in the whole experimental tree to the thesis's unique-typing theorem, and it is
+genuinely proved from its hypotheses.
+\axfoot{sorryAx via the ShapeLogRelAdequacy inversions; Lean4Lean.SExpr.Params.extra\_pat}
+\end{proof}
+
+\begin{theorem}[Sort uniqueness for the \texttt{SExpr} equality]
+\label{thm:expb-uniq-sort}
+\lean{Lean4Lean.SExpr.IsDefEq.toHasTypeS, Lean4Lean.SExpr.IsDefEq.uniq_sort}
+\leanok
+\uses{thm:expb-hastypes-uniq, inductive:expb-hastypes, inductive:expb-sexpr-isdefeq}
+\srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{138}
+\thesisref{unique.tex, clause 1 of definitional inversion.}
+\texttt{toHasTypeS} turns any $\Gamma\vdash e_1\equiv e_2 : A$ into bundled typings of both sides at
+$A$. Hence if $\Gamma\vdash e_1\equiv e_2 : \mathtt{.sort}\ u$ and
+$\Gamma\vdash e_2\equiv e_3 : \mathtt{.sort}\ v$ then $u = v$.
+\end{theorem}
+\begin{proof}
+\uses{thm:expb-hastypes-uniq}
+\leanok
+\texttt{toHasTypeS} opens with \texttt{replace h := h.strong} and then replays the strong rules; the
+\texttt{trans'} case is where the extra power is needed, and it is closed by \texttt{HasTypeS.uniq}
+plus \texttt{sort\_inv}. \texttt{uniq\_sort} then applies \texttt{HasTypeS.uniq} to the two typings
+of the middle term and inverts.
+\reviewnote{\texttt{UniqueTyping.lean} contains no textual \texttt{sorry}, yet
+\texttt{IsDefEq.strong} is \texttt{:= sorry} at \srcloc{Lean4Lean/Experimental/SExpr.lean}{679}, so
+this theorem and everything after it in the file are conditional on an admitted statement. The
+docstring on \texttt{toHasTypeS} is candid about this, but any status derived from grepping for
+\texttt{sorry} would mislabel the file as complete.}
+\axfoot{sorryAx via SExpr.IsDefEq.strong (SExpr.lean:679); Lean4Lean.SExpr.Params.extra\_pat}
+\end{proof}
+
+\begin{lemma}[Heterogeneous transitivity is admissible]
+\label{thm:expb-isdefeq-prime}
+\lean{Lean4Lean.SExpr.IsDefEq', Lean4Lean.SExpr.IsDefEq'.toIsDefEq, Lean4Lean.SExpr.IsDefEq.toIsDefEq', Lean4Lean.SExpr.IsDefEq.iff_isDefEq'}
+\leanok
+\uses{inductive:expb-sexpr-isdefeq, thm:expb-uniq-sort}
+\srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{195}
+\thesisref{unique.tex \S\texttt{sec:unique}.}
+\texttt{IsDefEq'} is \texttt{IsDefEq} with the \texttt{trans'} rule removed. The two systems derive
+exactly the same judgments: \texttt{iff\_isDefEq'}.
+\end{lemma}
+\begin{proof}
+\uses{thm:expb-uniq-sort}
+\leanok
+The forward direction is a rule-for-rule embedding. The backward direction is an induction in which
+the \texttt{trans'} case is discharged by \texttt{uniq\_sort}, which shows the two sorts coincide, so
+that ordinary \texttt{trans} applies.
+\reviewnote{Neither \texttt{IsDefEq} nor \texttt{IsDefEq'} has an $\iota$ rule, so this equivalence
+has not been checked against the system the \texttt{iota} branch actually extended.}
+\axfoot{sorryAx via SExpr.IsDefEq.strong (SExpr.lean:679); Lean4Lean.SExpr.Params.extra\_pat}
+\end{proof}
+
+\section{Unfinished semantic models}
+
+\begin{definition}[Axiomatized semantic domain (Coquand-Huber)]
+\label{family:expb-thierry-domain}
+\lean{D, DF, FinMut, FinHasType, El, Expr, Expr.eval, WHRedTS}
+\leanok
+\srcloc{Lean4Lean/Experimental/Thierry.lean}{11}
+\thesisref{no counterpart: normalization.tex is a stub ending in \texttt{UNFINISHED}.}
+A partial formalization of Coquand and Huber, \emph{An Adequacy Theorem for Dependent Type Theory},
+written (per its own header) to check the author's understanding of the monotonicity theorem. The
+semantic domain \texttt{D} is an \texttt{axiom}, as are its order, bottom, universe, $\lambda$ and
+$\Pi$ constructors and application; \texttt{DF} is the subtype of well-behaved endofunctions.
+\texttt{FinMut} is a datatype of finite approximations with an axiomatized embedding into
+\texttt{D}, \texttt{FinHasType} is a shape-level typing relation, \texttt{El} reads a semantic type
+back as a predicate, and \texttt{Expr} with \texttt{Expr.eval} and the typed reduction
+\texttt{WHRedTS} is the object syntax. These declarations live in the root namespace, so several of
+them collide by name with the corresponding ones in \texttt{Thierry2.lean}.
+\reviewnote{Line 9 declares \texttt{axiom mySorry : $\alpha$} with an auto-bound implicit, that is,
+an inhabitant of every type and in particular a proof of \texttt{False}. It is used in
+\texttt{DF.comp}, \texttt{DF.bot} and elsewhere, so this file is deliberately inconsistent. Nothing
+imports it, but nothing downstream may ever be allowed to.}
+\axfoot{the axiom mySorry (Thierry.lean:9) proves False; 14 further sorry}
+\end{definition}
+
+\begin{lemma}[Monotonicity of the adequacy interpretation]
+\label{family:expb-thierry-mono}
+\lean{HasTypeF, HasTypeFamF, HasPiFamF, HasTypeF.mono, HasPiFamF.mono, HasTypeFamF.mono, HasTypeF.mono_r, HasPiFamF.mono_r}
+\leanok
+\uses{family:expb-thierry-domain}
+\srcloc{Lean4Lean/Experimental/Thierry.lean}{194}
+The mutually recursive relations \texttt{HasTypeF} (a term is adequately interpreted at a shape),
+\texttt{HasTypeFamF} (a type family) and \texttt{HasPiFamF} (a $\Pi$ family) are monotone in their
+shape arguments: covariantly in the term shape (\texttt{mono}, at line 248) and contravariantly in
+the type shape (\texttt{mono\_r}, at line 321). This is the one substantive result the file set out
+to check.
+\end{lemma}
+\begin{proof}
+\uses{family:expb-thierry-domain}
+\leanok
+A large mutual induction on the shape measure, terminating by \texttt{meas\_apply\_lt}, with case
+analysis on the shape of the type. The \texttt{mono} theorems themselves are complete, but they rest
+on a dozen admitted auxiliaries (\texttt{FinMut.LE.rfl}, \texttt{FinHasType.mono},
+\texttt{FinHasType.lem5}, \texttt{El\_iff}, \texttt{meas\_apply\_lt}, \texttt{subst} and others) and
+on the inconsistent \texttt{mySorry} axiom, so they certify understanding, not truth.
+\axfoot{the axiom mySorry (Thierry.lean:9); sorryAx via FinHasType.mono, El\_iff, meas\_apply\_lt, subst}
+\end{proof}
+
+\begin{definition}[The finite shape approximation lattice]
+\label{family:expb-thierry2-shape}
+\lean{Shape, ShapeFun, Shape.LE, Shape.Join, Shape.Compat, Shape.app, Shape.lift, Shape.HasType, Shape.HasTypeU}
+\leanok
+\srcloc{Lean4Lean/Experimental/Thierry2.lean}{21}
+\thesisref{no counterpart (normalization.tex is a stub).}
+A second, more self-contained pass at the same adequacy argument, in which the abstract domain is
+replaced by a concrete construction. \texttt{Shape n} is an $n$-level approximation of a semantic
+value (bottom, the universe, a $\Pi$ given by a domain shape and a finite table of
+argument/result shapes, or a $\lambda$ given by such a table), with a decidable order, a
+compatibility relation, binary joins, application, lifting between levels, and a shape-level typing
+relation characterised inductively by \texttt{HasTypeU}.
+\reviewnote{The order-theoretic core is assumed, not proved: \texttt{Shape.Compat.def},
+\texttt{Shape.Join.mk}, \texttt{ShapeFun.Join.mk}, \texttt{Shape.HasType.mono},
+\texttt{ShapeFun.LE.bot}, \texttt{ShapeFun.bot\_app} and \texttt{Shape.app\_mono\_r} are all
+\texttt{sorry}. The same construction reappears in \texttt{MoreStepIndexed.lean} and in
+\texttt{ShapeLogRel.lean}: three near-copies with three independently admitted sets of lattice laws.}
+\end{definition}
+
+\begin{lemma}[Concrete domain from shapes, and monotonicity of the interpretation]
+\label{family:expb-thierry2-model}
+\lean{D, DF, D.lam, D.unlam, D.pi, Shape.embed, interp, DefEqF, DefEqF.mono, DefEqF.mono_r, DefEqPiF.mono, DefEqLamF.mono}
+\leanok
+\uses{family:expb-thierry2-shape}
+\srcloc{Lean4Lean/Experimental/Thierry2.lean}{351}
+A semantic value \texttt{D} is a downward-closed, join-complete set of shapes; \texttt{DF} is the
+corresponding function space, with $\lambda$, its inverse \texttt{unlam} and $\Pi$ constructed on
+top. \texttt{interp} evaluates the object syntax into it, and \texttt{DefEqF} interprets a
+definitional-equality judgment at a shape. The payload is the monotonicity of \texttt{DefEqF} and of
+its $\Pi$ and $\lambda$ variants in both shape arguments.
+\end{lemma}
+\begin{proof}
+\uses{family:expb-thierry2-shape}
+\textbf{Not proved in Lean.} Two of the declarations this family bundles are literal
+\texttt{sorry}s, \texttt{D.pi} (line 472) and \texttt{DF.mk'} (line 421); neither name occurs in the
+\texttt{DefEqF}/\texttt{DefEqPiF}/\texttt{DefEqLamF} \texttt{mono}/\texttt{mono\_r} theorems' own
+bodies, which instead go through mutual induction on shape levels, using the join and compatibility
+lemmas of the shape lattice. Those lattice lemmas are themselves partly \texttt{sorry}, so the family
+is transitively tainted regardless of the textual split.
+\reviewnote{\texttt{DF.mk'} (line 421) and \texttt{D.pi} (line 472) are \texttt{sorry}, so the model
+is incomplete at exactly the connective the adequacy theorem is about; the judgment being
+interpreted, \texttt{DefEq}, is itself an \texttt{axiom} (lines 607--609) rather than a definition;
+and this file too opens with \texttt{axiom mySorry}.}
+\axfoot{the axiom mySorry (Thierry2.lean:9); sorryAx via D.pi, DF.mk', Shape.Join.mk, Shape.Compat.def}
+\end{proof}
+
+\begin{definition}[Semantic type classifiers over \texttt{SExpr} (sketch)]
+\label{family:expb-stepindexed}
+\lean{Lean4Lean.SExpr.Classifier', Lean4Lean.SExpr.Classifier.HasTy, Lean4Lean.SExpr.NormalType, Lean4Lean.SExpr.normalize, Lean4Lean.SExpr.normalize_prop, Lean4Lean.SExpr.IsTy', Lean4Lean.SExpr.IsTy, Lean4Lean.SExpr.IsTyN, Lean4Lean.SExpr.IsTy.def}
+\leanok
+\uses{family:expb-sexpr-operational}
+\srcloc{Lean4Lean/Experimental/StepIndexed.lean}{8}
+\thesisref{normalization.tex, the unwritten strong-normalization section.}
+A \texttt{Classifier} pairs a level with a membership predicate on terms; \texttt{normalize}
+$\Gamma\,A$ classically picks a weak-head normal \emph{type} reachable from $A$, if one exists, and
+\texttt{normalize\_prop} extracts its defining property. \texttt{IsTy'} is a coinductive rendering
+of ``$A$ is a type classified by $C$'' with three cases (sort, product, stuck).
+\reviewnote{\texttt{IsTy}, \texttt{IsTyN} and the unfolding equation \texttt{IsTy.def} are
+\texttt{axiom}s: the fixpoint the file sets out to construct is posited rather than built, which
+begs the file's own question. \texttt{IsTyN} is declared and never used, and roughly 40\% of the
+88-line file is commented out. This is scratch, not a result.}
+\end{definition}
+
+\begin{definition}[Step-indexed propositions and bounded judgments]
+\label{family:expb-morestepindexed}
+\lean{Lean4Lean.SExpr.IProp, Lean4Lean.SExpr.BIProp, Lean4Lean.SExpr.WHRedUpToN, Lean4Lean.SExpr.ParRedN, Lean4Lean.SExpr.InferTypeN, Lean4Lean.SExpr.NormalEqN, Lean4Lean.SExpr.CRDefEqN, Lean4Lean.SExpr.CheckTypeN}
+\leanok
+\srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{15}
+\thesisref{normalization.tex (unwritten).}
+\texttt{IProp} is an upward-closed family of propositions indexed by a step count and \texttt{BIProp
+n} its bounded version, with restriction operators and the expected idempotence. On top of them the
+$n$-bounded reduction, parallel-reduction, inference and normal-equality judgments are combined into
+\texttt{CRDefEqN} and \texttt{CheckTypeN}, each with a monotonicity lemma.
+\reviewnote{The four bounded judgments and their four monotonicity lemmas are \texttt{axiom}s
+(lines 38--45): the entire operational layer this file is about is assumed. The step-index
+bookkeeping is the only content that is actually proved.}
+\end{definition}
+
+\begin{definition}[Shape-indexed logical relation]
+\label{family:expb-morestepindexed-logrel}
+\lean{Lean4Lean.SExpr.Classifier', Lean4Lean.SExpr.Classifier.DefEq, Lean4Lean.SExpr.LogRel, Lean4Lean.SExpr.LogRel.TypeEq, Lean4Lean.SExpr.LogRelK.bot, Lean4Lean.SExpr.LogRelK.sort, Lean4Lean.SExpr.LogRelK.forallE}
+\leanok
+\uses{family:expb-morestepindexed, family:expb-thierry2-shape}
+\srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{338}
+\thesisref{normalization.tex (unwritten).}
+A \texttt{Classifier} assigns to a pair of types a family of equality predicates on terms, monotone
+in the shape; \texttt{LogRel} $\Gamma\,A\,B\,n$ assigns such a classifier to each shape at level
+$n$, with \texttt{LogRel.TypeEq} the membership predicate; \texttt{LogRelK.bot},
+\texttt{LogRelK.sort} and \texttt{LogRelK.forallE} build the classifiers for the two type formers
+out of the previous level.
+\reviewnote{The file contains \texttt{\#exit} at line 420, so the two declarations that would
+assemble one level from the previous and iterate it, \texttt{TypeEqS} (421) and \texttt{TypeEq}
+(443), are never elaborated and do not exist in the compiled environment; neither does
+\texttt{TypeEq.mono}, which is commented out at line 489. Of the five textual \texttt{sorry}s in the
+file only one, \texttt{ShapeFun.app\_mono\_l} at line 310, is live; the rest are inside comments.
+Lines 63--336 duplicate the \texttt{Shape} lattice of \texttt{Thierry2.lean} wholesale, admitted
+order laws included.}
+\axfoot{sorryAx via ShapeFun.app\_mono\_l (MoreStepIndexed.lean:310)}
+\end{definition}
+
+\begin{definition}[Inverse-limit domain for the \texttt{SExpr} syntax functor]
+\label{family:expb-domaintheory}
+\lean{Lean4Lean.SExpr.SExprF, Lean4Lean.SExpr.SExprF.map, Lean4Lean.SExpr.SExprF.select, Lean4Lean.SExpr.DomN, Lean4Lean.SExpr.DomN.up, Lean4Lean.SExpr.DomN.down, Lean4Lean.SExpr.DomN.cast, Lean4Lean.SExpr.Dom, Lean4Lean.SExpr.Dom.in, Lean4Lean.SExpr.Dom.out}
+\leanok
+\uses{family:expb-sexpr-syntax}
+\srcloc{Lean4Lean/Experimental/DomainTheory.lean}{8}
+\thesisref{normalization.tex (unwritten).}
+\texttt{SExprF V F} is one layer of the \texttt{SExpr} syntax with abstract slots for subterms and
+for binders, with a functorial \texttt{map} and a dependent eliminator \texttt{select};
+\texttt{DomN n} is its $n$-fold unfolding, equipped with transfer maps \texttt{up}, \texttt{down} and
+\texttt{cast} whose coherence laws are proved by induction on the index; \texttt{Dom} is the inverse
+limit, the coherent sequences of approximations. \texttt{Dom.in} folds one layer into the limit.
+\reviewnote{\texttt{Dom.out} (line 211), which should unfold it again, contains the \texttt{stop}
+tactic at line 223, and \texttt{stop} is shorthand for \texttt{repeat sorry}: the definition is
+\texttt{sorryAx}-backed even though a text search for \texttt{sorry} finds nothing in this file. The
+file then ends at \texttt{Dom.fin} (line 240), a stub mapping every finite element to bottom.}
+\axfoot{sorryAx via the stop tactic in Dom.out (DomainTheory.lean:223)}
+\end{definition}
+
+\section{Contribution summary}
+
+The \texttt{iota} branch changed 28 lines in this group and \texttt{trproj} changed none. In
+dependency order the contributions are: the interface field \texttt{Typing.pat\_env}
+(\ref{structure:expb-typing}, one line plus a supporting import), which is what lets the two new
+cases of
+\ref{thm:expb-todyping} and \ref{thm:expb-isdefequ-church-rosser} (eight lines together) promote an
+environment-registered rule to an abstract \texttt{Pat} rule; the layer constructor
+\texttt{IsDefEq1.pat} with the two cases that produce and consume it
+(\ref{inductive:expb-isdefeq1}, \ref{thm:expb-induction1}, \ref{thm:expb-isdefeq1-induction}, nine
+lines) and its type-erased twin (\ref{inductive:expb-isdefequ1}, \ref{thm:expb-inductionu1}, eight
+lines); and the stub \texttt{pats \_ \_ := False} in \ref{def:expb-venvprime-out} (one line). Two of
+those eight-line groups also carry a silent strengthening of an exported hypothesis from
+\texttt{Ordered} to \texttt{OrderedStrong}.
+
+Why they exist: \texttt{VEnv} grew a \texttt{pats} field and \texttt{VEnv.IsDefEq} grew a
+\texttt{pat} constructor, so every inductive over \texttt{IsDefEq} in the tree acquired a new case
+and every construction of a \texttt{VEnv} acquired a new field. CI builds
+\texttt{Lean4Lean.Experimental} even though \texttt{lake} does not, so the experiments had to be
+repaired rather than left broken.
+
+How much of it is verification work and how much is compile-keeping: only the nine lines in
+\texttt{Stratified.lean} do something that nothing else in the repository does, namely decide how
+the $\iota$ rule stratifies and check that the decision round-trips. The eight lines in
+\texttt{NormalEq.lean} and \texttt{ParallelReduction.lean} are the same argument the branch already
+wrote in \texttt{Theory/Typing/ChurchRosser.lean} (\ref{class:cr-params},
+\ref{axiom:cr-params-pat-env}, \ref{thm:isdefeq-church-rosser}), in files whose headers ask for their
+own deletion. The eight in \texttt{StratifiedUntyped.lean} are dead, since the only consumer is
+commented out. The one in \texttt{Stronger.lean} narrows the file to $\iota$-free environments.
+
+What remains open. In this group, all of it: the two theorems the branch extended,
+\ref{thm:expb-isdefequ-church-rosser} and \ref{thm:expb-induction1}, are conditional on pre-existing
+master \texttt{sorry}s, so nothing here is a proved result. The one substantive gap the branch left
+is the \texttt{SExpr} side: \ref{inductive:expb-sexpr-isdefeq} still has no $\iota$ rule, so
+\ref{thm:expb-hastypes-uniq}, \ref{thm:expb-uniq-sort} and \ref{thm:expb-isdefeq-prime} are results
+about a system that does not model the reduction rules the rest of the project now has.
+
+\section{Review notes}
+
+\begin{itemize}
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{909}: the $\iota$
+case added here, together with the \texttt{Typing.pat\_env} field at
+\srcloc{Lean4Lean/Experimental/NormalEq.lean}{97}, duplicates exactly what the branch added to
+\texttt{Theory/Typing/ChurchRosser.lean} (the \texttt{pat} case of \texttt{IsDefEq.church\_rosser},
+lines 1390--1394, and the \texttt{Params.pat\_env} field). Both files carry an upstream
+\texttt{TODO: remove, this is now part of ChurchRosser.lean}. The duplication is forced by CI, but
+the $\iota$ rule is now maintained in two places with no cross-reference comment in either. The
+other $\iota$ case in this file, \texttt{VEnv.IsDefEq.toTyping} at
+\srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{857} (\ref{thm:expb-todyping}), is not a
+duplicate of anything: it bridges a concrete derivation into the abstract \texttt{Typing} record
+that \texttt{ChurchRosser.lean}, working directly over a \texttt{[Params]} instance, has no need for.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/SExpr.lean}{981}: the chapter text describes
+\texttt{WHRed} as deterministic (\texttt{WHRed.determ}), but that theorem's proof is \texttt{sorry}
+in all five case splits where an \texttt{extra} (pattern-rule) step meets anything, including another
+\texttt{extra} step (lines 987, 992, 995--997); only the $\beta$/application fragment is actually
+proved deterministic.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/Stratified.lean}{79} and
+\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{59}: the hypothesis of an exported theorem
+was silently strengthened from \texttt{Ordered env} to \texttt{OrderedStrong env}. The change is
+forced and loses no realistic instance, but neither site explains it.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/SExpr.lean}{609}: the whole \texttt{SExpr}
+line of work still has no $\iota$ rule in its declarative equality. The pattern-based rule is
+commented out and reduction rules enter only through \texttt{env.defeqs} plus the global
+\texttt{axiom Params.extra\_pat} at line 614, while \texttt{WHRed} and \texttt{ParRed} on the same
+file \emph{do} carry a \texttt{Pat}-based rule. The branch extended \texttt{VEnv.IsDefEq} and
+\texttt{VEnv.Params} and left this parallel development untouched.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{138}: the file contains no
+textual \texttt{sorry} but \texttt{IsDefEq.toHasTypeS} opens with \texttt{h.strong}, and
+\texttt{SExpr.IsDefEq.strong} is \texttt{:= sorry}. \texttt{uniq\_sort} (172),
+\texttt{toIsDefEq'} (240) and \texttt{iff\_isDefEq'} (260) are all conditional; a status derived
+from grepping would mislabel the file as complete.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/DomainTheory.lean}{223}: \texttt{Dom.out} is
+\texttt{sorryAx}-backed through the \texttt{stop} tactic, which is \texttt{repeat sorry}, again
+despite no literal \texttt{sorry} in the file. The same pitfall occurs at
+\srcloc{Lean4Lean/Experimental/LogRel.lean}{320} and
+\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1703}.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{420}: a
+\texttt{\#exit} truncates elaboration, so \texttt{TypeEqS} (421) and \texttt{TypeEq} (443), the two
+declarations the file exists to build, are never compiled and do not appear in the environment. A
+reader of the source cannot tell this from the text, and the file still builds green.
+\item \textbf{High.} \srcloc{Lean4Lean/Experimental/Thierry.lean}{9} and
+\srcloc{Lean4Lean/Experimental/Thierry2.lean}{9}: \texttt{axiom mySorry : $\alpha$} is an inhabitant
+of every type and therefore a proof of \texttt{False}. It is used in \texttt{DF.comp},
+\texttt{DF.bot} and elsewhere. These files are scratch formalizations of an external paper and are
+imported by nothing, but the axiom must be recorded so that nothing downstream is ever allowed to
+depend on them. \texttt{Thierry2.lean} additionally axiomatizes the judgment it interprets
+(\texttt{DefEq}, \texttt{DefEq.U}, \texttt{DefEq.left}, lines 607--609).
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/NormalEq.lean}{97}: \texttt{Typing.pat\_env} has
+no docstring, unlike the field it mirrors in \texttt{ChurchRosser.lean}, which documents it. The
+\texttt{Typing} structure is never instantiated anywhere in the repository, so the added obligation
+is never discharged and gives no evidence that the $\iota$ rule is realisable in this interface.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{51}: the added
+\texttt{IsDefEqU1.pat} constructor is never eliminated, since the only consumer is inside the
+commented-out block at lines 121--142, and its \texttt{chk} list has an entirely unconstrained third
+component in the erased setting where \texttt{Check.OK} would say the same thing directly.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/Stronger.lean}{28}: \texttt{pats \_ \_ := False}
+silently restricts every theorem about erased environments in the file to $\iota$-free ones. Adding
+a real \texttt{pats} field to \texttt{VEnv'} was the general fix; the file dead-ends in four
+\texttt{sorry}s anyway, so the shortcut is pragmatic rather than wrong.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{699}: the two
+pre-existing master \texttt{sorry}s in \texttt{NormalEq.parRed} (699, 718), precisely the cases where
+a pattern reduction meets a proof-irrelevance step, make \ref{thm:expb-parred-church-rosser},
+\ref{family:expb-crdefeq} and \ref{thm:expb-isdefequ-church-rosser} conditional in this file. The
+$\iota$ case the branch added therefore extends an unproved theorem; the corresponding case in
+\texttt{ChurchRosser.lean} is the one that matters.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{63}: the
+\texttt{Shape}/\texttt{ShapeFun} approximation lattice exists in three near-identical copies, here,
+at \srcloc{Lean4Lean/Experimental/Thierry2.lean}{21} and in \texttt{ShapeLogRel.lean}, each with its
+own partly admitted order laws and nothing keeping them in sync.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/StepIndexed.lean}{59}: \texttt{IsTy},
+\texttt{IsTyN} and \texttt{IsTy.def} are \texttt{axiom}s positing the existence and the unfolding
+equation of the very fixpoint the file sets out to construct; \texttt{IsTyN} is declared and never
+used, and about 40\% of the file is commented out.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/NormalEq.lean}{145}: several declarations here
+carry fully qualified names that already exist in \texttt{Theory/Typing/ChurchRosser.lean}, for
+instance \texttt{Lean4Lean.Pattern.Matches.hasType} and \texttt{Lean4Lean.Pattern.Check.OK.weakN}.
+The two modules are never imported together so Lean accepts it, but any name-indexed tooling (an
+axiom census, a blueprint cross-reference, a documentation generator) will conflate the sorry-free
+copy here with the \texttt{sorryAx}-tainted one there.
+\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/Stratified.lean}{160} and
+\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{121}: two thirds of each file is a
+commented-out block of abandoned unique-typing and weakening-inversion attempts, containing further
+\texttt{sorry}s. Besides being dead weight, it makes the last live declaration of each file look
+admitted to any line-range-based analysis.
+\end{itemize}

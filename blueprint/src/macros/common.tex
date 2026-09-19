@@ -1,0 +1,56 @@
+% Macros and settings shared by the pdf (print.tex) and the web (web.tex)
+% versions of the lean4lean blueprint.
+%
+% Format-specific overrides live in macros/print.tex and macros/web.tex,
+% both of which are read *after* this file.
+
+% ---------------------------------------------------------------------------
+% Theorem-like environments.
+%
+% The five environments definition/lemma/proposition/theorem/corollary are the
+% dependency-graph node types recognised by plastexdepgraph.  This blueprint
+% additionally uses `example' (for the declarations coming from test/example
+% files); it is added to the graph through the `thms=' package option in
+% web.tex.  `remark' is deliberately NOT a graph node: it is plain commentary.
+% All of them share the `theorem' counter, which is never reset.
+% ---------------------------------------------------------------------------
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\theoremstyle{plain}
+
+% ---------------------------------------------------------------------------
+% Blueprint-specific annotation macros.
+%
+% Usage rules (see the authoring conventions):
+%   \contrib{iota|trproj|mixed}  first thing in the body of every node whose
+%                                attribution is not `master'.
+%   \srcloc{path}{line}          source pointer; underscores are written raw
+%                                inside this macro (no Lean4Lean source path
+%                                contains one).  Overridden in macros/web.tex
+%                                to link to GitHub.
+%   \thesisref{...}              thesis correspondence line.
+%   \axfoot{...}                 axiom footprint line.
+%   \reviewnote{...}             a critical remark; no fixes.
+% ---------------------------------------------------------------------------
+% Note: the trailing \space (a plain, breakable interword space) matters:
+% a control space \ is not a legal line break, which produced overfull
+% boxes in the pdf when a badge was followed by a long \srcloc path.
+\newcommand{\contrib}[1]{\textbf{[contributed on branch \texttt{#1}]}\space}
+
+\newcommand{\srcloc}[2]{\texttt{#1:#2}}
+
+\newcommand{\thesisref}[1]{\emph{Thesis: #1}}
+
+\newcommand{\axfoot}[1]{\par\noindent{\small Axiom footprint: \texttt{#1}}\par}
+
+\newcommand{\reviewnote}[1]{\par\noindent\emph{Review note: #1}\par}

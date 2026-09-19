@@ -1,0 +1,16 @@
+# Build outputs (regenerate with `leanblueprint pdf` / `leanblueprint web`)
+/print/
+/web/
+src/web.paux
+
+# LaTeX aux files
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.xdv
+
+__pycache__/

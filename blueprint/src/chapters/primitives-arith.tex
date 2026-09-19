@@ -1,0 +1,1784 @@
+\chapter{Primitive operations: arithmetic}
+\label{chap:primitives-arith}
+
+Lean's kernel does not evaluate \texttt{Nat.add} by unfolding its definition: it recognises
+certain declarations by name and swaps in GMP arithmetic. That recognition is a trusted step of
+the real kernel, and \texttt{Lean4Lean/Primitive.lean} re-implements it as a \emph{checker} --
+for each recognised name, a branch that opens probe variables, runs \texttt{isDefEq} checks
+against the equations the primitive is supposed to satisfy, and accepts only if they all pass.
+The five files of this chapter are the soundness proof of that checker: a theorem per branch
+over a shared vocabulary,
+each saying that if the branch accepts then the declaration really reflects the arithmetic
+function the kernel will afterwards compute with, i.e.\ that it satisfies the entry recorded for
+it in \texttt{primSpecs} (\ref{ind:primspec}, \ref{vpc:struct:primitiveresult}).
+
+The files are \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1} (3117 lines), the
+shared vocabulary; \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{1} (438 lines),
+fifteen short theorems covering fourteen simple clauses;
+\srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{1}
+(547 lines), which factors \texttt{Nat.div} and \texttt{Nat.mod} through the fuel recursion they
+share; \srcloc{Lean4Lean/Verify/Environment/Primitive/Gcd.lean}{1} (148 lines), a single proof for
+a well-founded recursion; and \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{1}
+(405 lines), the hard case, where the operator is a free variable of the recognizer's context.
+The vocabulary the recognizers are written in (\texttt{Condition}, \texttt{Reflection},
+\texttt{checkNatFuelRec}, \texttt{unfoldNatWellFounded}) lives in
+\ref{family:kernel-primitive-dsl}, and the surrounding infrastructure --
+\texttt{Data}, \texttt{PrimitiveResult}, the probe combinators, the \texttt{HasPrimitives}
+accessors -- in chapter~\ref{chap:primitives-core}.
+
+Notation. $c \vdash e \leadsto e'$ abbreviates \texttt{TrExprS c.venv c.lparams c.vlctx e e'}
+(\ref{ind:trexprs}), the reading of a source \texttt{Expr} as a model \texttt{VExpr};
+$\Gamma \vdash e : A$ is \texttt{VEnv.HasType}; $\equiv$ is \texttt{VEnv.IsDefEqU}, definitional
+equality up to the type. $E$ ranges over environment extensions of the checker context $c$, so a
+statement quantified over $E$ is one that survives further declarations being added.
+
+Relation to the thesis is thin, and that is expected: \texttt{lean-type-theory/axioms.tex} covers
+$\beta$, $\zeta$, $\delta$, $\iota$, quotients, \texttt{propext} and choice, and has no section on
+the kernel's GMP-accelerated \texttt{Nat}/\texttt{String} primitives at all. The correspondences
+that do exist are structural: the transport lemmas instantiate Weakening
+(\texttt{typesys.tex}, \texttt{thm:weak}) and Properties of substitution
+(\texttt{typesys.tex}, \texttt{thm:subst}) for the \texttt{Expr}-to-\texttt{VExpr} translation
+relation, and \ref{prim-cond:thm:isdefequ-natproj} and \ref{prim-cond:thm:condition-gadget} are
+applications of the $\beta$ rule.
+
+The contributed material is small and mechanical. Of 4655 lines, 67 are attributed to
+\texttt{iota} (27 in \texttt{Condition.lean}, 14 in \texttt{Clauses.lean}, 13 in
+\texttt{DivMod.lean}, 7 in \texttt{Bitwise.lean}, 6 in \texttt{Gcd.lean}) and 2 to
+\texttt{trproj} (\srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{203}, a re-wrap of
+one over-long line). All 67 re-thread the same hypothesis between \texttt{VEnv.Ordered} and
+\texttt{VEnv.OrderedStrong} (\ref{struct:orderedstrong}), but not all in the same direction: 61
+replace \texttt{.ordered} by \texttt{.orderedStrong}, and 6 -- every one of them in
+\texttt{Bitwise.lean} -- insert \texttt{.ordered} at a use of the single local abbreviation that
+was raised. Six theorem \emph{statements} changed
+(\ref{prim-cond:thm:trexprs-boolprop}, \ref{prim-cond:thm:trexprs-propboolprop},
+\ref{prim-cond:thm:trexprs-boolnat3}, \ref{prim-cond:thm:trexprs-natnatprop},
+\ref{prim-cond:thm:trexprs-divgotype}, \ref{prim-cond:thm:trexprs-natproj}); of the remaining 61
+proof lines, 55 write \texttt{c.Ewf.orderedStrong} or \texttt{E.wf.orderedStrong} where master
+wrote \texttt{.ordered}, and 6 write \texttt{hE.ordered} where master wrote \texttt{hE}.
+
+Assessment. The reasoning behind the change is sound and belongs to another chapter: once
+$\iota$ rules have a real specification, \texttt{Ordered.strong} is no longer provable, and
+the honest replacement names the missing obligation as \ref{thm:wf-patsstrong}. What this chapter
+records is the cost. No \texttt{sorry} occurs in any of these five files, and on \texttt{master}
+they needed only \texttt{VEnv.Ordered}; after the merge every arithmetic-primitive result here
+depends on \texttt{sorryAx} through \ref{thm:wf-orderedstrong}. The \texttt{CoeOut} instance at
+\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{343} hides most of the coercions, so nothing at
+the call sites records it: not one of the 67 touched lines says so, and three of the five files
+carry no module docstring at all. Nor is the effect confined to the touched lines -- master-side
+proofs whose text neither branch changed, \ref{prim-cond:thm:reflection-gentele} among them, are
+\texttt{sorry}-dependent now and were not on \texttt{master}, because the target of that
+coercion moved under them. The master code these edits sit in is of an unusually high
+standard -- nearly every design decision is documented with its reason, and several of the
+docstrings argue a point a reviewer would otherwise have to reconstruct -- which makes the silence
+about the new obligation the more conspicuous.
+
+\section{Conditions and their model-side reading}
+
+Several primitives (\texttt{Nat.div}, \texttt{Nat.mod}, \texttt{Nat.gcd}, \texttt{Nat.bitwise})
+are defined with conditionals, so the checker must be able to conclude that some \texttt{ite} or
+\texttt{dite} in a definition really decides a particular predicate. A \texttt{Condition} packages
+a decidable predicate with a decision procedure and the evidence relating them; the definitions
+below are what a successful \texttt{Condition.check} hands back.
+
+\begin{definition}[Model-side shapes of a conditional]
+  \label{prim-cond:def:ite-dite-app}
+  \lean{Lean4Lean.Primitive.iteApp, Lean4Lean.Primitive.diteApp}
+  \leanok
+  \uses{ind:vexpr}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{40}
+  $\mathtt{iteApp}\ \alpha\ p\ \mathit{inst}\ t\ e$ is the \texttt{VExpr} spelling of
+  $@\mathtt{ite}.\{1\}\ \alpha\ p\ \mathit{inst}\ t\ e$, and
+  $\mathtt{diteApp}\ p\ \mathit{inst}\ t\ e$ that of
+  $@\mathtt{dite}.\{1\}\ \mathtt{Nat}\ p\ \mathit{inst}\ t\ e$, whose two branches are functions
+  of the decision's proof. Everything the conditional layer states is stated about these two
+  shapes.
+\end{definition}
+
+\begin{definition}[A reflection together with its translation, \texttt{Reflection.WF}]
+  \label{prim-cond:struct:reflection-wf}
+  \lean{Lean4Lean.Primitive.Reflection.WF}
+  \leanok
+  \uses{ind:trexprs, family:kernel-primitive-dsl}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{51}
+  For a source-level \texttt{Reflection} $r$ and a checker context $c$, \texttt{Reflection.WF c r}
+  carries a \texttt{VExpr} $\mathtt{type}'$, a translation $c \vdash r.\mathtt{type} \leadsto
+  \mathtt{type}'$, and the typing $\mathtt{type}' : \mathtt{Prop} \to \mathtt{Bool} \to
+  \mathtt{Prop}$ established by \texttt{Reflection.check}. The translation is carried as a field
+  rather than existentially bound because \texttt{WF\_ite} and \texttt{WF\_dite} are equations
+  about it.
+\end{definition}
+
+\begin{definition}[What is known about \texttt{toDec}'s type]
+  \label{prim-cond:def:reflection-todect}
+  \lean{Lean4Lean.Primitive.Reflection.WF.ToDecT, Lean4Lean.Primitive.Reflection.WF.ToDecT.spine}
+  \leanok
+  \uses{prim-cond:struct:reflection-wf, fam:strong-inversions}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{68}
+  \texttt{ToDecT toDec'} says that $\mathtt{toDec}'$ applied to a proposition $p$, a boolean $bb$
+  and evidence $H : \mathtt{type}'\ p\ bb$ is well formed, in every extension $E$ and every
+  well-formed context $\Gamma$. \texttt{ToDecT.spine} peels that application into the three pi
+  types of the spine, each paired with the typing of the argument it was applied to; it is three
+  uses of \texttt{VExpr.WF.app\_inv} and makes no attempt to identify the domains with
+  $\mathtt{Prop}$, $\mathtt{Bool}$, $\mathtt{type}\ p\ bb$, since a consumer converts against
+  whatever domain it finds. The docstring records why this is not a field of
+  \texttt{Reflection.WF}: only the two optional checks establish it.
+\end{definition}
+
+\begin{definition}[The two optional contents of a reflection check]
+  \label{prim-cond:def:reflection-wf-ite-dite}
+  \lean{Lean4Lean.Primitive.Reflection.WF.WF_ite, Lean4Lean.Primitive.Reflection.WF.WF_dite}
+  \leanok
+  \uses{prim-cond:struct:reflection-wf, prim-cond:def:reflection-todect}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{106}
+  \texttt{WF\_ite} says that at evidence $H : \mathtt{type}'\ p\ (\mathtt{boolLit}\ b)$ for a
+  boolean literal $b$, the \texttt{ite} the reflection builds on $\mathtt{toDec}'\ p\ b\ H$ is
+  definitionally the branch $b$ selects, for every proposition, type $\alpha$ and pair of
+  branches, in every extension and context. \texttt{WF\_dite} is the same for the \texttt{dite}
+  gadget at \texttt{Nat}, whose branches are applied to the proof that \texttt{ofTrue}/%
+  \texttt{ofFalse} extract from the evidence; those two are existentially bound, since only this
+  check types them. Both are quantified over the context, unlike the fields of
+  \ref{prim-cond:struct:reflection-wf}, because they speak about the caller's terms.
+\end{definition}
+
+\begin{definition}[Model-side reading of a checked condition, \texttt{Condition.WF}]
+  \label{prim-cond:struct:condition-wf}
+  \lean{Lean4Lean.Primitive.Condition.WF, Lean4Lean.Primitive.ConditionImpl.domain, Lean4Lean.Primitive.ConditionImpl.WF, Lean4Lean.Primitive.ReflectNatNat.WF}
+  \leanok
+  \uses{family:kernel-primitive-dsl, prim-cond:struct:reflection-wf, ind:trexprs}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{150}
+  \texttt{Condition.WF c cnd} carries the translations $\mathtt{prop}'$ and $\mathtt{dec}'$ of the
+  condition's predicate and decision procedure; the \texttt{impl}-dependent datum
+  \texttt{ConditionImpl.WF} (\texttt{Unit} for \texttt{.bool}, a \texttt{ReflectNatNat.WF} for a
+  \texttt{reflectNatNat}, which adds the reflection's own \texttt{WF} plus translations of
+  \texttt{asBool} and \texttt{proof}); the field \texttt{propT}, saying $\mathtt{prop}'$ applied to
+  arguments of the types listed by \texttt{ConditionImpl.domain} is a proposition; and
+  \texttt{vnil : c.vlctx = []}, recording that the check ran before any binder. \texttt{propT} is
+  stated applied rather than as an arity because applied is what the checks give.
+  \reviewnote{\texttt{ConditionImpl.WF} and \texttt{ReflectNatNat.WF} are the only two
+  declarations in this block with no docstring. The structure lives in \texttt{Type} and is
+  consumed under an existential in \ref{prim-cond:thm:condition-check-wf}, so no consumer can
+  project its data out except through a \texttt{Prop}-valued continuation; that is deliberate and
+  consistent, but it is nowhere said.}
+\end{definition}
+
+\begin{lemma}[The two translations at the empty context, and their closedness]
+  \label{prim-cond:family:condition-wf-projections}
+  \lean{Lean4Lean.Primitive.Condition.WF.hprop0, Lean4Lean.Primitive.Condition.WF.hdec0, Lean4Lean.Primitive.Condition.WF.propC, Lean4Lean.Primitive.Condition.WF.decC}
+  \leanok
+  \uses{prim-cond:struct:condition-wf}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{173}
+  Four one-line consequences of \texttt{vnil}: the predicate and the decision procedure translate
+  at the empty local context, and their translations $\mathtt{prop}'$, $\mathtt{dec}'$ are closed
+  \texttt{VExpr}s.
+\end{lemma}
+\begin{proof}
+  \uses{thm:isdefeq-closedn}
+  \leanok
+  Rewrite the context by \texttt{vnil}; closedness is then \texttt{TrExprS.closedN\_nil} at the
+  ordered environment.
+\end{proof}
+
+\begin{definition}[Building a checked conditional: the positive specifications]
+  \label{prim-cond:def:condition-wf-ite-dite}
+  \lean{Lean4Lean.Primitive.ConditionImpl.WF.apply, Lean4Lean.Primitive.Condition.WF.WF_ite, Lean4Lean.Primitive.Condition.WF.WF_dite}
+  \leanok
+  \uses{prim-cond:struct:condition-wf, prim-cond:def:ite-dite-app}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{189}
+  \texttt{ConditionImpl.WF.apply} fixes when the decision is known to evaluate: the scrutinee
+  itself for \texttt{.bool}, $\mathtt{asBool}'$ at the arguments for a \texttt{reflectNatNat}.
+  \texttt{WF\_ite} then says that \texttt{Condition.ite} applied to translated, well-typed pieces
+  translates to exactly $\mathtt{iteApp}\ \alpha'\ (\mathtt{prop}'\ \mathit{args}')\
+  (\mathtt{dec}'\ \mathit{args}')\ t'\ e'$, and \texttt{WF\_dite} likewise for \texttt{dite},
+  whose branches are read one binder deep: the \emph{then} branch under the predicate at the
+  arguments, the \emph{else} branch under its negation. Both are quantified over an arbitrary
+  well-formed \texttt{MLCtx}, because callers apply them to pieces that live past binders the
+  caller has opened. The \texttt{natOnly} flag on \texttt{WF\_ite} is argued at length in the
+  docstring: nothing in the model pins \texttt{Nat}'s universe, so a \texttt{.bool} condition
+  cannot produce $\mathtt{Nat} : \mathtt{Type}$ and is restricted to the \texttt{Nat} conditional
+  it read off its own \texttt{checkType} call. That is a real modelling gap, declared rather than
+  papered over.
+\end{definition}
+
+\begin{definition}[Evaluating a checked conditional]
+  \label{prim-cond:def:condition-wf-eval}
+  \lean{Lean4Lean.Primitive.Condition.WF.DiteEval, Lean4Lean.Primitive.Condition.WF.IteEval, Lean4Lean.Primitive.Condition.WF.DecT}
+  \leanok
+  \uses{prim-cond:def:condition-wf-ite-dite, prim-cond:def:ite-dite-app}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{260}
+  \texttt{IteEval} says that whenever the decision at the arguments is worth the boolean literal
+  $b$, the term $\mathtt{iteApp}\ \alpha'\ (\mathtt{prop}'\ \mathit{args}')\ (\mathtt{dec}'\
+  \mathit{args}')\ t'\ e'$ is definitionally $t'$ or $e'$ accordingly; \texttt{DiteEval} is the
+  same for \texttt{diteApp}, producing the proof its branch is applied to; \texttt{DecT} says
+  $\mathtt{dec}'$ is well formed at arguments of the \texttt{impl}'s domain types. All three are
+  stated purely about \texttt{VExpr}s. The split from \ref{prim-cond:def:condition-wf-ite-dite} is
+  the central design choice of the file and is documented with its reason: a caller that
+  \emph{builds} a conditional still has an \texttt{Expr}, while a caller that reached one by
+  closing off probe variables does not.
+\end{definition}
+
+\begin{definition}[Projection-free expressions, \texttt{noProj}]
+  \label{prim-cond:def:noproj}
+  \lean{Lean4Lean.Primitive.noProj, Lean4Lean.Primitive.noProj.isUnique}
+  \leanok
+  \uses{def:trexprs-isunique}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{307}
+  \texttt{noProj e} is the decidable predicate that $e$ contains no \texttt{Expr.proj} node;
+  \texttt{noProj.isUnique} derives \texttt{TrExprS.IsUnique e} from it by structural induction,
+  the \texttt{proj} case being vacuous. Uniqueness of the reading is what every identification of
+  a closed piece below rests on.
+  \reviewnote{\texttt{noProj} exists precisely to sidestep transporting a \texttt{TrProj}
+  obligation (the docstring of \ref{prim-cond:thm:trexprs-weakr} says so). The primitives layer
+  therefore excludes projections by construction rather than supporting them, which is the one
+  direct point of contact between this chapter and the \texttt{trproj} work in
+  chapter~\ref{chap:trexpr}; nothing in either place records the connection.}
+\end{definition}
+
+\begin{definition}[Side conditions every piece of a condition satisfies]
+  \label{prim-cond:def:condok}
+  \lean{Lean4Lean.Primitive.CondOK, Lean4Lean.Primitive.ConditionImpl.OK, Lean4Lean.Primitive.Condition.OK, Lean4Lean.Primitive.ConditionImpl.OK.reflect, Lean4Lean.Primitive.CondOK.fvarsIn, Lean4Lean.Primitive.CondOK.closed, Lean4Lean.Primitive.CondOK.looseBVarRange, Lean4Lean.Primitive.CondOK.noProj, Lean4Lean.Primitive.CondOK.isUnique}
+  \leanok
+  \uses{prim-cond:def:noproj}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{327}
+  \texttt{CondOK e} is the decidable conjunction: no free variables, no level or expression
+  metavariables, no loose bound variables, and \texttt{noProj}. \texttt{ConditionImpl.OK} and the
+  class \texttt{Condition.OK} lift it to a whole condition, and five projections extract the
+  individual facts, each by unfolding the boolean conjunction. The three conditions the checker
+  ships (\texttt{bool}, \texttt{natLE}, \texttt{natEq}) discharge the class by \texttt{rfl} in
+  three anonymous instances at
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{412}.
+\end{definition}
+
+\begin{lemma}[The two reflected decisions at literal arguments]
+  \label{prim-cond:family:reflect-apply-lit}
+  \lean{Lean4Lean.Primitive.ReflectNatNat.WF.apply_lit, Lean4Lean.Primitive.Condition.WF.natLE_apply, Lean4Lean.Primitive.Condition.WF.natEq_apply, Lean4Lean.Primitive.Condition.WF.natLE_apply₀, Lean4Lean.Primitive.Condition.WF.natEq_apply₀}
+  \leanok
+  \uses{prim-cond:struct:condition-wf, prim-cond:def:condition-wf-ite-dite, family:vt-reflects}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{372}
+  If a condition's \texttt{asBool} is a constant reflecting $f : \mathbb{N} \to \mathbb{N} \to
+  \mathtt{Bool}$, then $\mathtt{asBool}'$ at two literals is definitionally the boolean literal
+  $f\ a\ b$. Specialised to the two conditions the checker ships: \texttt{natLE} decides by
+  \texttt{Nat.ble} and \texttt{natEq} by \texttt{Nat.beq}, at $c$ and, in the
+  $\emptyset$-subscripted forms, in an arbitrary extension.
+\end{lemma}
+\begin{proof}
+  \leanok
+  \texttt{apply\_lit} inverts the translation of the constant \texttt{asBool} (a constant
+  translates only one way, and only if it is in the environment) and then applies
+  \texttt{natBinLitBool} at the two literals. The four specialisations rewrite through
+  \texttt{ConditionImpl.WF.apply} and, for the $\emptyset$ forms, move the fact along the
+  extension and rewrite by \texttt{vnil}.
+\end{proof}
+
+\section{Transport between binder depths}
+
+The reflection's pieces are checked at several different binder depths: \texttt{type} and
+\texttt{toDec} are read once at the empty context and again four binders deep inside the
+\texttt{ite} gadget. Nothing in \texttt{TrExprS} identifies the two readings, so this section
+builds the transport kit that does. It is generic \texttt{VLCtx} and \texttt{TrExprS}
+infrastructure, declared inside the \texttt{Lean4Lean.Primitive} namespace.
+
+\begin{lemma}[Appending local contexts, and literals are projection-free]
+  \label{prim-cond:family:vlctx-append}
+  \lean{Lean4Lean.Primitive.VLCtx.toCtx_append, Lean4Lean.Primitive.VLCtx.find?_append_inv, Lean4Lean.Primitive.VLCtx.find?_append, Lean4Lean.Primitive.noProj_toConstructor}
+  \leanok
+  \uses{def:vt-vlctx, prim-cond:def:noproj}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{438}
+  \texttt{toCtx\_append} is the simp lemma $(\Delta \mathbin{+\!\!+} \Delta').\mathtt{toCtx} =
+  \Delta.\mathtt{toCtx} \mathbin{+\!\!+} \Delta'.\mathtt{toCtx}$; \texttt{find?\_append} and its
+  converse \texttt{find?\_append\_inv} say that a lookup landing inside the prefix agrees with the
+  lookup in the appended context. \texttt{noProj\_toConstructor} says a literal's constructor
+  unfolding contains no projections.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Structural recursion on the prefix in each of the first three;
+  \texttt{noProj\_toConstructor} splits on \texttt{Nat} and \texttt{String} literals and inducts
+  over the string's characters.
+  \reviewnote{These are generic \texttt{VLCtx} lemmas declared as
+  \texttt{Lean4Lean.Primitive.VLCtx.*} rather than next to the rest of the \texttt{VLCtx} API in
+  \texttt{Lean4Lean/Verify/Typing/}; the qualified names are easy to mistake for
+  \texttt{Lean4Lean.VLCtx.*}.}
+\end{proof}
+
+\begin{lemma}[A translation survives binders appended on the right]
+  \label{prim-cond:thm:trexprs-weakr}
+  \lean{Lean4Lean.Primitive.TrExprS.weakR}
+  \leanok
+  \uses{ind:trexprs, prim-cond:def:noproj}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{485}
+  In an ordered environment: if $e$ translates to $e'$ in $\Delta$, the context is well formed and
+  $e$ is projection-free, then $e$ translates to the same $e'$ in $\Delta \mathbin{+\!\!+}
+  \Delta'$. Adding context on the right does not change the reading of a term.
+  \thesisref{Weakening (typesys.tex, thm:weak)}
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:family:vlctx-append}
+  \leanok
+  Induction on the \texttt{TrExprS} derivation. Variables go through
+  \texttt{VLCtx.find?\_append}; the binder cases need the typing side conditions weakened, which
+  two local helpers (\texttt{weakT}, \texttt{weakI}) supply from \texttt{VEnv.IsDefEq.weakR} and
+  \texttt{toCtx\_append}.
+  \reviewnote{After the \texttt{iota} merge this still takes \texttt{env.Ordered}, unlike the six
+  neighbouring lemmas that were raised to \texttt{OrderedStrong}; nothing in the file says which
+  lemmas need which strength.}
+\end{proof}
+
+\begin{theorem}[A closed term is read the same way wherever it is read]
+  \label{prim-cond:thm:trexprs-ofclosed}
+  \lean{Lean4Lean.Primitive.TrExprS.ofClosed}
+  \leanok
+  \uses{ind:trexprs, prim-cond:def:noproj}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{540}
+  Let $\mathit{env}$ be well formed. If $e$ translates to $e'$ in $\mathit{pre} \mathbin{+\!\!+}
+  \Delta$, is projection-free, has no free variables and no bound variable escaping
+  $\mathit{pre}$, the prefix $\mathit{pre}$ has closed types and closed values, and $e'$ is well
+  formed there, then $e'$ is closed over $\mathit{pre}$ \emph{and} $e$ already translates to $e'$
+  in $\mathit{pre}$ alone. This is the converse of \ref{prim-cond:thm:trexprs-weakr}, and the
+  reason no check has to be re-run merely to obtain a reading at the base context.
+  \thesisref{Weakening, parts 3--4, i.e.\ strengthening (typesys.tex, thm:weak)}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:family:vlctx-append, fam:strong-inversions}
+  \leanok
+  Induction on the \texttt{TrExprS} derivation, proving closedness of $e'$ simultaneously with the
+  narrowed translation. The typing side conditions come down by \texttt{VExpr.WF.weakN\_iff},
+  \texttt{VEnv.IsType.weakN\_iff} and \texttt{VEnv.HasType.weakN\_iff}, and the types the binder
+  cases carry are re-derived at the narrower context from \texttt{VExpr.WF.app\_inv} and
+  \texttt{VExpr.WF.lam\_inv} rather than transported.
+  \axfoot{sorryAx, inherited: those three weakN\_iff lemmas and OnCtx.weakN\_inv live in
+  Theory/Typing/UniqueTyping.lean and are sorry-tainted on master already}
+  \reviewnote{This takes the full \texttt{VEnv.WF} where its immediate neighbours take
+  \texttt{Ordered} or \texttt{OrderedStrong}; that is master's choice, but together with the
+  \texttt{iota} upgrade it leaves the file with three different environment hypotheses and no
+  stated rationale for any of them.}
+\end{proof}
+
+\begin{lemma}[Identifying a closed piece wherever it is read]
+  \label{prim-cond:family:trexprs-nil-inv}
+  \lean{Lean4Lean.Primitive.TrExprS.of_nil_any, Lean4Lean.Primitive.TrExprS.of_nil_unique, Lean4Lean.Primitive.TrExprS.app2_nil_inv, Lean4Lean.Primitive.TrExprS.app1_nil_inv, Lean4Lean.Primitive.Condition.WF.prop_app2_inv, Lean4Lean.Primitive.Condition.WF.dec_app2_inv}
+  \leanok
+  \uses{prim-cond:def:noproj, prim-cond:struct:condition-wf}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{664}
+  A projection-free translation established at the empty context holds at every context
+  (\texttt{of\_nil\_any}) and is then the only translation that term has at any context at all
+  (\texttt{of\_nil\_unique}). Consequently an
+  application of such a closed head to one or two arguments translates to that head's fixed
+  translation applied to the arguments' translations (\texttt{app1\_nil\_inv},
+  \texttt{app2\_nil\_inv}), which specialises to a condition's \texttt{prop} and \texttt{dec}
+  (\texttt{prop\_app2\_inv}, \texttt{dec\_app2\_inv}).
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:thm:trexprs-weakr}
+  \leanok
+  \texttt{of\_nil\_any} is \ref{prim-cond:thm:trexprs-weakr} with an empty prefix;
+  \texttt{of\_nil\_unique} combines it with \texttt{TrExprS.unique'} and
+  \texttt{noProj.isUnique}. The inversions strip the spine through the \texttt{app} case of
+  \texttt{TrExprS} and identify the head by \texttt{of\_nil\_unique}. These are the workhorses of
+  the whole group: the two \texttt{app2} forms are what let \texttt{Bitwise.lean} and
+  \texttt{DivMod.lean} recognise a condition inside a conditional that has travelled under several
+  binders.
+\end{proof}
+
+\begin{lemma}[Bound variables of a \texttt{vlam} telescope translate to themselves]
+  \label{prim-cond:family:trexprs-bvars}
+  \lean{Lean4Lean.TrExprS.bvar0, Lean4Lean.TrExprS.bvar1, Lean4Lean.TrExprS.bvar2, Lean4Lean.TrExprS.bvar3}
+  \leanok
+  \uses{ind:trexprs}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{713}
+  \texttt{.bvar i} translates to \texttt{.bvar i} in a context whose first $i+1$ entries are
+  anonymous \texttt{vlam} binders, for $i = 0,1,2,3$.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Each is \texttt{.bvar rfl}.
+  \reviewnote{Four hand-rolled instances of what one indexed lemma would state, and the only
+  declarations in the file escaped with \texttt{\_root\_} to \texttt{Lean4Lean.TrExprS} rather
+  than \texttt{Lean4Lean.Primitive.TrExprS}.}
+\end{proof}
+
+\section{Closed source types}
+
+Each check the recognizer runs compares an inferred type against a source type written out by
+hand. These lemmas translate those source types. Six of them are the \texttt{iota} branch's only
+statement-level footprint in this chapter: their environment hypothesis was raised from
+\texttt{VEnv.Ordered} to \texttt{VEnv.OrderedStrong}, which is forced from
+\texttt{VEnv.HasPrimitives.trNat}, \texttt{trBool} and \texttt{natIsType'}
+(\ref{vpc:thm:prim-trnat-trbool}, \ref{vpc:thm:prim-nat-bool-typing},
+\ref{vpc:thm:prim-istype-prime}) and not by anything in this file. Their own axiom footprints stay
+clean; what changes is that an instantiation now needs \ref{thm:wf-orderedstrong}, hence
+\ref{thm:wf-patsstrong}.
+
+\begin{lemma}[Environment-free closed types]
+  \label{prim-cond:family:closed-source-types}
+  \lean{Lean4Lean.Primitive.TrTy.polyIteType, Lean4Lean.Primitive.TrExprS.polyIteType, Lean4Lean.Primitive.TrExprS.propProp}
+  \leanok
+  \uses{struct:trterm, ind:trexprs}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{728}
+  $\forall \alpha : \mathtt{Type},\ \alpha \to \alpha \to \alpha$ (as a \texttt{TrTy} at 728 and
+  as a \texttt{TrExprS} at 738) and $\mathtt{Prop} \to \mathtt{Prop}$
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1062}, the type
+  \texttt{checkNatDITE} compares \texttt{Not} against) translate in any context, needing nothing
+  from the environment.
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:family:trexprs-bvars}
+  \leanok
+  Direct \texttt{TrTy}/\texttt{TrExprS} constructor applications over the \texttt{bvar} lemmas.
+  The docstring records a real trap: the types are written out rather than quoted, because binder
+  names in a quotation are hygienic and would not match the checker's own expression.
+\end{proof}
+
+\begin{lemma}[\texttt{Bool -> Prop} translates]
+  \label{prim-cond:thm:trexprs-boolprop}
+  \lean{Lean4Lean.Primitive.TrExprS.boolProp}
+  \leanok
+  \uses{ind:trexprs, ind:primspec}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{421}
+  In an environment that is strongly ordered and has the primitives, with \texttt{Bool} present,
+  the source type $\mathtt{Bool} \to \mathtt{Prop}$ translates to the \texttt{VExpr}
+  $\mathtt{Bool} \to \mathtt{Prop}$ in any well-formed local context. This is the type the
+  \texttt{.bool} condition's predicate is checked against.
+  \thesisref{no counterpart for the translation itself; the strong-environment hypothesis is the
+  thesis's Regularity continued (typesys.tex), which the iota branch turned into an open
+  obligation}
+\end{lemma}
+\begin{proof}
+  \uses{family:trterm-builders, vpc:thm:prim-trnat-trbool, vpc:thm:prim-nat-bool-typing}
+  \leanok
+  \texttt{TrTy.forallE} over \texttt{HasPrimitives.trBool} and \texttt{boolIsType}, then
+  \texttt{.trS}.
+  \reviewnote{Changed on \texttt{iota}: the hypothesis was \texttt{henv : env.Ordered} on master
+  and is \texttt{henv : env.OrderedStrong} here. The statement is therefore strictly weaker than
+  master's, and every instantiation of it is now \texttt{sorry}-dependent; no comment on the line
+  says so.}
+\end{proof}
+
+\begin{lemma}[\texttt{Prop -> Bool -> Prop} translates]
+  \label{prim-cond:thm:trexprs-propboolprop}
+  \lean{Lean4Lean.Primitive.TrExprS.propBoolProp}
+  \leanok
+  \uses{ind:trexprs, ind:primspec}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{744}
+  In a strongly ordered environment with the primitives and \texttt{Bool} present, the source type
+  $\mathtt{Prop} \to \mathtt{Bool} \to \mathtt{Prop}$ translates to the corresponding
+  \texttt{VExpr}. This is the type a \texttt{Reflection}'s \texttt{type} field is checked against
+  by \ref{prim-cond:thm:reflection-check-wf}.
+  \thesisref{no counterpart; the thesis does not model the kernel's primitive arithmetic}
+\end{lemma}
+\begin{proof}
+  \uses{family:trterm-builders, vpc:thm:prim-trnat-trbool, vpc:thm:prim-nat-bool-typing}
+  \leanok
+  A two-deep \texttt{TrTy.forallE} nest over \texttt{HasPrimitives.trBool}/\texttt{boolIsType} and
+  \texttt{.sort}, then \texttt{.trS}.
+  \reviewnote{Changed on \texttt{iota} (\texttt{Ordered} to \texttt{OrderedStrong}). It is also
+  the only one of the six upgraded lemmas with no docstring at all, although its five siblings
+  have one.}
+\end{proof}
+
+\begin{lemma}[\texttt{Bool -> Nat -> Nat -> Nat} translates]
+  \label{prim-cond:thm:trexprs-boolnat3}
+  \lean{Lean4Lean.Primitive.TrExprS.boolNat3}
+  \leanok
+  \uses{ind:trexprs, ind:primspec}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{754}
+  In a strongly ordered environment with the primitives and both \texttt{Nat} and \texttt{Bool}
+  present, $\mathtt{Bool} \to \mathtt{Nat} \to \mathtt{Nat} \to \mathtt{Nat}$ translates to the
+  corresponding \texttt{VExpr}. This is the type the \texttt{.bool} condition's conditional is
+  checked against.
+  \thesisref{no counterpart}
+\end{lemma}
+\begin{proof}
+  \uses{family:trterm-builders, vpc:thm:prim-trnat-trbool, vpc:thm:prim-nat-bool-typing, vpc:thm:prim-istype-prime}
+  \leanok
+  Three nested \texttt{TrTy.forallE} steps over \texttt{trBool}/\texttt{trNat} ending in a
+  fourth \texttt{trNat}, with the matching \texttt{boolIsType}/\texttt{natIsType'} facts at each
+  successive context.
+  \reviewnote{Changed on \texttt{iota} (\texttt{Ordered} to \texttt{OrderedStrong}).}
+\end{proof}
+
+\begin{lemma}[\texttt{Nat -> Nat -> Prop} translates]
+  \label{prim-cond:thm:trexprs-natnatprop}
+  \lean{Lean4Lean.Primitive.TrExprS.natNatProp}
+  \leanok
+  \uses{ind:trexprs, ind:primspec}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{771}
+  In a strongly ordered environment with the primitives and \texttt{Nat} present, $\mathtt{Nat}
+  \to \mathtt{Nat} \to \mathtt{Prop}$ translates to the corresponding \texttt{VExpr}. This is the
+  type of the $\le$ that the fuel recursions guard on; it is used once, at
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{74}.
+  \thesisref{no counterpart}
+\end{lemma}
+\begin{proof}
+  \uses{family:trterm-builders, vpc:thm:prim-trnat-trbool, vpc:thm:prim-istype-prime}
+  \leanok
+  A \texttt{TrTy.forallE} nest over \texttt{trNat}/\texttt{natIsType'} ending in \texttt{.sort}.
+  \reviewnote{Changed on \texttt{iota} (\texttt{Ordered} to \texttt{OrderedStrong}).}
+\end{proof}
+
+\begin{lemma}[The type of the fuel-driven \texttt{go}]
+  \label{prim-cond:thm:trexprs-divgotype}
+  \lean{Lean4Lean.Primitive.TrExprS.divGoType}
+  \leanok
+  \uses{ind:trexprs, ind:primspec, prim-cond:thm:trexprs-natnatprop}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{786}
+  In a strongly ordered environment with the primitives and \texttt{Nat} present, and for a
+  relation $\mathtt{le}$ that translates to $\mathtt{le}'$ in every context and is typed
+  $\mathtt{Nat} \to \mathtt{Nat} \to \mathtt{Prop}$ in every context, the source type
+  $\forall y,\ \mathtt{le}\ 1\ y \to \forall \mathit{fuel}\ x,\ \mathtt{le}\ (\mathtt{succ}\ x)\
+  \mathit{fuel} \to \mathtt{Nat}$ translates to the corresponding \texttt{VExpr}. This is the type
+  \texttt{Nat.div} and \texttt{Nat.mod} recurse through; it is used once, at
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{87}.
+  \thesisref{no counterpart}
+\end{lemma}
+\begin{proof}
+  \uses{family:trterm-builders, vpc:thm:prim-trnat-trbool, vpc:thm:prim-istype-prime}
+  \leanok
+  A five-deep \texttt{TrTy.forallE} nest. $\mathtt{le}$ is a parameter rather than a constant
+  because the checker checks it separately; this lemma is where the two are joined.
+  \reviewnote{Changed on \texttt{iota} (\texttt{Ordered} to \texttt{OrderedStrong}).}
+\end{proof}
+
+\begin{lemma}[The two \texttt{Nat} projections translate and are typed]
+  \label{prim-cond:thm:trexprs-natproj}
+  \lean{Lean4Lean.Primitive.TrExprS.natProj}
+  \leanok
+  \uses{ind:trexprs, ind:primspec}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{855}
+  For $i \in \{0,1\}$, the source term $\lambda a\ b : \mathtt{Nat}.\ \mathtt{bvar}\ i$ translates
+  to $\lambda\lambda.\ \mathtt{bvar}\ i$ and has type $\mathtt{Nat} \to \mathtt{Nat} \to
+  \mathtt{Nat}$. Indexing by the branch is what lets the two \texttt{isDefEq} checks of the
+  \texttt{.bool} condition be consumed by a single lemma.
+  \thesisref{no counterpart}
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:family:trexprs-bvars, vpc:thm:prim-trnat-trbool, vpc:thm:prim-istype-prime}
+  \leanok
+  Case split on $i$, then \texttt{TrExprS.lam} twice over \texttt{HasPrimitives.trNat}, with the
+  body supplied by the \texttt{bvar} lemmas and the typing by \texttt{natIsType'} at the two
+  successive contexts.
+  \reviewnote{Changed on \texttt{iota} (\texttt{Ordered} to \texttt{OrderedStrong}).}
+\end{proof}
+
+\begin{lemma}[The projections applied to both branches pick one]
+  \label{prim-cond:thm:isdefequ-natproj}
+  \lean{Lean4Lean.Primitive.VEnv.IsDefEqU.natProj, Lean4Lean.Primitive.VEnv.IsDefEqU.polyProj, Lean4Lean.Primitive.TrExprS.polyProj}
+  \leanok
+  \uses{prim-cond:thm:trexprs-natproj, prim-cond:family:closed-source-types}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{881}
+  For $t, e : \mathtt{Nat}$ in a well-formed context of a well-formed environment, and given
+  that $\mathtt{Nat}$ is a type at every well-formed context -- a hypothesis of the lemma, not
+  something read off the environment --
+  $(\lambda\lambda.\ \mathtt{bvar}\ i)\ t\ e \equiv t$ when $i = 1$ and $\equiv e$ when $i = 0$
+  (\texttt{natProj}); \texttt{polyProj} is the same at an arbitrary $\alpha : \mathtt{Type}$,
+  which it abstracts as a fourth lambda rather than assuming, and
+  \texttt{TrExprS.polyProj} gives the source-level translation and typing of the polymorphic
+  projections. This is what turns the two \texttt{isDefEq} checks of \texttt{checkITE} into the
+  conclusion of \ref{prim-cond:def:reflection-wf-ite-dite}.
+  \thesisref{the beta rule (axioms.tex, section Definitional equality)}
+\end{lemma}
+\begin{proof}
+  \leanok
+  \texttt{natProj} is two \texttt{VEnv.IsDefEq.beta} steps with the argument typings supplied,
+  composed by \texttt{appDF} and \texttt{trans}; \texttt{polyProj} instead closes its
+  three-binder telescope in one step, with \texttt{VExpr.lams\_appN'} over a
+  \texttt{VExpr.ArgsTyped}.
+  \axfoot{sorryAx in VEnv.IsDefEqU.polyProj only, and only through VExpr.lams\_appN'; the other
+  two declarations of this node, VEnv.IsDefEqU.natProj and TrExprS.polyProj, are axiom-clean}
+\end{proof}
+
+\section{The reflection layer}
+
+A \texttt{Reflection} is the source-level package a \texttt{reflectNatNat} condition is built from:
+a relation \texttt{type} between a proposition and a boolean, a decision procedure \texttt{toDec},
+and the \texttt{ite}/\texttt{dite} gadgets built on it. \texttt{Reflection.check} establishes the
+unconditional part; \texttt{checkITE} and \texttt{checkNatDITE} are the two optional checks.
+
+\begin{theorem}[The shape of the reflection's \texttt{ite} and \texttt{dite} gadgets]
+  \label{prim-cond:thm:reflection-ite-tr}
+  \lean{Lean4Lean.Primitive.Reflection.ite_tr, Lean4Lean.Primitive.Reflection.natDITE_tr}
+  \leanok
+  \uses{prim-cond:struct:reflection-wf, prim-cond:def:condok}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{912}
+  If the check ran at the empty context and \texttt{type}, \texttt{toDec} satisfy
+  \texttt{CondOK}, then any translation of \texttt{Reflection.ite} is exactly four lambdas -- over
+  $\mathtt{Prop}$, $\mathtt{Bool}$, $\mathtt{type}'\ (\mathtt{bvar}\ 1)\ (\mathtt{bvar}\ 0)$ and
+  $\mathtt{Type}$ -- whose body is $\mathtt{ite}$ at the reflection's own decision
+  $\mathtt{toDec}'$ applied to the three bound variables; \texttt{natDITE\_tr} is the same with
+  three lambdas and \texttt{dite} at \texttt{Nat}. In both, the $\mathtt{type}'$ and
+  $\mathtt{toDec}'$ occurring under the binders are the very ones
+  \ref{prim-cond:struct:reflection-wf} names.
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:family:trexprs-nil-inv}
+  \leanok
+  Invert the translation of the lambda telescope constructor by constructor, then identify the
+  closed subterms \texttt{type} and \texttt{toDec} with the named translations by
+  \texttt{of\_nil\_unique}, which compares a reading taken at the telescope's own depth with the
+  $[\,]$-level one directly, so no narrowing step is needed.
+\end{proof}
+
+\begin{lemma}[The types the reflection's optional checks compare against]
+  \label{prim-cond:family:refl-check-types}
+  \lean{Lean4Lean.Primitive.TrExprS.reflIteType, Lean4Lean.Primitive.TrExprS.reflOfType, Lean4Lean.Primitive.TrExprS.reflDiteType}
+  \leanok
+  \uses{prim-cond:struct:reflection-wf, prim-cond:family:closed-source-types}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1025}
+  Translations of three source types: $\mathtt{Prop} \to \mathtt{Bool} \to \mathtt{type}\
+  (\mathtt{bvar}\ 1)\ (\mathtt{bvar}\ 0) \to \forall \alpha : \mathtt{Type},\ \alpha \to \alpha
+  \to \alpha$, the \texttt{ite} gadget's type; $\forall p : \mathtt{Prop},\ \mathtt{type}\ p\ b
+  \to C$, the shape of \texttt{ofTrue}/\texttt{ofFalse}'s types with $C$ and its translation as
+  parameters; and $\mathtt{Prop} \to \mathtt{Bool} \to \mathtt{type}\ p\ b \to (p \to \mathtt{Nat})
+  \to (\mathtt{Not}\ p \to \mathtt{Nat}) \to \mathtt{Nat}$, the \texttt{dite} gadget's type.
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:family:trexprs-nil-inv}
+  \leanok
+  \texttt{TrTy.forallE} nests. The third domain is where \texttt{of\_nil\_any} puts the
+  $\mathtt{type}'$ named by \ref{prim-cond:struct:reflection-wf} rather than some other
+  translation of \texttt{r.type}. \texttt{Not} enters \texttt{reflDiteType} as a parameter with
+  its own translation and typing, since the preceding check establishes only that the constant is
+  a $\mathtt{Prop} \to \mathtt{Prop}$; that is a good example of not over-assuming from the
+  environment.
+\end{proof}
+
+\begin{lemma}[An equation checked under a telescope, at arbitrary arguments]
+  \label{prim-cond:thm:reflection-gentele}
+  \lean{Lean4Lean.Primitive.Reflection.WF.genTele}
+  \leanok
+  \uses{fam:substeq, vpc:thm:argstyped-substeq}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1223}
+  If $X \equiv Y$ was derived in the reversed telescope $\overline{A}$, both sides are closed over
+  it, and $\bar v$ are arguments typed at those domains in a context $\Gamma$ of an extension $E$,
+  then $X[\bar v] \equiv Y[\bar v]$ in $\Gamma$. Every binder the reflection's checks open has a
+  closed type, which is what lets the equation weaken past the caller's context untouched.
+  \thesisref{Properties of substitution (typesys.tex, thm:subst)}
+\end{lemma}
+\begin{proof}
+  \leanok
+  Weaken the equation into $\overline{A} \mathbin{+\!\!+} \Gamma$ along
+  \texttt{Ctx.LiftN.right}; the lift is the identity by closedness, so it rewrites away. Then
+  substitute along the closing the arguments define, by \texttt{VEnv.IsDefEqU.subst} and
+  \texttt{VExpr.ArgsTyped.substEq}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong, inserted invisibly by the CoeOut instance: every
+  other lemma this proof calls is axiom-clean}
+  \reviewnote{Not one character of this proof was changed on either branch, and it is
+  \texttt{sorry}-dependent now where on \texttt{master} it was not. The single call
+  \texttt{hXY'.subst E.wf} at
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1236} used to coerce
+  \texttt{VEnv.WF} to \texttt{VEnv.Ordered}, which is what \texttt{VEnv.IsDefEqU.subst} took on
+  \texttt{master}; the same text now coerces to \texttt{VEnv.OrderedStrong} and so routes
+  through \ref{thm:wf-patsstrong}. Line-level attribution understates how far the change
+  reaches.}
+\end{proof}
+
+\begin{lemma}[\texttt{genTele} for a typing rather than an equation]
+  \label{prim-cond:thm:reflection-gentelet}
+  \lean{Lean4Lean.Primitive.Reflection.WF.genTeleT}
+  \leanok
+  \uses{prim-cond:thm:reflection-gentele, vpc:thm:argstyped-substeq}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1243}
+  If $X : A$ in the reversed telescope $\overline{A}$ with $X$ and $A$ both closed over it, then
+  $X[\bar v] : A[\bar v]$ at any arguments typed at those domains, in any context of any
+  extension: the type travels with the term, which is what a caller needs of the gadget's pieces.
+  \thesisref{Properties of substitution (typesys.tex, thm:subst)}
+\end{lemma}
+\begin{proof}
+  \uses{thm:isdefeq-weakn}
+  \leanok
+  Weaken the typing by \texttt{VEnv.HasType.weakN}, rewrite the identity lifts away by closedness,
+  then \texttt{VEnv.HasType.subst} along \texttt{VExpr.ArgsTyped.substEq}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong, which is proved only modulo the sorry-ed
+  VEnv.WF.patsStrong}
+  \reviewnote{Changed on \texttt{iota} in the proof only
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1256}):
+  \texttt{hX'.subst E.wf.ordered} became \texttt{hX'.subst E.wf.orderedStrong}, because
+  \texttt{VEnv.HasType.subst} now requires the strong environment. The statement is unchanged, so
+  the only visible effect is that the theorem became \texttt{sorry}-dependent.}
+\end{proof}
+
+\begin{theorem}[An equation checked under \texttt{p : Prop} and \texttt{H : type p b}]
+  \label{prim-cond:thm:reflection-genph}
+  \lean{Lean4Lean.Primitive.Reflection.WF.genPH, Lean4Lean.Primitive.Reflection.WF.IteEq}
+  \leanok
+  \uses{prim-cond:struct:reflection-wf}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1264}
+  An equation between terms closed over the two-binder context
+  $[\mathtt{type}'\ (\mathtt{bvar}\ 0)\ (\mathtt{boolLit}\ b),\ \mathtt{Prop}]$ over the empty
+  context holds, after substitution, at any proposition $p$ and any evidence
+  $H : \mathtt{type}'\ p\ (\mathtt{boolLit}\ b)$, in any context of any extension.
+  \texttt{IteEq} is the predicate this is used to produce: the conditional at $p$, the literal $b$
+  and $H$ is definitionally the matching projection
+  $\lambda \alpha\, t\, e.\ \mathtt{bvar}\ i$, with $i = 1$ when $b$ is \texttt{true} and $i = 0$
+  otherwise.
+  \thesisref{Properties of substitution (typesys.tex, thm:subst)}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:reflection-gentele, fam:subst-corollaries}
+  \leanok
+  Two steps: weaken the checked equation past whatever the caller has built, the lift being the
+  identity since everything is closed; then close the two binders by a substitution
+  (\texttt{VEnv.Ctx.SubstEq.cons} twice) whose typing obligations are exactly the caller's
+  hypotheses $hp$ and $hH$.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong}
+  \reviewnote{Changed on \texttt{iota} in the proof only
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1299}), from
+  \texttt{.subst E.wf.ordered} to \texttt{.subst E.wf.orderedStrong}.}
+\end{proof}
+
+\begin{lemma}[Verification boundary for \texttt{Reflection.check}]
+  \label{prim-cond:thm:reflection-check-wf}
+  \lean{Lean4Lean.Primitive.Reflection.check.WF, Lean4Lean.Primitive.M.WF.withMLC_self}
+  \leanok
+  \uses{prim-cond:struct:reflection-wf, family:kernel-primitive-dsl}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1319}
+  If \texttt{Reflection.check} succeeds in a context with \texttt{Bool} present, no binders open,
+  and \texttt{CondOK r.type}, then \texttt{Reflection.WF c r} is inhabited: the reflection's
+  \texttt{type} translates and is a relation between a proposition and a boolean.
+  \texttt{M.WF.withMLC\_self} is the technical bridge letting a judgement about
+  \texttt{c.withMLC c.mlctx} be read as one about $c$.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-toplevel, prim-cond:thm:trexprs-propboolprop}
+  \leanok
+  \texttt{checkType.WF} on \texttt{r.type}, then \texttt{isDefEq.WF} of the inferred type against
+  \ref{prim-cond:thm:trexprs-propboolprop}, and \texttt{HasType.defeqU\_r} to move the typing onto
+  the nominal type. The \texttt{fail} continuation is discharged by the caller's \texttt{hfail}.
+  \axfoot{sorryAx, inherited from the typechecker correctness theorems; plus the
+  Verify/Axioms.lean bridge axioms (Lean.Expr.*\_eq, Lean.PersistentHashMap.*) that relate the
+  model to Lean's own implementation}
+\end{proof}
+
+\begin{definition}[Well-typedness of the reflection's gadgets]
+  \label{prim-cond:def:reflection-ite-t}
+  \lean{Lean4Lean.Primitive.Reflection.WF.ITE_T, Lean4Lean.Primitive.Reflection.WF.ITE_T.toDecT, Lean4Lean.Primitive.Reflection.WF.DITE_T, Lean4Lean.Primitive.Reflection.WF.DITE_T.toDecT, Lean4Lean.Primitive.Reflection.WF.DiteEq}
+  \leanok
+  \uses{prim-cond:def:reflection-todect, fam:strong-inversions}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1354}
+  \texttt{ITE\_T} says the \texttt{ite} gadget the reflection builds is well typed at \emph{any}
+  proposition, boolean, evidence and type; \texttt{DITE\_T} says the same of the \texttt{dite}
+  gadget, which is fixed at \texttt{Nat} and so carries no type argument. Neither is restricted
+  to a decided boolean, which is all \ref{prim-cond:def:reflection-wf-ite-dite} speaks about.
+  Nothing else in the model types an \texttt{ite} application, since \texttt{ite}'s own declared
+  type is checked nowhere. Each implies \texttt{ToDecT}: \texttt{ITE\_T} by instantiating the
+  gadget at the closed type $\mathtt{Prop}$ and peeling the instance argument off with
+  \texttt{VExpr.WF.app\_inv}, \texttt{DITE\_T} by peeling it off directly.
+  \texttt{DiteEq} is the \texttt{dite} counterpart of \texttt{IteEq}.
+\end{definition}
+
+\begin{theorem}[Verification boundary for \texttt{Reflection.checkITE}]
+  \label{prim-cond:thm:reflection-checkite-wf}
+  \lean{Lean4Lean.Primitive.Reflection.checkITE.WF}
+  \leanok
+  \uses{prim-cond:def:reflection-wf-ite-dite, prim-cond:def:reflection-ite-t}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1381}
+  If \texttt{Reflection.checkITE} succeeds (given \texttt{Reflection.WF}, an empty local context,
+  \texttt{Bool} present, a closed translation of \texttt{toDec} and \texttt{CondOK} on
+  \texttt{type}, \texttt{toDec} and \texttt{ite}) then both \texttt{WF\_ite toDec'} and
+  \texttt{ITE\_T toDec'} hold: at evidence for either boolean literal the conditional the
+  reflection builds \emph{is} the corresponding projection, at every proposition and in every
+  context, and the gadget is well typed at every proposition, boolean, evidence and type.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:reflection-ite-tr, prim-cond:thm:reflection-genph, prim-cond:family:refl-check-types, prim-cond:thm:isdefequ-natproj, thm:vtc-toplevel}
+  \leanok
+  \texttt{checkType.WF} on \texttt{r.ite} against \ref{prim-cond:family:refl-check-types} pins its
+  shape through \ref{prim-cond:thm:reflection-ite-tr}; the checker's two \texttt{isDefEq} blocks,
+  run under $p : \mathtt{Prop}$ and $H : \mathtt{type}\ p\ b$, are generalized by
+  \ref{prim-cond:thm:reflection-genph} into \texttt{IteEq true} and \texttt{IteEq false}, and the
+  projections are evaluated by \ref{prim-cond:thm:isdefequ-natproj}. \texttt{ITE\_T} comes from
+  repeated \texttt{VExpr.WF.lam\_inv'} on the pinned shape together with
+  \texttt{VExpr.ArgsTyped}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only. At
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1448} the merge writes
+  \texttt{c.Ewf.orderedStrong} while lines 1449 and 1450, two further calls to the same lemma,
+  still pass \texttt{c.Ewf} and let the \texttt{CoeOut} instance fire. The resolution is
+  minimal, which is defensible, but the file now reads as if the two spellings meant different
+  things.}
+\end{proof}
+
+\begin{theorem}[Verification boundary for \texttt{Reflection.checkNatDITE}]
+  \label{prim-cond:thm:reflection-checknatdite-wf}
+  \lean{Lean4Lean.Primitive.Reflection.checkNatDITE.WF}
+  \leanok
+  \uses{prim-cond:def:reflection-wf-ite-dite, prim-cond:def:reflection-ite-t}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1617}
+  If \texttt{Reflection.checkNatDITE} succeeds then \texttt{WF\_dite toDec'} and
+  \texttt{DITE\_T toDec'} hold, and in addition \texttt{Not} translates to itself in every context
+  and is a $\mathtt{Prop} \to \mathtt{Prop}$ in every context. So at evidence for either boolean
+  literal the \texttt{dite} the reflection builds takes the corresponding branch applied to the
+  proof that \texttt{ofTrue}/\texttt{ofFalse} extracts.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:reflection-ite-tr, prim-cond:thm:reflection-gentele, prim-cond:thm:reflection-gentelet, prim-cond:family:refl-check-types, thm:vtc-toplevel}
+  \leanok
+  The same shape as \ref{prim-cond:thm:reflection-checkite-wf} with four binders instead of two:
+  \texttt{natDITE\_tr} pins the gadget's shape, \texttt{reflOfType} and \texttt{reflDiteType}
+  supply the checked types, and \texttt{genTele}/\texttt{genTeleT} move the equations and typings
+  out from under the four binders.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 1792 and 1850). At 374 lines
+  (1617--1990) this is the second-longest declaration in the chapter, one line shorter than
+  \ref{prim-bitwise:thm:checknatbitwise-wf}; it is broken up by comments, but its internal
+  \texttt{have} names follow no documented scheme.}
+\end{proof}
+
+\section{From a reflection to a condition}
+
+What the reflection layer proves is stated about the reflection's own \texttt{toDec}; what a
+recognizer needs is stated about the condition's \texttt{dec}. The two are joined by the
+\texttt{e ≡ dec} check, and the bridges below carry each fact across. The section ends at
+\ref{prim-cond:thm:condition-check-wf}, the one verification boundary the three recursion files
+(\texttt{DivMod.lean}, \texttt{Gcd.lean}, \texttt{Bitwise.lean}) consume; the fifteen theorems of
+\texttt{Clauses.lean} need no \texttt{Condition} at all.
+
+\begin{theorem}[From the reflection's \texttt{WF\_dite} to the condition's]
+  \label{prim-cond:thm:condition-reflect-dite}
+  \lean{Lean4Lean.Primitive.Condition.WF.reflect_dite}
+  \leanok
+  \uses{prim-cond:def:condition-wf-ite-dite, prim-cond:def:reflection-wf-ite-dite}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1996}
+  For a \texttt{reflectNatNat} condition whose pieces satisfy the joint hypothesis $H$ -- at any
+  two \texttt{Nat}s $x, y$ in any context of any extension, $\mathtt{prop}'\ x\ y$ is a
+  proposition, $\mathtt{asBool}'\ x\ y$ a boolean, $\mathtt{proof}'\ x\ y$ evidence relating them,
+  and $\mathtt{dec}'\ x\ y \equiv \mathtt{toDec}'$ at those three -- the reflection's
+  \texttt{WF\_dite} yields \texttt{Condition.WF.WF\_dite}: \texttt{Condition.dite} at translated,
+  well-typed arguments and branches translates to the $\mathtt{diteApp}$ of the condition's own
+  \texttt{prop} and \texttt{dec}.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:trexprs-appn, fam:strong-inversions}
+  \leanok
+  Rebuild the translation of the \texttt{dite} application with \texttt{TrExprS.appN} from the
+  pieces, identifying \texttt{dite} itself by three \texttt{VExpr.WF.app\_inv} steps and a
+  \texttt{VEnv.HasType.const\_inv}; the decision is converted from $\mathtt{dec}'$ to
+  $\mathtt{toDec}'$ by the equation in $H$.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong}
+  \reviewnote{Changed on \texttt{iota} in the proof only: seven \texttt{.ordered} to
+  \texttt{.orderedStrong}, at lines 2037, 2066, 2088--2091 and 2095.}
+\end{proof}
+
+\begin{theorem}[The gadget \texttt{Condition.check} builds, and what its typing gives]
+  \label{prim-cond:thm:condition-gadget}
+  \lean{Lean4Lean.Primitive.Condition.check.gadgetV, Lean4Lean.Primitive.Condition.check.gadget_types}
+  \leanok
+  \uses{ind:vexpr}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2101}
+  \texttt{gadgetV} is the \texttt{VExpr}
+  $\lambda x\ y : \mathtt{Nat}.\ (\lambda p\ b\ H.\ \mathtt{toDec}'\ p\ b\ H)\
+  (\mathtt{prop}'\ x\ y)\ (\mathtt{asBool}'\ x\ y)\ (\mathtt{proof}'\ x\ y)$. \texttt{gadget\_types}
+  says that if it is well typed at the empty context, with all five pieces closed, then at any two
+  naturals $x, y$ in any context of any extension: $\mathtt{prop}'\ x\ y$ is a proposition,
+  $\mathtt{asBool}'\ x\ y$ a boolean, $\mathtt{proof}'\ x\ y$ evidence relating them, and the
+  gadget applied to $x, y$ is definitionally $\mathtt{toDec}'$ at those three.
+  \thesisref{the beta rule (axioms.tex, section Definitional equality)}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:reflection-gentele, prim-cond:thm:reflection-gentelet}
+  \leanok
+  Peel the outer two lambdas, read the three argument typings off the beta-redex's binders, move
+  them to the consumer's arguments by \texttt{genTeleT}, and carry the inner beta step by
+  \texttt{genTele} while performing the outer one directly at the consumer's context. The
+  beta-redex trick -- checking \texttt{prop}, \texttt{asBool} and \texttt{proof} against binders
+  that name their types, instead of checking each separately -- is the cleverest idea in the file
+  and is explained where it is used.
+  \axfoot{sorryAx, inherited from genTele/genTeleT and the strong-system substitution lemmas}
+\end{proof}
+
+\begin{theorem}[The whole content of \texttt{checkType} on the gadget]
+  \label{prim-cond:thm:condition-gadget-pieces}
+  \lean{Lean4Lean.Primitive.Condition.check.gadget_pieces}
+  \leanok
+  \uses{prim-cond:thm:condition-gadget, prim-cond:def:condok}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2242}
+  If the source gadget translates at the empty context and is well typed there, then
+  \texttt{prop}, \texttt{asBool}, \texttt{proof} and \texttt{toDec} have closed translations at the
+  empty context, and those translations satisfy the four facts of
+  \ref{prim-cond:thm:condition-gadget}. So \texttt{Condition.check} needs no separate check for
+  \texttt{prop}, \texttt{asBool} or \texttt{proof}: reading the gadget is what reads them.
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:trexprs-ofclosed, prim-cond:family:trexprs-nil-inv}
+  \leanok
+  Invert the translation of the two-lambda telescope, bring the readings of the closed pieces down
+  to the empty context by \ref{prim-cond:thm:trexprs-ofclosed}, and apply
+  \ref{prim-cond:thm:condition-gadget} for the typings.
+  \axfoot{sorryAx, inherited from gadget\_types and TrExprS.ofClosed}
+\end{proof}
+
+\begin{lemma}[Taking a checked conditional apart]
+  \label{prim-cond:family:condition-tr-inv}
+  \lean{Lean4Lean.Primitive.Condition.ite_tr_inv', Lean4Lean.Primitive.Condition.ite_tr_inv, Lean4Lean.Primitive.Condition.dite_tr_inv', Lean4Lean.Primitive.Condition.dite_tr_inv, Lean4Lean.Primitive.Condition.decide_tr_inv'}
+  \leanok
+  \uses{prim-cond:def:ite-dite-app, prim-cond:def:noproj}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2358}
+  Any translation of \texttt{Condition.ite} is an $\mathtt{iteApp}$ of translations of the type
+  argument, of the predicate at the arguments, of the decision at the arguments, and of the two
+  branches; likewise for \texttt{Condition.dite}, with the branches read under the decision's
+  binder, and for \texttt{Condition.decide}, which is an \texttt{ite} at \texttt{Bool} with the two
+  boolean literals as branches. The primed forms are stated at an arbitrary \texttt{VLCtx}, the
+  unprimed ones at a \texttt{c.withMLC m}.
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:family:trexprs-nil-inv}
+  \leanok
+  Plain spine inversion of the \texttt{TrExprS} derivation; for \texttt{dite} the branches' binder
+  types are identified by uniqueness of the predicate's reading, and for \texttt{decide} the two
+  branch literals by \texttt{TrExprS.boolLit}. The docstring explains why the primed forms must
+  allow an arbitrary \texttt{VLCtx}: a conditional nested inside a \texttt{dite} branch lives under
+  a \texttt{(none, .vlam P)} entry, which is not an \texttt{MLCtx}'s context, and
+  \texttt{Nat.bitwise} needs exactly that.
+\end{proof}
+
+\begin{lemma}[What a conditional mentions]
+  \label{prim-cond:family:condition-fvarsin}
+  \lean{Lean4Lean.Primitive.Condition.fvarsIn_ite, Lean4Lean.Primitive.Condition.fvarsIn_dite}
+  \leanok
+  \uses{prim-cond:def:condok}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2438}
+  A \texttt{Condition.ite} or \texttt{Condition.dite} satisfies \texttt{FVarsIn P} as soon as its
+  type argument, its arguments and its branches do, the rest of the term being closed by
+  \texttt{Condition.OK}.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Unfold the builders and apply \texttt{CondOK.fvarsIn} to the condition's own pieces.
+  \reviewnote{\texttt{Condition.fvarsIn\_ite} is dead: a full-repository grep finds no use of it.
+  Its sibling \texttt{fvarsIn\_dite} is used once, at
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{163}.}
+\end{proof}
+
+\begin{lemma}[The \texttt{natEq} condition at arguments that are worth literals]
+  \label{prim-cond:family:condition-nateq-eval}
+  \lean{Lean4Lean.Primitive.Condition.WF.natEq_args, Lean4Lean.Primitive.Condition.WF.natEq_iteEval, Lean4Lean.Primitive.Condition.WF.natEq_diteEval, Lean4Lean.Primitive.Condition.WF.natEq_decideTr}
+  \leanok
+  \uses{prim-cond:def:condition-wf-eval, prim-cond:def:ite-dite-app}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2477}
+  If $A$ and $B$ are definitionally the literals $x$ and $y$, then they are \texttt{Nat}s and the
+  decision at them is worth $\mathtt{Nat.beq}\ x\ y$ (\texttt{natEq\_args}). Consequently an
+  $\mathtt{iteApp}$ built from \texttt{natEq} collapses to the branch \texttt{Nat.beq} selects
+  (\texttt{natEq\_iteEval}), a $\mathtt{diteApp}$ to that branch applied to a proof
+  (\texttt{natEq\_diteEval}), and a whole \texttt{Condition.decide}, under any closing, is worth
+  the boolean literal (\texttt{natEq\_decideTr}).
+\end{lemma}
+\begin{proof}
+  \uses{prim-cond:family:reflect-apply-lit, prim-cond:family:condition-tr-inv, vpc:thm:isdefequ-appn-prime}
+  \leanok
+  \texttt{natEq\_apply₀} gives the decision's value and \texttt{IsDefEqU.appN'} replaces the
+  arguments by their literals; \texttt{IteEval}/\texttt{DiteEval} are then instantiated at it.
+  \texttt{natEq\_decideTr} additionally inverts the \texttt{decide} spine by
+  \texttt{decide\_tr\_inv'} and evaluates the arguments through the caller's own equations; it is
+  stated so that the arguments' values are demanded at \emph{any} translation, which is what makes
+  it compose with \texttt{natBinLitTr} -- \texttt{Nat.bitwise} decides on $n \bmod 2 = 1$, whose
+  left side is itself a reflected primitive at a probe variable.
+  \axfoot{sorryAx, inherited through the strong-environment inversions}
+\end{proof}
+
+\begin{lemma}[The conditional equations as facts about \texttt{VExpr}s]
+  \label{prim-cond:family:condition-reflect-eval}
+  \lean{Lean4Lean.Primitive.Condition.WF.reflect_diteEval, Lean4Lean.Primitive.Condition.WF.reflect_iteEval}
+  \leanok
+  \uses{prim-cond:def:reflection-wf-ite-dite, prim-cond:def:reflection-ite-t, prim-cond:def:condition-wf-eval}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2551}
+  Given the reflection's \texttt{WF\_dite}/\texttt{WF\_ite} and \texttt{DITE\_T}/\texttt{ITE\_T}
+  and the joint fact $H$ about the pieces, a $\mathtt{diteApp}$ (resp.\ $\mathtt{iteApp}$) built
+  from $\mathtt{prop}'\ x\ y$ and $\mathtt{dec}'\ x\ y$ is definitionally the branch selected by
+  the boolean $\mathtt{asBool}'\ x\ y$ is worth. This is the content of
+  \texttt{WF\_dite}/\texttt{WF\_ite} stripped of its \texttt{Expr}-level packaging, and is what
+  \texttt{DiteEval}/\texttt{IteEval} are proved from.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Convert the decision from $\mathtt{dec}'$ to $\mathtt{toDec}'$ by $H$, instantiate the
+  reflection's equation at the caller's proposition and evidence, and transport along the
+  conversion with \texttt{IsDefEqU.trans}.
+  \axfoot{sorryAx, inherited through the strong-environment inversions}
+\end{proof}
+
+\begin{theorem}[From the reflection's \texttt{WF\_ite} to the condition's]
+  \label{prim-cond:thm:condition-reflect-ite}
+  \lean{Lean4Lean.Primitive.Condition.WF.reflect_ite}
+  \leanok
+  \uses{prim-cond:def:condition-wf-ite-dite, prim-cond:def:reflection-ite-t}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2701}
+  For a \texttt{reflectNatNat} condition, the reflection's \texttt{ITE\_T} together with the joint
+  fact $H$ yields \texttt{Condition.WF.WF\_ite}: \texttt{Condition.ite} at translated, well-typed
+  pieces translates to the $\mathtt{iteApp}$ of the condition's own \texttt{prop} and \texttt{dec}.
+  The consumer's conditional decides by $\mathtt{dec}'$ at the arguments and the reflection's by
+  $\mathtt{toDec}'$ at the proposition, boolean and evidence; the equation
+  $\mathtt{dec}'\ x\ y \equiv \mathtt{toDec}'\ \ldots$ in $H$ joins them.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:trexprs-appn, fam:strong-inversions}
+  \leanok
+  Rebuild the \texttt{ite} application with \texttt{TrExprS.appN} from the pieces, identifying
+  \texttt{ite} itself by two \texttt{VExpr.WF.app\_inv} steps and a
+  \texttt{VEnv.HasType.const\_inv}, and converting the decision by $H$'s equality.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong}
+  \reviewnote{Changed on \texttt{iota} in the proof only: seven \texttt{.ordered} to
+  \texttt{.orderedStrong} at lines 2733 and 2747--2757.}
+\end{proof}
+
+\begin{theorem}[Verification boundary for \texttt{Condition.check}]
+  \label{prim-cond:thm:condition-check-wf}
+  \lean{Lean4Lean.Primitive.Condition.check.WF}
+  \leanok
+  \uses{prim-cond:struct:condition-wf, prim-cond:def:condition-wf-ite-dite, prim-cond:def:condition-wf-eval, prim-cond:def:condok}
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2765}
+  If \texttt{Condition.check cond fail ite dite} succeeds in a context with \texttt{Nat} and
+  \texttt{Bool} present, \texttt{cond.OK}, and no binders open, then there is a
+  \texttt{Condition.WF c cond} such that: if \texttt{ite} was requested it satisfies
+  \texttt{WF\_ite} and \texttt{IteEval}, and if \texttt{dite} was requested it satisfies
+  \texttt{WF\_dite}, \texttt{DiteEval} and \texttt{DecT}. The \texttt{natOnly} flag on the two
+  \texttt{ite} facts follows the \texttt{impl}: a \texttt{.bool} condition only ever builds an
+  \texttt{ite} at \texttt{Nat}, while a \texttt{reflectNatNat} covers every $\alpha :
+  \mathtt{Type}$.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:reflection-check-wf, prim-cond:thm:reflection-checkite-wf, prim-cond:thm:reflection-checknatdite-wf, prim-cond:thm:condition-gadget-pieces, prim-cond:thm:condition-reflect-ite, prim-cond:thm:condition-reflect-dite, prim-cond:family:condition-reflect-eval, prim-cond:thm:isdefequ-natproj, prim-cond:thm:trexprs-boolprop}
+  \leanok
+  Case split on the \texttt{impl}. For \texttt{.bool}: \texttt{checkType.WF} on the predicate
+  against \ref{prim-cond:thm:trexprs-boolprop}, plus the two \texttt{isDefEq} checks against
+  \ref{prim-cond:thm:trexprs-natproj}, turned into \texttt{WF\_ite}/\texttt{IteEval} by
+  \ref{prim-cond:thm:isdefequ-natproj}. For \texttt{reflectNatNat}:
+  \ref{prim-cond:thm:reflection-check-wf}, \ref{prim-cond:thm:reflection-checkite-wf},
+  \ref{prim-cond:thm:reflection-checknatdite-wf} and
+  \ref{prim-cond:thm:condition-gadget-pieces} supply the reflection facts, and the three bridges
+  carry them to the condition's. \texttt{Condition.bool} at \texttt{dite := true} throws, so that
+  case is vacuous rather than excluded, which the source documents.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2913}). It is the boundary
+  every conditional-driven clause consumes -- \texttt{Nat.div}, \texttt{Nat.mod},
+  \texttt{Nat.gcd} and \texttt{Nat.bitwise}, at
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{98},
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Gcd.lean}{29} and
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{46} -- though not the fifteen
+  simple clauses, which reach \texttt{sorryAx} by other routes. Nothing at that line or in the
+  module docstring says a \texttt{sorry} enters here.}
+\end{proof}
+
+\section{The simple clauses}
+
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{1} holds fifteen theorems covering
+the fourteen branches of the recognizer that need no recursion machinery (the fifteenth is the
+schema two of them share). They all have one shape: given a
+well-formed environment state, the branch's name guard on the declaration under test, and the
+translation data \texttt{Data v ci' c} (\ref{vpc:struct:primitive-data}) that the dispatcher hands
+in, a successful run returns a \texttt{PrimitiveResult} (\ref{vpc:struct:primitiveresult}) for the
+entry \texttt{primSpecs} records under that name (\ref{ind:primspec}). The checker context is
+written as a \texttt{let} rather than left abstract, and the docstring at
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{23} says why: only a context that
+reduces to \texttt{.mk' wf .safe v.levelParams} puts the probes' facts at the empty local context
+on the nose, and over an abstract \texttt{VContext} each equation would need its own rewrite.
+
+Probe variables come from \ref{vpc:thm:withprobe}, the recorded type is pinned by
+\ref{vpc:thm:data-mktyeq}, the obligation is assembled by \ref{vpc:thm:data-mkresult}, and the
+arithmetic is done by the reflection schemas of chapter~\ref{chap:primitives-core}. Eleven of the
+file's fifteen theorems were touched by \texttt{iota}, and in every one of them the edit is
+confined to the proof: a \texttt{HasPrimitives} accessor or an inversion that now wants
+\ref{struct:orderedstrong} where master passed \texttt{VEnv.Ordered}. The four left alone are
+\ref{prim-clauses:thm:checknatpred-wf} and the three of
+\ref{prim-clauses:thm:checknatboolcases-wf}.
+
+\begin{theorem}[\texttt{Nat.add}]
+  \label{prim-clauses:thm:checknatadd-wf}
+  \lean{Lean4Lean.Primitive.checkNatAdd.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult, vpc:struct:primitive-data}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{28}
+  If the \texttt{Nat.add} branch succeeds then the definition satisfies the \texttt{Nat.add} entry
+  of \texttt{primSpecs}: its value reflects \texttt{Nat.add} at every pair of literals. The branch
+  opens two \texttt{Nat} probes and checks $\mathtt{add}\ x\ 0 \equiv x$ and
+  $\mathtt{add}\ x\ (\mathtt{succ}\ y) \equiv \mathtt{succ}\ (\mathtt{add}\ x\ y)$.
+  \thesisref{no counterpart; the thesis does not model the kernel's primitive arithmetic}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:data-mktyeq, vpc:thm:data-mkresult, vpc:thm:reflects-unary-step, vpc:thm:prim-nat-bool-typing, thm:vtc-toplevel}
+  \leanok
+  Two \texttt{withNatProbe} calls with an \texttt{isDefEq.WF} under each, then
+  \texttt{Data.mkResult} over \texttt{of\_unary\_step\_equations} at $F = \mathtt{Nat.add}$ with
+  step \texttt{Nat.succ}; the step's typing and the literal typings it needs are
+  \texttt{HasPrimitives.natSuccT} and \texttt{natLitT}, and the reflection itself follows by
+  induction on the second argument.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{53}, lines 53 and 54): the two
+  \texttt{HasPrimitives} typing accessors are now passed \texttt{ctx.Ewf.orderedStrong}.}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.pred}]
+  \label{prim-clauses:thm:checknatpred-wf}
+  \lean{Lean4Lean.Primitive.checkNatPred.WF}
+  \leanok
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{58}
+  The one unary clause. $\mathtt{pred}\ 0 \equiv 0$ is checked outright, before any binder, and
+  $\mathtt{pred}\ (\mathtt{succ}\ x) \equiv x$ under a single probe; if both pass the definition
+  satisfies the \texttt{Nat.pred} entry of \texttt{primSpecs}, which is the unary reflection
+  \texttt{ReflectsNatNat'}. The type is pinned by \texttt{Data.mkTyEq1} and the obligation built
+  by \texttt{Data.mkResult1}, the unary counterparts of the binary builders every other clause
+  uses.
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:reflects-pred-eqns, vpc:thm:data-mkresult, vpc:thm:data-mktyeq, thm:vtc-toplevel}
+  \leanok
+  One \texttt{withNatProbe} between the two \texttt{isDefEq.WF} checks, then
+  \texttt{ReflectsNatNat'.of\_pred\_equations}, which case-splits on the argument literal.
+  \axfoot{sorryAx, inherited from the typechecker correctness theorems and the strong-environment
+  inversions; plus the Verify/Axioms.lean implementation-bridge axioms}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.sub}]
+  \label{prim-clauses:thm:checknatsub-wf}
+  \lean{Lean4Lean.Primitive.checkNatSub.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{81}
+  If the \texttt{Nat.sub} branch succeeds -- $\mathtt{sub}\ x\ 0 \equiv x$ and
+  $\mathtt{sub}\ x\ (\mathtt{succ}\ y) \equiv \mathtt{Nat.pred}\ (\mathtt{sub}\ x\ y)$, under two
+  probes -- then the definition reflects \texttt{Nat.sub}. The branch's guard names
+  \texttt{Nat.pred} rather than \texttt{Nat}, so \texttt{Nat}'s presence in the environment is
+  recovered from \texttt{Nat.pred}'s recorded type rather than assumed.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:prim-contains-nat, vpc:thm:reflects-unary-step, vpc:thm:data-mkresult, family:hasprimitives-accessors, thm:vtc-toplevel}
+  \leanok
+  \texttt{HasPrimitives.natOfPred} supplies \texttt{Nat}, then the same two probes as
+  \ref{prim-clauses:thm:checknatadd-wf} feed \texttt{of\_unary\_step\_equations} with step
+  \texttt{Nat.pred}, whose typing is \texttt{natPredT} and whose reflection is the second
+  component of \texttt{HasPrimitives.natPred}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 89 and 105).}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.mul}]
+  \label{prim-clauses:thm:checknatmul-wf}
+  \lean{Lean4Lean.Primitive.checkNatMul.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{110}
+  If the \texttt{Nat.mul} branch succeeds -- $\mathtt{mul}\ x\ 0 \equiv 0$ and
+  $\mathtt{mul}\ x\ (\mathtt{succ}\ y) \equiv \mathtt{Nat.add}\ (\mathtt{mul}\ x\ y)\ x$ -- then
+  the definition reflects \texttt{Nat.mul}. The guard names \texttt{Nat.add}, whose reflection
+  supplies both the operator the step applies and \texttt{Nat} itself. Unlike \texttt{Nat.add} the
+  base is a literal rather than the first argument, which is why the schema used here is the
+  binary one.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:prim-contains-nat, vpc:thm:reflects-binary-step, vpc:thm:data-mkresult, family:hasprimitives-accessors, thm:vtc-toplevel}
+  \leanok
+  \texttt{HasPrimitives.natOfAdd} for \texttt{Nat}, two probes, then
+  \texttt{of\_binary\_step\_equations} at $F = \mathtt{Nat.mul}$ with operator \texttt{Nat.add},
+  constant base $0$ and second operand the first argument; the remaining side goal is the
+  identity of the outer probe's translation under the inner binder's weakening, closed by
+  \texttt{simp}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (line 118).}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.pow}]
+  \label{prim-clauses:thm:checknatpow-wf}
+  \lean{Lean4Lean.Primitive.checkNatPow.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{139}
+  If the \texttt{Nat.pow} branch succeeds -- $\mathtt{pow}\ x\ 0 \equiv 1$ and
+  $\mathtt{pow}\ x\ (\mathtt{succ}\ y) \equiv \mathtt{Nat.mul}\ (\mathtt{pow}\ x\ y)\ x$, over the
+  \texttt{Nat.mul} guard -- then the definition reflects \texttt{Nat.pow}. The base is written as
+  a constructor application $\mathtt{succ}\ 0$ rather than as a numeral, which the translation
+  reads as the literal $1$.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:prim-contains-nat, vpc:thm:reflects-binary-step, vpc:thm:data-mkresult, vpc:def:prim-atoms, thm:vtc-toplevel}
+  \leanok
+  As \ref{prim-clauses:thm:checknatmul-wf}, with \texttt{HasPrimitives.natOfMul} for \texttt{Nat},
+  the base equation checked against the atom \texttt{oneb}, and
+  \texttt{of\_binary\_step\_equations} instantiated at operator \texttt{Nat.mul} and constant base
+  $1$.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (line 148).}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.beq} and \texttt{Nat.ble} via four constructor cases]
+  \label{prim-clauses:thm:checknatboolcases-wf}
+  \lean{Lean4Lean.Primitive.checkNatBoolCases.WF, Lean4Lean.Primitive.checkNatBEq.WF, Lean4Lean.Primitive.checkNatBLE.WF}
+  \leanok
+  \uses{ind:primspec, vpc:struct:primitiveresult, family:vt-reflects}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{170}
+  One theorem for both reflected comparisons. For any $F : \mathbb{N} \to \mathbb{N} \to
+  \mathtt{Bool}$ whose \texttt{primSpecs} entry is \texttt{reflectsNatNatBool} and which satisfies
+  $F\ 0\ 0 = \mathtt{true}$, $F\ 0\ (b+1) = b_{0s}$, $F\ (a+1)\ 0 = \mathtt{false}$ and the
+  diagonal $F\ (a+1)\ (b+1) = F\ a\ b$, a successful run of
+  $\mathtt{checkNatBoolCases}\ v\ b_{0s}$ makes the definition reflect $F$. \texttt{Nat.beq} is
+  the instance $b_{0s} = \mathtt{false}$ and \texttt{Nat.ble} the instance
+  $b_{0s} = \mathtt{true}$; each is a six-line declaration over a two-line proof term.
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:reflects-ctor-cases, vpc:thm:data-mkresult, vpc:thm:data-mktyeq, thm:vtc-toplevel}
+  \leanok
+  Four \texttt{isDefEq.WF} checks: one at no binder, two sharing a single probe, and the diagonal
+  under a second probe. \texttt{Data.mkResultBool} then packages them and
+  \texttt{ReflectsNatNatBool'.of\_constructor\_cases} performs the double induction on the two
+  arguments.
+  \axfoot{sorryAx, inherited from the typechecker correctness theorems and the strong-environment
+  inversions; plus the Verify/Axioms.lean implementation-bridge axioms}
+\end{proof}
+
+\begin{lemma}[\texttt{Nat.land}, \texttt{Nat.lor}, \texttt{Nat.xor}]
+  \label{prim-clauses:family:checknat-bitwise-ops}
+  \lean{Lean4Lean.Primitive.checkNatLAnd.WF, Lean4Lean.Primitive.checkNatLOr.WF, Lean4Lean.Primitive.checkNatXor.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult, family:vt-reflects}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{225}
+  Each of the three is \texttt{Nat.bitwise} applied to a boolean operand, so the branch does not
+  recurse: it extracts the operand from the value and pins its behaviour. \texttt{land} and
+  \texttt{lor} check two equations under one \texttt{Bool} probe
+  ($\mathit{op}\ \mathtt{false}\ x$ and $\mathit{op}\ \mathtt{true}\ x$), \texttt{xor} checks all
+  four outright because both of its arguments are closed. If the branch succeeds, the definition
+  satisfies the corresponding entry of \texttt{primSpecs}.
+  \thesisref{no counterpart}
+\end{lemma}
+\begin{proof}
+  \uses{vpc:thm:prim-bitwise-operand, vpc:thm:prim-contains-nat, vpc:thm:prim-trexprs-shape-inv, vpc:thm:reflects-bool-cases, vpc:thm:withprobe, family:hasprimitives-accessors, vpc:thm:data-mkresult, thm:vtc-toplevel}
+  \leanok
+  \texttt{TrExprS.bitwiseOperand} splits the value into \texttt{Nat.bitwise} and a closed operand
+  with its typing; \texttt{HasPrimitives.boolOfBitwise} supplies \texttt{Bool} and
+  \texttt{contains\_nat\_of\_natArrow2} supplies \texttt{Nat} from the recorded type. The probe
+  results then feed \texttt{ReflectsBoolBoolBool'.of\_left\_cases} (\texttt{land},
+  \texttt{lor}) or \texttt{of\_closed\_cases} (\texttt{xor}), and the second component of
+  \texttt{HasPrimitives.natBitwise} turns the operand's reflection into the primitive's.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proofs only (lines 233, 260 and 288), each the
+  \texttt{boolOfBitwise} call. The three proofs are otherwise near-duplicates of about 25 lines
+  each, differing in the boolean operation and in whether a probe is opened;
+  \ref{prim-clauses:thm:checknatboolcases-wf} directly above them shows the parametrised
+  alternative that would have removed the repetition.}
+\end{proof}
+
+\begin{lemma}[\texttt{Nat.shiftLeft} and \texttt{Nat.shiftRight}]
+  \label{prim-clauses:family:checknat-shifts}
+  \lean{Lean4Lean.Primitive.checkNatShiftLeft.WF, Lean4Lean.Primitive.checkNatShiftRight.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{313}
+  Two recurrences of different shapes. \texttt{shiftLeft} checks $x \lll 0 \equiv x$ and
+  $x \lll (y+1) \equiv (2 \cdot x) \lll y$, a step that changes the \emph{first} argument, over
+  the \texttt{Nat.mul} guard; \texttt{shiftRight} checks $x \ggg 0 \equiv x$ and
+  $x \ggg (y+1) \equiv (x \ggg y) / 2$, a binary step whose second operand is the literal $2$
+  rather than the first argument, over the \texttt{Nat.div} guard. Either branch succeeding gives
+  the corresponding \texttt{primSpecs} entry.
+  \thesisref{no counterpart}
+\end{lemma}
+\begin{proof}
+  \uses{vpc:thm:withprobe, vpc:thm:prim-contains-nat, vpc:thm:reflects-first-arg-step, vpc:thm:reflects-binary-step, family:hasprimitives-accessors, vpc:thm:data-mkresult, thm:vtc-toplevel}
+  \leanok
+  Two probes each. \texttt{shiftLeft} closes with
+  \texttt{of\_first\_arg\_step\_equations} at operator \texttt{Nat.mul} and multiplier $2$;
+  \texttt{shiftRight} with \texttt{of\_binary\_step\_equations} at operator \texttt{Nat.div},
+  first operand the recursive call and second the constant $2$. The arithmetic identities are the
+  reflections \texttt{HasPrimitives.natMul} and \texttt{natDiv} recorded for the guards.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proofs only (lines 321 and 349), each the
+  \texttt{natOfMul}/\texttt{natOfDiv} call that recovers \texttt{Nat} from the guard.}
+\end{proof}
+
+\begin{theorem}[\texttt{Char.ofNat}]
+  \label{prim-clauses:thm:checkcharofnat-wf}
+  \lean{Lean4Lean.Primitive.checkCharOfNat.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{372}
+  A clause with no probes and no equations: the branch only pins the recorded type, and a
+  successful run yields the \texttt{Char.ofNat} entry of \texttt{primSpecs}, namely that the
+  declaration's type translates to $\mathtt{Nat} \to \mathtt{Char}$.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:data-mkresult, vpc:thm:prim-trnat-trbool, vpc:thm:prim-trexprs-shape-inv, vpc:def:prim-atoms, thm:vtc-toplevel}
+  \leanok
+  The \texttt{ensureType} call runs at \texttt{inferOnly := false}, so it \emph{produces}
+  \texttt{Char}'s translation and the fact that it is a type; nothing else in the branch mentions
+  \texttt{Char}. \texttt{TrExprS.const0\_inv} identifies it, and
+  \texttt{Data.mkResultTypeEq} then takes the uniqueness of the recorded type's reading against a
+  \texttt{TrTy.forallE} built from \texttt{HasPrimitives.trNat} and that translation.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (line 389), the \texttt{trNat} call.}
+\end{proof}
+
+\begin{theorem}[\texttt{String.ofList}]
+  \label{prim-clauses:thm:checkstringoflist-wf}
+  \lean{Lean4Lean.Primitive.checkStringOfList.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult, family:trexprs-literals}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{394}
+  If the \texttt{String.ofList} branch succeeds then all three clauses of its \texttt{primSpecs}
+  entry hold: the recorded type translates to $\mathtt{List}\ \mathtt{Char} \to \mathtt{String}$,
+  and the two \texttt{checkType} calls settle the typings of \texttt{List.nil} and
+  \texttt{List.cons} at \texttt{Char}. This is the only clause whose result is assembled by hand
+  rather than through one of the \texttt{Data} builders.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:prim-trexprs-shape-inv, thm:vtc-toplevel}
+  \leanok
+  Checking $\mathtt{List}\ \mathtt{Char}$ at \texttt{inferOnly := false} also settles
+  \texttt{Char}, so the second \texttt{ensureType} can stay in the cheap mode and discharge its
+  obligation from the first. \texttt{TrExprS.appChar\_inv'} identifies the application and
+  \texttt{const0\_inv} the constant; the two constructor typings are retyped along their
+  \texttt{isDefEq} results and transported to the extension by monotonicity, and
+  \texttt{listCharStringArrow\_inv} gives the type clause.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 404 and 405), the two
+  \texttt{appChar\_inv'} calls.}
+\end{proof}
+
+\section{Division and remainder}
+
+\texttt{Nat.div} and \texttt{Nat.mod} are both defined by a fuel-driven recursion through a
+\texttt{go} auxiliary, guarded by a $\le$ test whose decision the checker has to recognise.
+\srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{1} verifies that recursion once, in
+\ref{prim-divmod:thm:checknatfuelrec-wf}, and the two clauses instantiate it. The fuel induction
+itself lives in chapter~\ref{chap:primitives-core} (\ref{vpc:thm:natfuelrec}); what is done here
+is checking the pieces, opening the five binders the equations live under, and closing them off at
+literals.
+
+\begin{theorem}[The fuel recursion shared by \texttt{Nat.div} and \texttt{Nat.mod}]
+  \label{prim-divmod:thm:checknatfuelrec-wf}
+  \lean{Lean4Lean.Primitive.checkNatFuelRec.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{family:kernel-primitive-dsl, prim-cond:struct:condition-wf, vpc:def:natgocall}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{22}
+  The caller describes its recursion at the level of the model: the arithmetic function $F$ it
+  intends and the unary $hF$ its step performs; the builder $\mathit{lhsB}$ for what the top
+  equation applies the definition to; the model-side step $H'$ together with the laws that it
+  translates as itself, commutes with substitution and instantiation, is a congruence for
+  definitional equality, and computes at literals as
+  $H'\ (\mathtt{natLit}\ n) = \mathtt{natLit}\ (hF\ n)$; the value $E$ the recursion returns when
+  it stops; and the two arithmetic identities
+  $x < \mathit{bb} \Rightarrow F\ x\ \mathit{bb} = E\ x$ and
+  $0 < \mathit{bb} \le x \Rightarrow F\ x\ \mathit{bb} = hF\ (F\ (x - \mathit{bb})\ \mathit{bb})$.
+  If \texttt{checkNatFuelRec} then succeeds, the caller's continuation is entered with its own top
+  equation untouched -- what that equation is differs between the two clauses, and taking it apart
+  is the caller's business -- together with \texttt{hfuel}: a well-formed \texttt{go} call at
+  literals $\mathit{bb}, f, x$ with $0 < \mathit{bb}$ and $x < f$ is definitionally
+  $\mathtt{natLit}\ (F\ x\ \mathit{bb})$.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:condition-check-wf, prim-cond:thm:trexprs-natnatprop, prim-cond:thm:trexprs-divgotype, prim-cond:family:trexprs-nil-inv, prim-cond:family:condition-tr-inv, prim-cond:family:condition-fvarsin, prim-cond:family:reflect-apply-lit, prim-cond:def:condition-wf-eval, vpc:thm:natfuelrec, vpc:thm:goargs, vpc:thm:withprobe, vpc:thm:isdefequ-appn-prime, thm:vtc-toplevel}
+  \leanok
+  \texttt{checkType.WF} on the relation against \ref{prim-cond:thm:trexprs-natnatprop} and on
+  \texttt{go} against \ref{prim-cond:thm:trexprs-divgotype}, both then lifted to an arbitrary
+  context by \texttt{TrExprS.of\_nil\_any}; \ref{prim-cond:thm:condition-check-wf} for the guard,
+  in both its \texttt{ite} and its \texttt{dite} form. Five binders are opened (two \texttt{Nat}
+  probes, the proof of $1 \le y$, the fuel, the proof of
+  $\mathtt{succ}\ x \le \mathtt{succ}\ \mathit{fuel}$) and the checked equation for \texttt{go} is
+  taken apart by \texttt{Condition.dite\_tr\_inv}, its condition identified by
+  \texttt{prop\_app2\_inv} and \texttt{dec\_app2\_inv} and its \texttt{go} head by uniqueness.
+  Closing the five binders at literals and evaluating the decision by \texttt{natLE\_apply₀}
+  and \texttt{DiteEval} turns that equation into the step hypothesis of
+  \texttt{natFuelRec}, whose induction on the fuel
+  finishes; in the recursive case the argument $x - \mathit{bb}$ is computed to a literal by the
+  \texttt{Nat.sub} reflection and moved under \texttt{go} by \texttt{IsDefEqU.appN'}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 230 and 232): the two
+  \texttt{subst} calls that close the five binders now take \texttt{c.Ewf.orderedStrong}.}
+  \reviewnote{The interface is twenty-one explicit hypotheses over a forty-nine-line statement
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{22}, lines 22--70) and leaks a
+  good deal of the checker's internal structure: \texttt{lhs}, \texttt{H}, \texttt{els} and
+  \texttt{top} are \texttt{Expr} builders supplied by the caller, \texttt{goName} the name of
+  the auxiliary it recurses through. The parameter groups are commented and factoring the two
+  clauses through one theorem is clearly right; the cost is that the statement cannot be read
+  without the recognizer beside it.}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.mod}]
+  \label{prim-divmod:thm:checknatmod-wf}
+  \lean{Lean4Lean.Primitive.checkNatMod.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{279}
+  If the \texttt{Nat.mod} branch succeeds then the definition satisfies the \texttt{Nat.mod} entry
+  of \texttt{primSpecs}: at literal arguments its value is definitionally the literal
+  $x \bmod y$. The branch checks three equations: the base $\mathtt{mod}\ 0\ x \equiv 0$ under its
+  own probe, the top equation $\mathtt{mod}\ (\mathtt{succ}\ x)\ y \equiv \mathtt{if}\ y \le
+  \mathtt{succ}\ x\ \ldots$ with a conditional inside its \texttt{then} branch, and
+  \texttt{go}'s own equation.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-divmod:thm:checknatfuelrec-wf, vpc:thm:prim-contains-nat, vpc:thm:prim-istype-prime, vpc:thm:data-mkresult, vpc:thm:withprobe, family:hasprimitives-accessors, thm:vtc-toplevel}
+  \leanok
+  \texttt{Nat} is recovered from \texttt{Nat.sub}'s recorded typing by
+  \texttt{contains\_nat\_of\_hasType}. The base equation's probe is gone by the time the rest of
+  the checks run, so it is closed off at a literal where it is proved rather than carried.
+  \ref{prim-divmod:thm:checknatfuelrec-wf} is then instantiated at $F = (\cdot \bmod \cdot)$,
+  $hF = \mathtt{id}$, an identity step and $E$ the dividend, with $hFlt$ discharged by
+  \texttt{Nat.mod\_eq\_of\_lt} and $hFstep$ by \texttt{Nat.mod\_eq}; the caller's own top equation
+  is then taken apart, its two conditionals evaluated, and the fuel result applied.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 290, 294, 296, 308, 390 and 392).}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.div}]
+  \label{prim-divmod:thm:checknatdiv-wf}
+  \lean{Lean4Lean.Primitive.checkNatDiv.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{443}
+  If the \texttt{Nat.div} branch succeeds then the definition satisfies the \texttt{Nat.div} entry
+  of \texttt{primSpecs}: at literal arguments its value is definitionally the literal $x / y$.
+  One equation fewer than \texttt{Nat.mod}, because $\mathtt{div}\ 0\ y$ is already covered by the
+  top equation $\mathtt{div}\ x\ y \equiv \mathtt{if}\ 1 \le y\ \mathtt{then}\ \mathtt{go}\
+  \ldots\ \mathtt{else}\ 0$; the step counts, so the recursive call is wrapped in a
+  $\mathtt{succ}$ and the recursion returns $0$ when it stops.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-divmod:thm:checknatfuelrec-wf, vpc:thm:prim-contains-nat, vpc:thm:data-mkresult, family:hasprimitives-accessors, thm:vtc-toplevel}
+  \leanok
+  \ref{prim-divmod:thm:checknatfuelrec-wf} at $F = (\cdot / \cdot)$, $hF = (\cdot + 1)$,
+  $H' = \mathtt{succ}$ and $E = 0$, with $hFlt$ discharged by \texttt{Nat.div\_eq\_of\_lt};
+  $hHwf$ and $hHcong$ for the successor are one application each of \texttt{VExpr.WF.app\_inv} and
+  \texttt{IsDefEq.app\_arg}. The top equation is then evaluated at literals, the case
+  $\mathtt{Nat.ble}\ 1\ b = \mathtt{false}$ being $b = 0$ and settled by
+  \texttt{Nat.div\_zero}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 452, 456, 462, 519 and 521). The
+  proof is noticeably shorter than \ref{prim-divmod:thm:checknatmod-wf}'s because \texttt{Nat.div}
+  has no separate base equation, which is evidence that the shared lemma is factored at the right
+  place.}
+\end{proof}
+
+\section{Greatest common divisor}
+
+\texttt{Nat.gcd} is a well-founded rather than a fuel-driven recursion, so the recognizer reaches
+it through \texttt{unfoldNatWellFounded} (\ref{vpc:thm:unfoldnatwf}), which packs the definition
+into a form whose equations can be probed. \srcloc{Lean4Lean/Verify/Environment/Primitive/Gcd.lean}{1}
+is a single theorem, and at 148 lines it is the shortest file of the chapter; almost all of the
+work is done in chapter~\ref{chap:primitives-core}.
+
+\begin{theorem}[\texttt{Nat.gcd}]
+  \label{prim-gcd:thm:checknatgcd-wf}
+  \lean{Lean4Lean.Primitive.checkNatGcd.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult, vpc:def:probebundle-done}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Gcd.lean}{13}
+  If the \texttt{Nat.gcd} branch succeeds then the definition satisfies the \texttt{Nat.gcd} entry
+  of \texttt{primSpecs}. The branch checks the conditional of the \texttt{eager} gadget as a
+  \texttt{Condition}, hands the packed recursion to \texttt{unfoldNatWellFounded}, and then runs
+  two probes: the base $\mathtt{gcd}'\ 0\ n \equiv n$ and a step whose right-hand side is the
+  recursive call at $n \bmod (m+1)$, which is what the branch's \texttt{Nat.mod} guard is there
+  to make compute.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:condition-check-wf, vpc:thm:unfoldnatwf, vpc:thm:probebundle-probe-wf, vpc:thm:prim-contains-nat, vpc:lem:prim-isdefequ-app-congr, vpc:lem:natbinlit, vpc:thm:data-mkresult, vpc:thm:withprobe}
+  \leanok
+  \ref{prim-cond:thm:condition-check-wf} at the empty context for the gadget's conditional, then
+  \texttt{unfoldNatWellFounded.WF₂}. The step probe's right-hand side is split into the induction
+  variable applied to the packer at two arguments; its head is only a \emph{translation} of
+  \texttt{pack}, so it is converted to \texttt{pack'} by uniqueness and
+  \texttt{IsDefEqU.app\_fun'} while still under the binders, and the pieces are brought to ground
+  by substituting each along the probe's closing (five \texttt{subst} calls, lines 95--100). The first argument is then computed to a literal by
+  \texttt{VContext.natBinLit} at \texttt{HasPrimitives.natMod}, which is exactly what the guard
+  buys. The caller's obligation follows by the recursion's own induction, splitting on whether the
+  first argument is zero and rewriting with \texttt{Nat.gcd\_zero\_left} and
+  \texttt{Nat.gcd\_rec}.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} at line 24, where the local abbreviation
+  \texttt{hE := ctx.Ewf.orderedStrong} replaced \texttt{ctx.Ewf.ordered}, and at lines 95--100,
+  five \texttt{subst} calls now taking \texttt{E.wf.orderedStrong}.}
+\end{proof}
+
+\section{Bitwise operations}
+
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{1} is the hard case. The operator
+that \texttt{Nat.bitwise} recurses with is a \emph{free variable} of the recognizer's context, so
+nothing is known about it beyond a reflection, and the equation body is three nested conditionals
+over two different \texttt{Condition}s: \texttt{natEq} for the $n = 0$ and $m = 0$ tests, and
+\texttt{bool} for the operator's own decisions on the low bits.
+
+\begin{theorem}[A reflected boolean operator at arguments worth literals]
+  \label{prim-bitwise:thm:boolop2-apply}
+  \lean{Lean4Lean.Primitive.boolOp2_apply}
+  \leanok
+  \uses{family:vt-reflects, vpc:def:prim-atoms}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{16}
+  In a well-formed environment and at the empty context, let
+  $f : \mathtt{Bool} \to \mathtt{Bool} \to \mathtt{Bool}$ reflect $g$, meaning that $f$ at any two
+  boolean literals is definitionally the literal $g$ gives. If $a$ and $b$ are merely
+  \emph{definitionally} the literals $b_a, b_b$, and $f\ a\ b$ is well formed, then $f\ a\ b$ is a
+  \texttt{Bool} and is definitionally the literal $g\ b_a\ b_b$. The distinction matters because
+  the equation body applies the operator to decisions, which are worth literals rather than being
+  them.
+\end{theorem}
+\begin{proof}
+  \uses{vpc:thm:wf-inv-prime, vpc:thm:wf-app-inv2, vpc:thm:isdefequ-appn-prime}
+  \leanok
+  Two \texttt{VExpr.WF.app\_inv'} steps off $f$'s type give the typings of $a$ and $b$ and the
+  \texttt{Bool} conclusion; \texttt{IsDefEqU.appN'} then replaces $a, b$ by the literals and
+  \texttt{trans} composes with the reflection equation.
+  \axfoot{sorryAx, inherited: VExpr.WF.app\_inv' passes henv.orderedStrong internally, and it
+  and VEnv.IsDefEqU.appN'/trans rest on Theory/Typing/UniqueTyping.lean}
+\end{proof}
+
+\begin{theorem}[\texttt{Nat.bitwise}]
+  \label{prim-bitwise:thm:checknatbitwise-wf}
+  \lean{Lean4Lean.Primitive.checkNatBitwise.WF}
+  \leanok
+  \contrib{mixed}
+  \uses{ind:primspec, vpc:struct:primitiveresult, vpc:thm:data-mkresultbitwise}
+  \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{31}
+  If the \texttt{Nat.bitwise} branch succeeds then the definition satisfies the
+  \texttt{Nat.bitwise} entry of \texttt{primSpecs}, which is quantified over the operator: for
+  every environment extension and every $f$ reflecting $g : \mathtt{Bool} \to \mathtt{Bool} \to
+  \mathtt{Bool}$, the value at $f$ and two literals $x, y$ is definitionally the literal
+  $\mathtt{Nat.bitwise}\ g\ x\ y$.
+  \thesisref{no counterpart}
+\end{theorem}
+\begin{proof}
+  \uses{prim-cond:thm:condition-check-wf, prim-bitwise:thm:boolop2-apply, prim-cond:family:condition-nateq-eval, prim-cond:family:condition-tr-inv, prim-cond:family:trexprs-nil-inv, vpc:thm:unfoldnatwf, vpc:thm:probebundle-probe-wf, vpc:def:probebundle-done, vpc:thm:data-mktyeq, vpc:thm:ext-natbinlittr, thm:vtc-toplevel}
+  \leanok
+  The type is pinned by \texttt{Data.mkTyEqBitwise}, then
+  \ref{prim-cond:thm:condition-check-wf} runs twice, both before the operator binder: once for
+  \texttt{natEq} with \texttt{ite} and \texttt{dite}, once for \texttt{bool} with \texttt{ite}.
+  The operator binder is opened and the recursion handed to \texttt{unfoldNatWellFounded.WF₂};
+  one probe then carries the whole equation body, whose predicate says what it is worth at
+  literals given the recursive call at the halves. Evaluating it means taking the outer
+  \texttt{dite} apart with \texttt{Condition.dite\_tr\_inv}, the inner conditionals with
+  \texttt{natEq\_diteEval} and \texttt{natEq\_decideTr}, and the operator applications with
+  \ref{prim-bitwise:thm:boolop2-apply}; the halving arguments are computed by
+  \texttt{Ext.natBinLitTr} at the \texttt{Nat.div} and \texttt{Nat.mod} reflections. The result is
+  assembled by \texttt{Data.mkResultBitwise} at a closing that instantiates the operator variable.
+  \axfoot{sorryAx via VEnv.WF.orderedStrong and VEnv.WF.patsStrong, and via the typechecker
+  correctness theorems; plus the Verify/Axioms.lean implementation-bridge axioms}
+  \reviewnote{Changed on \texttt{iota} in the proof only (lines 41, 86, 150, 152, 182, 315, 362).
+  The two \texttt{trproj} lines in this chapter are here as well
+  (\srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{203}): that commit is a pure
+  re-wrap (``style: wrap the lines over the column limit''), and the \texttt{hE.ordered} the
+  wrapped line carries was already \texttt{iota}'s.}
+  \reviewnote{The local abbreviation \texttt{hE := ctx.Ewf.orderedStrong} introduced at line 41
+  is immediately downgraded by \texttt{hE.ordered} at seven of its twelve uses (86, 150, 152,
+  182, 204, 315, 362), so the name advertises a strength most of its uses do not want. At 375
+  lines this is also the longest declaration of the chapter and the only clause-level
+  \texttt{WF} theorem in the group without a docstring.}
+\end{proof}
+
+\section{Contribution summary}
+\label{sec:prim-arith-contribution}
+
+Twenty-six of the fifty-eight nodes of this chapter carry a contribution badge, and every one of
+them carries it for the same reason. No declaration was added to these five files and none was
+removed; the diff against \texttt{master} is 69 insertions against 68 deletions, the extra line
+being the \texttt{trproj} re-wrap. Of 4655 lines, 67 are attributed to \texttt{iota} and 2 to
+\texttt{trproj}, and all 67 re-thread one hypothesis between \texttt{VEnv.Ordered} and
+\ref{struct:orderedstrong}: 61 raise it, and 6 -- the \texttt{Bitwise.lean} uses of the one
+local abbreviation that was raised -- lower it again. Six theorem
+\emph{statements} changed (\ref{prim-cond:thm:trexprs-boolprop},
+\ref{prim-cond:thm:trexprs-propboolprop}, \ref{prim-cond:thm:trexprs-boolnat3},
+\ref{prim-cond:thm:trexprs-natnatprop}, \ref{prim-cond:thm:trexprs-divgotype},
+\ref{prim-cond:thm:trexprs-natproj}), and they changed only because the
+\texttt{HasPrimitives} accessors they call were strengthened two files away
+(\ref{vpc:thm:prim-trnat-trbool}, \ref{vpc:thm:prim-nat-bool-typing},
+\ref{vpc:thm:prim-istype-prime}); of the other 61 lines, 55 write \texttt{c.Ewf.orderedStrong}
+or \texttt{E.wf.orderedStrong} where master wrote \texttt{.ordered} and 6 write
+\texttt{hE.ordered} where master wrote \texttt{hE}. The 2 \texttt{trproj} lines
+(\srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{203}) re-wrap one over-long line
+inside \ref{prim-bitwise:thm:checknatbitwise-wf}; the content they carry is \texttt{iota}'s.
+
+Why the edit was necessary is settled in other chapters, and the reasoning is sound. On
+\texttt{master} the strong system was reached from \texttt{Ordered} by a proved theorem, which was
+available only because the $\iota$ stage of \texttt{Ordered} was a stub. Once $\iota$ rules have a
+real specification, an environment can be \texttt{Ordered} and still admit $\iota$ rules that do
+not preserve types, so the theorem is false as stated and the honest replacement carries subject
+reduction for the registered rules as a third field of \ref{struct:orderedstrong}. Two of that
+structure's three fields are then discharged from \texttt{VEnv.WF} only through
+\ref{thm:wf-patsstrong}: \ref{thm:wf-orderedstrong} builds its \texttt{strong} field as
+\texttt{H.strong H.patsStrong} and its \texttt{pats} field from \texttt{H.patsStrong} directly
+(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{339}).
+
+How it connects. Every result in this chapter discharges the recognizer's obligation
+\texttt{PrimitiveResult} (\ref{vpc:struct:primitiveresult}) for the declaration checker of
+chapter~\ref{chap:primitives-core}. The four conditional-driven clauses reach it through
+\ref{prim-cond:thm:condition-check-wf}; the fifteen simple clauses of \texttt{Clauses.lean} use
+no \texttt{Condition} and reach \texttt{sorryAx} through the probe and \texttt{HasPrimitives}
+lemmas instead. Either way the branch's single open obligation is now a hypothesis of
+every arithmetic primitive: \ref{prim-clauses:thm:checknatadd-wf} through
+\ref{prim-clauses:thm:checkstringoflist-wf}, \ref{prim-divmod:thm:checknatdiv-wf},
+\ref{prim-divmod:thm:checknatmod-wf}, \ref{prim-gcd:thm:checknatgcd-wf} and
+\ref{prim-bitwise:thm:checknatbitwise-wf} all depend on \ref{thm:wf-patsstrong}, where on
+\texttt{master} they depended only on \texttt{VEnv.Ordered}. The two clause nodes whose own
+text escaped the edit, \ref{prim-clauses:thm:checknatpred-wf} and
+\ref{prim-clauses:thm:checknatboolcases-wf} (four declarations in all), are no exception: the lemmas they call --
+\ref{vpc:thm:withprobe}, \ref{vpc:thm:reflects-pred-eqns}, \ref{vpc:thm:reflects-ctor-cases} --
+were strengthened in chapter~\ref{chap:primitives-core}, and the \texttt{CoeOut} coercion inserts
+the rest, which is precisely what makes the change invisible in the source.
+
+What remains open on the contributed side is exactly \ref{thm:wf-patsstrong}; nothing in these
+five files can discharge it, and nothing in them is made harder or easier by it. What remains open
+as a matter of hygiene is that the change is nowhere declared where it is consumed: no touched
+line records that \texttt{orderedStrong} is where a \texttt{sorry} enters, three of the five
+files have no module docstring at all, and the file left with three different environment
+hypotheses (\texttt{VEnv.WF}, \texttt{Ordered}, \texttt{OrderedStrong}) gives no rationale for
+any of them. The line counts above should also not be read as the extent of the change: because
+the \texttt{CoeOut} instance's target moved, master proofs that neither branch edited became
+\texttt{sorry}-dependent too, \ref{prim-cond:thm:reflection-gentele} being the clearest case.
+Both points are recorded in Section~\ref{sec:prim-arith-review}. One further loose end is
+\ref{prim-cond:def:noproj}: the primitives layer excludes \texttt{Expr.proj} by construction
+precisely to avoid transporting a \texttt{TrProj} obligation, which is the one place where this
+chapter touches the \texttt{trproj} work of chapter~\ref{chap:trexpr}, and neither side records
+the connection.
+
+\section{Review notes}
+\label{sec:prim-arith-review}
+
+\begin{itemize}
+\item \textbf{High.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{421}: all 67
+\texttt{iota}-attributed lines in these five files are the
+\texttt{VEnv.Ordered}~$\rightsquigarrow$~\texttt{VEnv.OrderedStrong} re-threading, and
+\texttt{OrderedStrong} is obtained from \texttt{VEnv.WF} only through
+\texttt{VEnv.WF.orderedStrong}, two of whose three fields rest on
+\texttt{VEnv.WF.patsStrong := sorry} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}). Every
+theorem in this chapter therefore now depends on that open obligation, where on \texttt{master}
+they depended only on \texttt{Ordered}. The declaration site says so, in a comment at
+\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{342}; none of the consuming files does. The
+\texttt{CoeOut} instance at \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{343} hides most of
+the coercions: not one of the roughly seventy touched call sites carries a comment saying that
+\texttt{ctx.Ewf.orderedStrong} is where a \texttt{sorry} enters, \texttt{Clauses.lean}'s and
+\texttt{Condition.lean}'s module docstrings do not say so, and \texttt{DivMod.lean},
+\texttt{Gcd.lean} and \texttt{Bitwise.lean} have no module docstring at all. A reviewer
+reading \texttt{Clauses.lean} or \texttt{Gcd.lean} alone would conclude that the arithmetic
+primitives are fully verified.
+\item \textbf{High.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1236}: the
+\texttt{sorry} does not enter only at the attributed lines. \texttt{Reflection.WF.genTele}
+(\ref{prim-cond:thm:reflection-gentele}) is master-attributed on every line of its statement and
+proof, and is \texttt{sorry}-tainted on this branch and was not on \texttt{master}: its one call
+\texttt{hXY'.subst E.wf} used to coerce \texttt{VEnv.WF} to \texttt{VEnv.Ordered}, which is what
+\texttt{VEnv.IsDefEqU.subst} took on \texttt{master}; that lemma now takes
+\texttt{VEnv.OrderedStrong} (\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1299}), so the same
+text coerces the other way. Any count of ``lines the branch
+changed'' therefore understates the blast radius, in this chapter and elsewhere.
+\item \textbf{Medium.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{26}: stale
+module docstring. Lines 26--30 say that \texttt{Nat.mod} and \texttt{Nat.div} call
+\texttt{Condition.check} before their first \texttt{withLocalDecl} but that the calls in
+\texttt{Nat.bitwise} and in \texttt{unfoldNatWellFounded}'s \texttt{eager} gadget ``currently sit
+under binders \ldots\ so both can be hoisted''. The hoisting has already happened:
+\srcloc{Lean4Lean/Primitive.lean}{409} runs both \texttt{Condition.check} calls for
+\texttt{Nat.bitwise} before the operator binder and \srcloc{Lean4Lean/Primitive.lean}{372} does
+the same for \texttt{Nat.gcd}, which is why \texttt{Bitwise.lean} (lines 46--47) and
+\texttt{Gcd.lean} (line 29) can pass \texttt{rfl} for \texttt{hnil}. The paragraph describes a
+state of the code that no longer exists.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{485}: the file
+now carries three different environment hypotheses with no stated rationale: \texttt{VEnv.WF} at
+\ref{prim-cond:thm:trexprs-ofclosed} (540), \texttt{VEnv.Ordered} at
+\ref{prim-cond:thm:trexprs-weakr} (485) and the \texttt{\_nil\_inv} family (664, 668, 676, 687),
+and \texttt{VEnv.OrderedStrong} at the six lemmas of 421, 744, 754, 771, 786 and 855. The last
+group was raised only because \texttt{HasPrimitives.trNat} and \texttt{trBool} in
+\texttt{Lean4Lean/Verify/Primitive.lean} (lines 122 and 140) and \texttt{natIsType'} in
+\texttt{Lean4Lean/Verify/Environment/Primitive/Basic.lean} (line 163) were raised; nothing in
+this file records that, so the distinction looks arbitrary.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1448}:
+inconsistent spelling of the environment hypothesis inside a single proof. Line 1448 writes
+\texttt{VExpr.WF.lam\_inv' c.Ewf.orderedStrong} while lines 1449 and 1450, two further calls
+to the same lemma, pass \texttt{c.Ewf} and let the \texttt{CoeOut} instance insert the coercion;
+the same mix appears at 1850--1851, where \texttt{TrExprS.appN c.Ewf.orderedStrong} is followed by
+\texttt{TrExprS.of\_nil\_any c.Ewf.ordered}. The merge resolution was minimal, which is
+defensible, but a reader cannot now tell which occurrences are load-bearing.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{41}: after the
+merge the local abbreviation \texttt{have hE := ctx.Ewf.orderedStrong} carries the wrong strength
+for most of its uses: seven of its twelve occurrences immediately downgrade it with
+\texttt{hE.ordered} (lines 86, 150, 152, 182, 204, 315, 362). Keeping \texttt{hE : Ordered} and
+writing \texttt{ctx.Ewf.orderedStrong} at the sites that need it would read better; as it stands
+the local name suggests every use needs the strong environment. \texttt{Gcd.lean} made the same
+edit at \srcloc{Lean4Lean/Verify/Environment/Primitive/Gcd.lean}{24} and needed no such
+downgrades, so the two files now spell the same idiom differently.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{31}:
+\texttt{checkNatBitwise.WF} (\ref{prim-bitwise:thm:checknatbitwise-wf}) has no docstring, unlike
+every other clause-level \texttt{WF} theorem in the group -- \texttt{Clauses.lean} documents all
+fifteen of its theorems, and \texttt{Gcd.lean} and \texttt{DivMod.lean} document theirs. It is
+also the longest declaration here (375 lines) and the one with the most intricate structure: two
+conditions, three nested conditionals and a free operator variable.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{225}:
+\texttt{checkNatLAnd.WF}, \texttt{checkNatLOr.WF} and \texttt{checkNatXor.WF}
+(\ref{prim-clauses:family:checknat-bitwise-ops}) are near-identical proofs of 25 to 30 lines,
+differing only in the boolean operation and in whether the probes are needed.
+\texttt{checkNatBoolCases.WF} (\ref{prim-clauses:thm:checknatboolcases-wf}) directly above them
+shows the alternative: one parametrised theorem whose two instances are two-line proof terms.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2438}:
+\texttt{Condition.fvarsIn\_ite} (\ref{prim-cond:family:condition-fvarsin}) is dead code. A
+full-repository grep finds no use of it anywhere; its sibling \texttt{fvarsIn\_dite} is used once,
+at \srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{163}. Either a consumer was removed
+or it was written speculatively alongside the \texttt{dite} version.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{744}:
+\texttt{TrExprS.propBoolProp} (\ref{prim-cond:thm:trexprs-propboolprop}) has no docstring although
+its five siblings in the same block do, and it is one of the six statements the \texttt{iota}
+branch weakened.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{713}:
+\texttt{TrExprS.bvar0} through \texttt{bvar3} (\ref{prim-cond:family:trexprs-bvars}) are four
+hand-rolled instances of one indexed statement, and are the only declarations in the file escaped
+with \texttt{\_root\_} to \texttt{Lean4Lean.TrExprS} rather than declared in
+\texttt{Lean4Lean.Primitive}; the qualified names are easy to confuse with the generic
+\texttt{TrExprS} API.
+\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{307}:
+\texttt{noProj} (\ref{prim-cond:def:noproj}) exists to keep \texttt{Expr.proj} out of this layer
+so that no \texttt{TrProj} obligation has to be transported, as the docstring of
+\ref{prim-cond:thm:trexprs-weakr} states. That is the single point of contact between this chapter
+and the \texttt{trproj} contribution of chapter~\ref{chap:trexpr}, and it is recorded in neither
+place.
+\item \textbf{Informational.} No \texttt{sorry} occurs in any of the five files of this chapter,
+and none of them declares an axiom. Every \texttt{sorryAx} in the axiom footprints above is
+inherited: through \ref{thm:wf-orderedstrong} and \ref{thm:wf-patsstrong} on the branches, and
+through the typechecker correctness theorems and the uniqueness-of-typing lemmas already on
+\texttt{master}. The \texttt{Verify/Axioms.lean} bridge axioms relating the model to Lean's own
+\texttt{Expr} implementation are likewise inherited from the typechecker layer.
+\end{itemize}

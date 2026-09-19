@@ -1,0 +1,1471 @@
+\chapter{Soundness of the type checker}
+\label{chap:typechecker}
+
+This chapter covers the bridge between the executable kernel re-implementation
+(\texttt{Lean4Lean/TypeChecker.lean}, \texttt{Lean4Lean/Inductive/Reduce.lean}) and the model of
+Lean's type theory built in \texttt{Lean4Lean/Theory/} and \texttt{Lean4Lean/Verify/Typing/}.
+The organising pattern is uniform: every kernel function \texttt{f} gets a companion theorem
+\texttt{f.WF} saying that \emph{if} the inputs translate into the model, \emph{then} whatever
+\texttt{f} returns is justified by the model. Nothing asserts that the kernel succeeds. Failure
+and non-termination are unconstrained by the correctness predicate
+(\ref{def:vtc-m-wf}), so every result here is partial correctness, that is soundness and never
+completeness.
+
+The six files are \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{1} (1041 lines, the
+verification harness), \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{1} (156 lines,
+primitive reduction), \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{1} (309 lines, weak head
+normalisation), \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{1} (519 lines, type
+inference), \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{1} (606 lines, algorithmic
+definitional equality) and \srcloc{Lean4Lean/Verify/TypeChecker.lean}{1} (252 lines, the public
+interface). The four bodies are tied together by a fuel-indexed method table
+(\ref{def:vtc-methods-wf}, \ref{thm:vtc-withfuel}), which is what allows each individual proof
+to assume its own recursive calls already sound.
+
+Thesis correspondence is indirect. The thesis's algorithmic equality $\Leftrightarrow$
+(\texttt{axioms.tex} \S2.3) is never formalised in lean4lean, so the results that are
+\emph{about} it, in particular \texttt{typesys.tex}'s \texttt{item:alg\_defn} (``if
+$\Gamma \vdash e \Leftrightarrow e'$ then $\Gamma \vdash e \equiv e'$''), have no statement to
+point at; this chain is their practical stand-in, with \ref{thm:vtc-isdefeqcore} as the
+mechanised form. Head reduction $e \rightsquigarrow^{*} k$ corresponds to \ref{thm:vtc-whnf},
+and the $\beta$, $\zeta$, $\delta$ and $\iota$ rules of \texttt{axioms.tex} to
+\ref{thm:vtc-whnfcore}, \ref{thm:vtc-whnffvar}, \ref{thm:vtc-unfolddefinition} and
+\ref{thm:vtc-iota-reduce-core}. The state invariant \ref{def:vtc-vstate-wf}, which makes the
+kernel's five memo caches and its union-find sound, has no thesis counterpart at all.
+
+Of the group's 2883 lines, 2720 are master. The branches contributed 163: 141 lines in
+\texttt{WHNF.lean} (the $\iota$ lemma \ref{thm:vtc-iota-reduce-core}) and 22 lines in
+\texttt{InferType.lean} (\ref{thm:vtc-inferproj-struct} and the corrected signature of
+\ref{thm:vtc-inferproj}). The per-line blame tags all 141 \texttt{WHNF.lean} lines as
+\texttt{trproj}, but \texttt{git diff iota trproj} on that file is empty and commits
+\texttt{7a68882} (iota) and \texttt{6fd8a1d} (trproj) are the same patch: the lines are the
+\texttt{iota} contribution, carried as a duplicate commit on \texttt{trproj} and then merged in
+\texttt{20ec229}. They are attributed to \texttt{iota} below.
+
+Assessment. The master code in this group is dense and of high quality: the statements are the
+right ones (partial correctness, \texttt{FVarsBelow} retained wherever a caller needs to know
+the reduct still lives in the same sub-context, cache invariants folded into the state
+invariant rather than bolted on), and the proofs are terse but structured. Six \texttt{sorry}s
+remain. Four are master's outright: \ref{thm:vtc-reduceprojcore}, \ref{thm:vtc-reducerecursor},
+\ref{thm:vtc-tryetastruct} and \ref{thm:vtc-isdefequnitlike}. The other two are the projection
+statements in \texttt{InferType.lean}, and neither is master's: \ref{thm:vtc-inferproj-struct} is
+new on \texttt{trproj} (master has no such declaration) and \ref{thm:vtc-inferproj} is
+\texttt{mixed}, since \texttt{trproj} rewrote master's signature and conclusion. The
+\texttt{iota} contribution is a real theorem, carefully proved and
+correctly documented, but it has no consumer: \ref{thm:vtc-reducerecursor} is still open, so it
+is one unwritten bridging lemma away from being useful. The \texttt{trproj} contribution here
+is a signature repair plus documentation rather than a result; the repair fixes a genuinely
+wrong statement, and the documentation converts an invisible hole in the project's headline
+soundness theorem into an explicit and well-analysed one, but all three declarations it touches
+remain \texttt{sorry}.
+
+Notation. $\Delta$ denotes the model local context (\texttt{VLCtx}) and $\Gamma$ its erasure to
+a list of types; $e'$, $ty'$ and so on denote model terms (\texttt{VExpr}) and unprimed names
+kernel expressions (\texttt{Expr}). ``$e$ translates to $e'$'' means
+\texttt{TrExprS venv lparams} $\Delta$ \texttt{e e'} (\ref{ind:trexprs}), and its up-to-defeq
+variant is \texttt{TrExpr}.
+
+\section{The verification context}
+
+\begin{definition}[Model local context, \texttt{MLCtx}]
+  \label{def:vtc-mlctx}
+  \lean{Lean4Lean.TypeChecker.MLCtx, Lean4Lean.TypeChecker.MLCtx.vlctx, Lean4Lean.TypeChecker.MLCtx.lctx, Lean4Lean.TypeChecker.MLCtx.length, Lean4Lean.TypeChecker.MLCtx.decls, Lean4Lean.TypeChecker.MLCtx.fvarRevList, Lean4Lean.TypeChecker.MLCtx.letValList, Lean4Lean.TypeChecker.MLCtx.dropN}
+  \leanok
+  \uses{def:vt-vlctx}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{106}
+  A snoc-list with two binder constructors, \texttt{vlam} and \texttt{vlet}, each carrying the
+  kernel-side data (free variable id, user name, \texttt{Expr} type, binder info, and for
+  \texttt{let} the value) together with the model-side data (\texttt{VExpr} type, and value).
+  The projections \texttt{vlctx} and \texttt{lctx} produce the model context $\Delta$ and the
+  runtime \texttt{LocalContext} respectively, so one structure keeps the two in lockstep;
+  \texttt{dropN}, \texttt{fvarRevList} and \texttt{letValList} expose the last $n$ binders for
+  the abstraction lemmas.
+\end{definition}
+
+\begin{definition}[Well-formedness of an \texttt{MLCtx}]
+  \label{def:vtc-mlctx-wf}
+  \lean{Lean4Lean.TypeChecker.MLCtx.WF, Lean4Lean.TypeChecker.MLCtx.WF.tr, Lean4Lean.TypeChecker.MLCtx.WF.dropN, Lean4Lean.TypeChecker.MLCtx.dropN_fvars_subset, Lean4Lean.TypeChecker.MLCtx.noBV}
+  \leanok
+  \uses{def:vtc-mlctx, ind:trlctx, ind:trexprs, def:hastype-istype}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{158}
+  \texttt{MLCtx.WF env Us c} is defined by recursion on \texttt{c}: at each binder the free
+  variable must be absent from the \texttt{lctx} below it, its \texttt{Expr} type must translate
+  to its \texttt{VExpr} type, and that model type must be a type (for \texttt{vlet},
+  additionally the value translates and has that type). \texttt{MLCtx.WF.tr} packages this as
+  the paired invariant \texttt{TrLCtx} between \texttt{c.lctx} and \texttt{c.vlctx}, built from
+  \texttt{TrLCtx.mkLocalDecl} and \texttt{TrLCtx.mkLetDecl}. \texttt{noBV} records that the
+  resulting $\Delta$ has no bound-variable entries.
+  \thesisref{typesys.tex, Regularity; $\vdash \Gamma\ \mathsf{ok}$}
+\end{definition}
+
+\begin{definition}[Verified reader context, \texttt{VContext}]
+  \label{def:vtc-vcontext}
+  \lean{Lean4Lean.TypeChecker.VContext, Lean4Lean.TypeChecker.VContext.trlctx, Lean4Lean.TypeChecker.VContext.Ewf, Lean4Lean.TypeChecker.VContext.Δwf, Lean4Lean.TypeChecker.VContext.TrExprS, Lean4Lean.TypeChecker.VContext.TrExpr, Lean4Lean.TypeChecker.VContext.TrTyping, Lean4Lean.TypeChecker.VContext.FVarsBelow, Lean4Lean.TypeChecker.VContext.MLCWF}
+  \leanok
+  \uses{def:vtc-mlctx-wf, ind:tr-env, ind:primspec, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{190}
+  \texttt{VContext} extends the checker's runtime \texttt{Context} with the model data it is
+  verified against: a \texttt{VEnv} \texttt{venv}, a proof that it \texttt{HasPrimitives}, the
+  discipline \texttt{safePrimitives} (a primitive constant in the kernel environment is
+  \texttt{safe} and has no level parameters), a translation \texttt{TrEnv safety env venv}, and
+  an \texttt{MLCtx} that is well formed and whose \texttt{lctx} is \emph{definitionally} the
+  runtime one (\texttt{lctx\_eq}). The \texttt{nonrec abbrev}s \texttt{TrExprS},
+  \texttt{TrExpr}, \texttt{IsType}, \texttt{HasType}, \texttt{IsDefEqU}, \texttt{TrTyping} and
+  \texttt{FVarsBelow} specialise the model relations at this context, and \texttt{MLCWF} is the
+  instance class letting a proof switch to an extended \texttt{MLCtx}.
+\end{definition}
+
+\begin{definition}[Checker state invariant, \texttt{VState.WF}]
+  \label{def:vtc-vstate-wf}
+  \lean{Lean4Lean.TypeChecker.VState, Lean4Lean.InferCache.WF, Lean4Lean.TypeChecker.WHNFCache.WF, Lean4Lean.TypeChecker.UnfoldCache.WF, Lean4Lean.TypeChecker.VState.WF, Lean4Lean.TypeChecker.VState.LE, Lean4Lean.TypeChecker.VState.WF.find?_eq_none}
+  \leanok
+  \uses{def:vtc-vcontext, def:conditionallyhastype, def:conditionallywhnf, def:kernel-equiv-manager}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{229}
+  The invariant every mutable field of the checker's state must satisfy: the runtime local
+  context translates, every free variable in scope is reserved by the name generator, there is
+  a lifted context $\Delta'$ for which the union-find \texttt{eqvManager} is sound, and each
+  memo table stores only justified entries, namely \texttt{inferTypeI}/\texttt{inferTypeC}
+  against \texttt{ConditionallyHasType}, the two whnf caches against \texttt{ConditionallyWHNF},
+  and \texttt{unfold} against the $\delta$-value of a constant. \texttt{VState.LE} is
+  monotonicity of the name generator, and \texttt{find?\_eq\_none} turns non-reservation of an
+  id into its absence from the local context.
+  \reviewnote{The cache clauses are what make the kernel's memoisation sound and they are the
+  least thesis-like part of the development; Carneiro's text has no counterpart.}
+\end{definition}
+
+\section{The program logic}
+
+\begin{definition}[Partial-correctness predicate for the checker monad, \texttt{M.WF}]
+  \label{def:vtc-m-wf}
+  \lean{Lean4Lean.TypeChecker.M.WF, Lean4Lean.TypeChecker.M.WF.bind, Lean4Lean.TypeChecker.M.WF.pure, Lean4Lean.TypeChecker.M.WF.map, Lean4Lean.TypeChecker.M.WF.mono, Lean4Lean.TypeChecker.M.WF.throw, Lean4Lean.TypeChecker.M.WF.le}
+  \leanok
+  \uses{def:vtc-vstate-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{278}
+  \texttt{M.WF c s x Q} says: if \texttt{s} satisfies the state invariant, then whenever
+  \texttt{x} run at \texttt{c} and \texttt{s} returns \texttt{.ok (a, s')} there is a
+  \texttt{VState} whose underlying state is \texttt{s'}, which extends \texttt{s}, still
+  satisfies the invariant, and for which \texttt{Q a} holds. A thrown exception or a
+  non-terminating run satisfies the predicate vacuously, which is exactly why every
+  \texttt{.WF} lemma in the chapter is a soundness and not a completeness statement. The
+  accompanying \texttt{bind}, \texttt{pure}, \texttt{map}, \texttt{mono}, \texttt{throw} and
+  \texttt{le} combinators are direct unfoldings of the
+  \texttt{ReaderT}/\texttt{StateT}/\texttt{Except} stack.
+  \thesisref{typesys.tex, \texttt{item:alg\_defn}: soundness of the algorithm only}
+\end{definition}
+
+\begin{definition}[Soundness contract of the method table, \texttt{Methods.WF}]
+  \label{def:vtc-methods-wf}
+  \lean{Lean4Lean.TypeChecker.Methods.WF}
+  \leanok
+  \uses{def:vtc-m-wf, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{314}
+  The kernel's four mutually recursive entry points are bundled as a record of closures;
+  \texttt{Methods.WF m} states the specification each field must meet. \texttt{isDefEqCore}
+  returning \texttt{true} on two translating terms yields \texttt{IsDefEqU} of their
+  translations; \texttt{whnfCore} and \texttt{whnf} return a term that is \texttt{FVarsBelow}
+  the input and \texttt{TrExpr}-translates to the same model term; \texttt{inferType}, given
+  that the input's free variables are in scope and (at \texttt{inferOnly}) that it already
+  translates, returns a type \texttt{ty} with $\exists\, e'\, ty'$,
+  \texttt{TrTyping e ty e' ty'}.
+  \thesisref{axioms.tex, \S Definitional equality ($\Leftrightarrow$) and head reduction $e \rightsquigarrow^{*} k$}
+\end{definition}
+
+\begin{lemma}[The fuelled recursive monad and its program logic, \texttt{RecM.WF}]
+  \label{def:vtc-recm-wf}
+  \lean{Lean4Lean.TypeChecker.RecM.WF, Lean4Lean.TypeChecker.M.WF.liftExcept, Lean4Lean.TypeChecker.M.WF.lift, Lean4Lean.TypeChecker.RecM.WF.bind, Lean4Lean.TypeChecker.RecM.WF.bind_le, Lean4Lean.TypeChecker.RecM.WF.mono, Lean4Lean.TypeChecker.RecM.WF.get, Lean4Lean.TypeChecker.RecM.WF.getEnv, Lean4Lean.TypeChecker.RecM.WF.getLCtx, Lean4Lean.TypeChecker.RecM.WF.readThe, Lean4Lean.TypeChecker.RecM.WF.getNGen, Lean4Lean.TypeChecker.RecM.WF.stateWF, Lean4Lean.TypeChecker.RecM.WF.toLBoolM}
+  \leanok
+  \uses{def:vtc-m-wf, def:vtc-methods-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{325}
+  \texttt{RecM.WF c s x Q} quantifies \texttt{M.WF} over every method table satisfying
+  \texttt{Methods.WF}, so a proof about a \texttt{RecM} program may assume its recursive calls
+  are already sound. The family around it is a small program logic: monadic \texttt{bind}
+  (with a variant carrying an earlier state bound), \texttt{mono}, reading the state,
+  environment, local context and name generator, \texttt{stateWF} to expose the state
+  invariant inside a proof, lifting from \texttt{Except} and from \texttt{M}, and transport
+  through the \texttt{Bool}/\texttt{LBool} coercions.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Each lemma is a routine unfolding of the monad transformer stack on top of the corresponding
+  \texttt{M.WF} combinator; \texttt{lift} is also registered as a \texttt{Coe}.
+\end{proof}
+
+\begin{theorem}[Binder introduction preserves the invariant]
+  \label{thm:vtc-withlocaldecl}
+  \lean{Lean4Lean.TypeChecker.RecM.WF.withLocalDecl, Lean4Lean.TypeChecker.M.WF.withLocalDecl, Lean4Lean.TypeChecker.RecM.WF.withLetDecl}
+  \leanok
+  \uses{def:vtc-mlctx-wf, def:vtc-vstate-wf, def:vtc-recm-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{439}
+  Let \texttt{m} be a well-formed \texttt{MLCtx}, \texttt{ty} translate to \texttt{ty'} and
+  \texttt{ty'} be a type. If the continuation \texttt{f (.fvar id)} satisfies \texttt{Q} in the
+  context extended by \texttt{m.vlam id name ty ty' bi}, for every \texttt{id} not reserved by
+  the current name generator, then \texttt{withLocalDecl name bi ty f} satisfies \texttt{Q} at
+  \texttt{m}. \texttt{withLetDecl} is the \texttt{vlet} analogue, and there is an \texttt{M}
+  level duplicate of the first because the primitive checker introduces binders outside
+  \texttt{RecM}.
+  \thesisref{typesys.tex, Weakening (\texttt{thm:weak})}
+\end{theorem}
+\begin{proof}
+  \uses{def:vtc-vstate-wf}
+  \leanok
+  The fresh id is \texttt{s.ngen.curr}, which is not reserved by \texttt{s} but is by
+  \texttt{s.next}; \texttt{VState.WF.find?\_eq\_none} turns this into absence from the local
+  context, which is the missing clause of \texttt{MLCtx.WF}. The state invariant is then
+  rebuilt at \texttt{s.next}, each cache clause being re-validated under the extended context by
+  the \texttt{fresh} and \texttt{mono} lemmas of \texttt{ConditionallyHasType} and
+  \texttt{ConditionallyWHNF}.
+\end{proof}
+
+\section{Abstraction of binders}
+
+\begin{definition}[Re-abstraction of the last $n$ binders]
+  \label{def:vtc-mkbinders}
+  \lean{Lean4Lean.TypeChecker.MLCtx.mkForall, Lean4Lean.TypeChecker.MLCtx.mkForall', Lean4Lean.TypeChecker.MLCtx.mkLambda, Lean4Lean.TypeChecker.MLCtx.mkLambda', Lean4Lean.TypeChecker.MLCtx.mkLetArg, Lean4Lean.TypeChecker.MLCtx.mkLet, Lean4Lean.TypeChecker.AllAbove, Lean4Lean.TypeChecker.AllAbove.wf}
+  \leanok
+  \uses{def:vtc-mlctx}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{588}
+  \texttt{MLCtx.mkForall c n hn e} abstracts the last $n$ free variables of \texttt{e} back into
+  binders, turning a \texttt{vlet} binder into a \texttt{letE} node only when the body actually
+  mentions it and lowering the loose bound variable otherwise; \texttt{mkLambda} and
+  \texttt{mkLet} are the analogues, and the primed versions do the same on the model side over
+  \texttt{VExpr}. \texttt{AllAbove} $\Delta$ \texttt{P} restricts a free-variable predicate to
+  the variables already present in $\Delta$, which is what makes \texttt{FVarsBelow} statements
+  stable under binder introduction.
+  \thesisref{axioms.tex, telescopes $\lambda x{:}\alpha.\ \beta$}
+\end{definition}
+
+\begin{lemma}[Abstraction commutes with translation]
+  \label{thm:vtc-mkbinder-tr}
+  \lean{Lean4Lean.TypeChecker.MLCtx.WF.mkForall_trS, Lean4Lean.TypeChecker.mkForall_hasType, Lean4Lean.TypeChecker.MLCtx.WF.mkForall'_congr, Lean4Lean.TypeChecker.MLCtx.WF.mkForall_tr, Lean4Lean.TypeChecker.MLCtx.WF.mkLambda_trS, Lean4Lean.TypeChecker.MLCtx.WF.mkLambda'_congr, Lean4Lean.TypeChecker.MLCtx.WF.mkLambda_tr, Lean4Lean.TypeChecker.MLCtx.WF.mkLet_trS}
+  \leanok
+  \uses{def:vtc-mkbinders, def:vtc-mlctx-wf, ind:trexprs}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{657}
+  If a body translates in the full context and its model type is a type, then its $n$-fold
+  abstraction translates, in the context dropped by $n$, to the corresponding model
+  abstraction, and is itself a type; \texttt{mkForall\_hasType} gives the typing of the
+  abstracted pi type from the list of level translations. The primed \texttt{congr} versions
+  transport a model \texttt{IsDefEq} between bodies to one between the abstractions, and the
+  unprimed \texttt{\_tr} versions are the \texttt{TrExpr} (up-to-defeq) forms.
+  \thesisref{typesys.tex, Weakening (\texttt{thm:weak}) and Substitution (\texttt{thm:subst})}
+\end{lemma}
+\begin{proof}
+  \uses{thm:trexprs-abstract}
+  \leanok
+  Induction on $n$ along the \texttt{MLCtx}. The \texttt{vlam} step applies
+  \texttt{TrExprS.forallE} to \texttt{TrExprS.abstract}; the \texttt{vlet} step either builds a
+  \texttt{TrExprS.letE} or, when the bound variable is unused, rewrites
+  \texttt{lowerLooseBVars} into an instantiation and uses \texttt{TrExprS.inst\_let}. The
+  freshness side conditions come from \texttt{MLCtx.WF}.
+\end{proof}
+
+\begin{lemma}[Bookkeeping for the model local context]
+  \label{thm:vtc-mlctx-admin}
+  \lean{Lean4Lean.TypeChecker.MLCtx.fvarRevList_prefix, Lean4Lean.TypeChecker.MLCtx.fvars_eq_append, Lean4Lean.TypeChecker.MLCtx.WF.isFVarUpSet_dropN, Lean4Lean.TypeChecker.MLCtx.WF.fvars_nodup, Lean4Lean.TypeChecker.MLCtx.WF.fvarRevList_nodup, Lean4Lean.TypeChecker.MLCtx.WF.decls_size, Lean4Lean.TypeChecker.MLCtx.WF.toList_eq, Lean4Lean.TypeChecker.MLCtx.WF.find?_eq, Lean4Lean.TypeChecker.MLCtx.WF.mkForall_eq, Lean4Lean.TypeChecker.MLCtx.WF.mkLambda_eq}
+  \leanok
+  \uses{def:vtc-mlctx-wf, def:vtc-mkbinders}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{791}
+  Routine facts: the reversed free-variable list of the last $n$ binders is a prefix of all of
+  them and its entries are pairwise distinct; \texttt{MLCtx.decls} agrees with the runtime
+  \texttt{LocalContext}'s \texttt{toList} and \texttt{find?}; dropping a prefix keeps an
+  up-set of free variables an up-set; and \texttt{LocalContext.mkForall}/\texttt{mkLambda}
+  applied to the matching array agree with \ref{def:vtc-mkbinders}.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Structural inductions on the \texttt{MLCtx}. The last two rewrite
+  \texttt{LocalContext.mkBinding} into a fold of \texttt{mkBindingList1} and then match it
+  binder by binder, the nodup facts being what licenses the congruence at each step.
+\end{proof}
+
+\begin{definition}[Partially abstracted telescopes]
+  \label{def:vtc-partialforall}
+  \lean{Lean4Lean.TypeChecker.MLCtx.PartialForall, Lean4Lean.TypeChecker.MLCtx.PartialForall.full, Lean4Lean.TypeChecker.MLCtx.PartialForall.sublist, Lean4Lean.TypeChecker.MLCtx.WF.mkForall_partial}
+  \leanok
+  \uses{def:vtc-mkbinders}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{847}
+  \texttt{MLCtx.PartialForall c n l e} relates a term to an abstraction over a sublist
+  \texttt{l} of the last $n$ binders, with a \texttt{skip} rule for a \texttt{vlet} binder the
+  body does not mention. \texttt{full} instantiates it at the whole \texttt{fvarRevList},
+  \texttt{sublist} records that \texttt{l} is a sublist of the context's free variables, and
+  \texttt{mkForall\_partial} is the generalisation of \ref{thm:vtc-mlctx-admin}'s
+  \texttt{mkForall\_eq} that the induction actually needs.
+\end{definition}
+
+\section{The recursive-call interface}
+
+\begin{lemma}[Recursive-call interface]
+  \label{thm:vtc-methods-iface}
+  \lean{Lean4Lean.TypeChecker.Inner.whnf.WF, Lean4Lean.TypeChecker.Inner.isDefEqCore.WF, Lean4Lean.TypeChecker.Inner.inferType.WF', Lean4Lean.TypeChecker.Inner.inferType.WF, Lean4Lean.TypeChecker.Inner.inferType.WF_uniq, Lean4Lean.TypeChecker.Inner.checkType.WF, Lean4Lean.TypeChecker.Inner.whnfCore.WF}
+  \leanok
+  \uses{def:vtc-methods-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{933}
+  The four \texttt{Methods} fields re-exposed as \texttt{RecM.WF} lemmas, so that the individual
+  soundness proofs can call them. \texttt{inferType.WF} strengthens \texttt{inferType.WF'} when
+  the caller already holds a translation \texttt{e'}, concluding
+  $\exists\, ty'$, \texttt{TrTyping e ty e' ty'} with the caller's own \texttt{e'};
+  \texttt{inferType.WF\_uniq} combines it with uniqueness of typing so that the inferred type
+  translates to any model type the term is already known to have; \texttt{checkType.WF} is
+  \texttt{inferType.WF'} at \texttt{inferOnly := false}, where the translation hypothesis is
+  vacuous.
+  \thesisref{unique.tex, \texttt{thm:unique} (uniqueness of typing)}
+\end{lemma}
+\begin{proof}
+  \uses{thm:trexprs-uniq, thm:isdefeq-iff, fam:defeq-mixing}
+  \leanok
+  \texttt{WF} replaces the existentially quantified translation by the caller's using
+  \texttt{TrExprS.uniq} and \texttt{HasType.defeqU\_l}; \texttt{WF\_uniq} then applies
+  \texttt{uniqU}. Since \texttt{TrExprS.uniq} still rests on the open \ref{thm:trproj-uniq},
+  everything downstream of \texttt{inferType.WF} carries \texttt{sorryAx}.
+  \axfoot{sorryAx via TrExprS.uniq -> TrProj.uniq (Verify/Typing/Lemmas.lean:995)}
+\end{proof}
+
+\begin{theorem}[Soundness of $\delta$ reduction]
+  \label{thm:vtc-unfolddefinition}
+  \lean{Lean4Lean.TypeChecker.Inner.isDelta_is_some, Lean4Lean.TypeChecker.Inner.UnfoldDefinition.WF, Lean4Lean.TypeChecker.Inner.unfoldDefinitionCore.WF, Lean4Lean.TypeChecker.Inner.unfoldDefinition.WF}
+  \leanok
+  \uses{def:vtc-recm-wf, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{978}
+  \texttt{UnfoldDefinition.WF c e e0 e'} is a two-sided specification of an
+  \texttt{Option Expr}: on \texttt{some e1} the reduct is \texttt{FVarsBelow e} and translates
+  to \texttt{e'}, and on \texttt{none} there is no constant with a $\delta$-value at the head
+  of \texttt{e0} with the right number of level arguments.
+  \texttt{unfoldDefinitionCore.WF} establishes it for a constant head, including soundness of
+  the \texttt{unfold} memo cache, and \texttt{unfoldDefinition.WF} lifts it through an
+  application spine.
+  \thesisref{axioms.tex, \S Definitional equality, the $\delta$ rule}
+\end{theorem}
+\begin{proof}
+  \uses{thm:tr-env-of-value, thm:trexprs-instl, thm:trexprs-weakfv, family:trexprs-uninstantiate, ind:appstack}
+  \leanok
+  \texttt{isDelta\_is\_some} characterises when the kernel finds a $\delta$-value.
+  \texttt{TrEnv.of\_value} supplies the model equation for the definition, which is moved into
+  the local context by \texttt{TrExprS.instL} followed by \texttt{weakFV} and the closedness of
+  the value; the spine case builds an \texttt{AppStack} and re-applies the arguments with
+  \texttt{TrExpr.rebuild\_mkAppList}.
+\end{proof}
+
+\begin{lemma}[Soundness of \texttt{ensureSortCore}]
+  \label{thm:vtc-ensuresortcore}
+  \lean{Lean4Lean.TypeChecker.Inner.ensureSortCore.WF}
+  \leanok
+  \srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{1032}
+  If \texttt{e} translates to \texttt{e'} then \texttt{ensureSortCore e e0} either throws or
+  returns a term of the syntactic form \texttt{.sort u} that translates to \texttt{e'} and is
+  \texttt{FVarsBelow e}.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-methods-iface}
+  \leanok
+  If \texttt{e} is already a sort, return it. Otherwise run \texttt{whnf.WF} and case on the
+  result, throwing in every branch that is not a sort.
+\end{proof}
+
+\section{Primitive reduction}
+
+\begin{lemma}[Native reduction never fires]
+  \label{thm:vtc-reducenative}
+  \lean{Lean4Lean.TypeChecker.Inner.reduceNative.WF}
+  \leanok
+  \uses{def:vtc-m-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{7}
+  \texttt{reduceNative env e} either throws or returns \texttt{none}; the postcondition is
+  literally ``no \texttt{e1} with the result equal to \texttt{some e1}''. Soundness is
+  therefore vacuous, which is what the kernel wants: native evaluation is rejected rather than
+  trusted, since supporting it would require verified compilation.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Three nested \texttt{split}s; every branch is a \texttt{throw} or \texttt{pure none}.
+\end{proof}
+
+\begin{lemma}[Literal recognition is faithful]
+  \label{thm:vtc-rawnatlit}
+  \lean{Lean4Lean.TypeChecker.Inner.rawNatLitExt?.WF}
+  \leanok
+  \uses{ind:primspec, ind:trexprs}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{12}
+  If \texttt{rawNatLitExt? e = some n} and \texttt{e} translates to \texttt{e'}, then
+  \texttt{Nat} is a constant of the model environment and \texttt{e'} is the canonical model
+  numeral \texttt{VExpr.natLit n}.
+\end{lemma}
+\begin{proof}
+  \uses{family:trexprs-literals, def:trexprs-isunique}
+  \leanok
+  In both branches (a raw literal, or the constant \texttt{Nat.zero} identified through
+  \texttt{HasPrimitives}) one first builds \texttt{TrExprS (.lit (.natVal n)) e'}, then closes
+  by \texttt{TrExprS.unique} against \texttt{TrExprS.natLit}, which is on-the-nose uniqueness
+  rather than uniqueness up to defeq.
+  \axfoot{sorryAx inherited through TrExprS.unique; see \ref{thm:vtc-methods-iface}}
+\end{proof}
+
+\begin{lemma}[Soundness of the GMP-accelerated \texttt{Nat} operations]
+  \label{thm:vtc-reducebinnat}
+  \lean{Lean4Lean.TypeChecker.Inner.reduceBinNatOpG, Lean4Lean.TypeChecker.Inner.reduceBinNatOpG.WF, Lean4Lean.TypeChecker.Inner.reduceBinNatPred.WF}
+  \leanok
+  \uses{family:vt-reflects, ind:primspec}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{21}
+  Let \texttt{fc} be a primitive name whose model semantics is recorded by
+  \texttt{ReflectsNatNatNat fc f} (respectively \texttt{ReflectsNatNatBool}). If the redex
+  \texttt{(.app (.app (.const fc ls) a) b)} translates to \texttt{e'}, then any reduct
+  \texttt{reduceBinNatOpG guard f a b} returns is \texttt{FVarsBelow} the redex and translates
+  to the same \texttt{e'}. \texttt{reduceBinNatOpG} is a verification-side generalisation of
+  the kernel's \texttt{reduceBinNatOp} taking an explicit guard predicate, used for
+  \texttt{Nat.pow}'s size cut-off.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-rawnatlit, thm:vtc-methods-iface, def:isdefeq}
+  \leanok
+  Reduce both arguments with \texttt{whnf.WF}, identify them as numerals with
+  \ref{thm:vtc-rawnatlit}, instantiate the environment's \texttt{Reflects} equation at the two
+  numerals, weaken it into the local context and close with the \texttt{appDF} congruence of
+  \texttt{IsDefEq}.
+  \axfoot{sorryAx inherited from \ref{thm:vtc-rawnatlit} and \ref{thm:vtc-methods-iface}}
+\end{proof}
+
+\begin{lemma}[Soundness of \texttt{Nat} literal reduction]
+  \label{thm:vtc-reducenat}
+  \lean{Lean4Lean.TypeChecker.Inner.reduceNat.WF}
+  \leanok
+  \uses{ind:primspec, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{89}
+  Whatever \texttt{reduceNat e} returns is \texttt{FVarsBelow e} and translates to the same
+  model term as \texttt{e}. The cases are \texttt{Nat.succ} applied to a literal and the
+  fourteen binary operations and predicates \texttt{add}, \texttt{sub}, \texttt{mul},
+  \texttt{pow}, \texttt{gcd}, \texttt{mod}, \texttt{div}, \texttt{beq}, \texttt{ble},
+  \texttt{land}, \texttt{lor}, \texttt{xor}, \texttt{shiftLeft}, \texttt{shiftRight}.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-reducebinnat, thm:vtc-rawnatlit, family:trexprs-literals}
+  \leanok
+  A \texttt{split} on the number of arguments and the head constant, each binary case
+  discharged by \ref{thm:vtc-reducebinnat} with the matching \texttt{HasPrimitives} field; the
+  unary \texttt{Nat.succ} case reduces the argument, recognises a literal and goes through
+  \texttt{TrExprS.natLit}.
+  \axfoot{sorryAx inherited from \ref{thm:vtc-reducebinnat}}
+\end{proof}
+
+\begin{theorem}[Soundness of projection-of-constructor reduction (open)]
+  \label{thm:vtc-reduceprojcore}
+  \lean{Lean4Lean.TypeChecker.Inner.reduceProjCore.WF}
+  \leanok
+  \uses{def:trproj, ind:trexprs}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143}
+  If \texttt{.proj n i e} translates to \texttt{e'} then whatever \texttt{reduceProjCore i e}
+  returns, namely the $i$-th field of the constructor application \texttt{e} has been reduced
+  to, is \texttt{FVarsBelow (.proj n i e)} and translates to \texttt{e'}.
+  \thesisref{axioms.tex, \S The computation rule ($\iota$ reduction, \texttt{sec:iota}), specialised to a single-constructor structure}
+\end{theorem}
+\begin{proof}
+  \textbf{Not proved in Lean.} The declaration is \texttt{:= sorry}. What is missing is the
+  step from ``the projected term reduced to a constructor application of the structure'' to
+  ``the \texttt{TrProj} derivation of the projection is the translation of that field'', which
+  is exactly the content of \texttt{TrProjCtor} (\ref{struct:trprojctor}). It is master's
+  \texttt{sorry}, and it was not attempted on \texttt{trproj} even though the branch built the
+  \texttt{TrProj} metatheory the step needs.
+\end{proof}
+
+\begin{lemma}[Soundness of \texttt{reduceProj}]
+  \label{thm:vtc-reduceproj}
+  \lean{Lean4Lean.TypeChecker.Inner.reduceProj.WF}
+  \leanok
+  \uses{thm:vtc-reduceprojcore}
+  \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{147}
+  \texttt{reduceProj i e cheapProj} first normalises the projected subterm, with
+  \texttt{whnfCore} when \texttt{cheapProj} is set and \texttt{whnf} otherwise, and then applies
+  \texttt{reduceProjCore}; whatever it returns is \texttt{FVarsBelow (.proj n i e)} and
+  translates to the same model term.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-methods-iface, family:trexpr-builders}
+  \leanok
+  Invert the translation of the projection, reduce the subterm with \texttt{whnfCore.WF} or
+  \texttt{whnf.WF}, transport the \texttt{TrProj} derivation along the resulting defeq with
+  \texttt{TrExpr.proj}, and apply \ref{thm:vtc-reduceprojcore}. The result is therefore proved
+  only modulo that open lemma.
+  \axfoot{sorryAx via reduceProjCore.WF (Verify/TypeChecker/Reduce.lean:143)}
+\end{proof}
+
+\section{Weak head normalisation}
+
+\begin{theorem}[The kernel's $\iota$ step agrees with the registered $\iota$ rule]
+  \label{thm:vtc-iota-reduce-core}
+  \lean{Lean4Lean.TypeChecker.Inner.inductiveReduceRecCore.WF}
+  \leanok
+  \contrib{iota}
+  \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17}
+  \uses{def:kernel-iota-core, ind:trexprs, def:isfvarupset}
+  Let \texttt{recName} resolve to a recursor with value \texttt{rval}, let \texttt{rule} be the
+  rule \texttt{rval.rules} carries for \texttt{ctorName}, and let \texttt{ctorName} resolve to a
+  constructor with value \texttt{cval}. Assume the recursor spine
+  \texttt{mkAppList (.const recName ls) as} translates to \texttt{e'}; that the argument at
+  index \texttt{rval.getMajorIdx} is \emph{literally} the constructor application
+  \texttt{mkAppList (.const ctorName cls) cargs}; and that this application is exactly
+  saturated, $|\mathtt{cargs}| = \mathtt{cval.numParams} + \mathtt{rule.nfields}$. If
+  \texttt{inductiveReduceRecCore} returns \texttt{some e1} on that redex, then \texttt{e1} is
+  \texttt{FVarsBelow} the redex and \texttt{TrExpr}-translates to the same \texttt{e'}.
+  \thesisref{axioms.tex, \S The computation rule ($\iota$ reduction, \texttt{sec:iota}): $\mathrm{rec}_P\,C\,e\,p[b]\,(c\,b) \rightsquigarrow e_c\,b\,v$}
+\end{theorem}
+\begin{proof}
+  \uses{thm:trexprs-mkapplist-inv, thm:pattern-matches-varn-const, thm:tr-env-iota-rec, thm:pattern-iota-rhs-apply, def:pattern-iota-rhs, thm:tr-expr-mk-app-list, family:trexprs-uninstantiate, family:expr-spine, thm:trexprs-instl, thm:trexprs-weakfv}
+  \leanok
+  Slice \texttt{as} as \texttt{p1 ++ idx ++ major :: post} with
+  $|\mathtt{p1}| = \mathtt{rval.getFirstIndexIdx}$ and
+  $|\mathtt{idx}| = \mathtt{rval.numIndices}$, and \texttt{cargs} as \texttt{cpar ++ cfld} with
+  $|\mathtt{cpar}| = \mathtt{cval.numParams}$ and $|\mathtt{cfld}| = \mathtt{rule.nfields}$.
+  Rewrite the three \texttt{mkAppRange} calls of the kernel function into \texttt{mkAppList}
+  with \texttt{Expr.mkAppRange\_eq}, which identifies the reduct as the rule's right-hand side,
+  level-instantiated, applied to \texttt{p1}, then \texttt{cfld}, then \texttt{post}. Invert
+  the redex's translation along the same slices with \texttt{TrExprS.mkAppList\_inv}, match
+  both constant spines against the $\iota$ pattern with
+  \texttt{Pattern.matches\_varN\_const}, and obtain the model equation from
+  \texttt{TrEnv.iota\_rec}. \texttt{SimplePattern.iotaRHS'\_apply} together with
+  \texttt{List.take\_left'} and \texttt{List.drop\_left'} identifies the pattern's reduct with
+  the kernel's slicing; transporting the rule template with \texttt{TrExprS.instL} and
+  \texttt{weakFV} and rebuilding with \texttt{TrExpr.mkAppList} and
+  \texttt{TrExpr.rebuild\_mkAppList} gives the translation, and \texttt{FVarsIn.mkAppList}
+  gives the \texttt{FVarsBelow} half.
+  \axfoot{sorryAx via TrExprS.instL -> TrExpr.proj -> TrProj.uniq (Verify/Typing/Lemmas.lean:995)}
+  \reviewnote{The proof script itself is complete and free of \texttt{sorry}, but four things
+  qualify the result: it has no consumer (\ref{thm:vtc-reducerecursor} is still open); the
+  hypothesis on the major premise is stronger than the kernel's call site, which passes a
+  \texttt{major} obtained by K-conversion, \texttt{whnf}, literal conversion and structure eta;
+  the saturation hypothesis is a second deferred obligation, proved nowhere in the repository
+  and genuinely excluding over-applied constructor applications; and the lemma is not
+  unconditional, since \texttt{\#print axioms} reports \texttt{sorryAx}. See the review notes.}
+\end{proof}
+
+\begin{theorem}[Soundness of recursor reduction (open)]
+  \label{thm:vtc-reducerecursor}
+  \lean{Lean4Lean.TypeChecker.Inner.reduceRecursor.WF}
+  \leanok
+  \uses{def:kernel-inductive-reduce-rec, def:kernel-quot-reduce-rec, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{147}
+  Whatever \texttt{reduceRecursor e} returns is \texttt{FVarsBelow e} and translates to the same
+  model term as \texttt{e}. This one statement subsumes quotient \texttt{lift}/\texttt{ind}
+  reduction, K-like reduction for subsingleton eliminators, literal-to-constructor conversion
+  for \texttt{Nat} and \texttt{String}, structure-eta expansion of the major premise, and the
+  plain $\iota$ step.
+  \thesisref{axioms.tex, \texttt{sec:iota} ($\iota$ and K-like reduction) and \S Quotient types}
+\end{theorem}
+\begin{proof}
+  \textbf{Not proved in Lean.} The declaration is \texttt{:= sorry}. This is the consumer
+  \ref{thm:vtc-iota-reduce-core} was written for. Closing it needs, besides the quotient and
+  K-like cases (the latter is not modelled at all, \texttt{VRecursor.k} being recorded and
+  unused), a bridging step that rebuilds the recursor spine with the \emph{reduced} major
+  premise and transports the translation across the resulting \texttt{IsDefEqU}, so that
+  \ref{thm:vtc-iota-reduce-core}'s syntactic hypothesis becomes applicable.
+\end{proof}
+
+\begin{lemma}[Soundness of free-variable ($\zeta$) unfolding]
+  \label{thm:vtc-whnffvar}
+  \lean{Lean4Lean.TypeChecker.Inner.whnfFVar.WF}
+  \leanok
+  \uses{ind:trlctx}
+  \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{151}
+  If \texttt{.fvar fv} translates to \texttt{e'}, then \texttt{whnfFVar}, which unfolds a
+  \texttt{let}-bound free variable to the \texttt{whnfCore} of its value and leaves a
+  lambda-bound one alone, returns a term that is \texttt{FVarsBelow (.fvar fv)} and translates
+  to \texttt{e'}.
+  \thesisref{axioms.tex, \S let binders ($\zeta$ reduction)}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-methods-iface, thm:trexprs-uniq}
+  \leanok
+  Look the declaration up through \texttt{TrLCtx.find?\_of\_mem} to get the recorded
+  translation of its value, run \texttt{whnfCore.WF} on it, and identify the two translations of
+  the variable with \texttt{TrExprS.uniq}.
+  \axfoot{sorryAx via TrExprS.uniq -> TrProj.uniq}
+\end{proof}
+
+\begin{theorem}[Soundness of \texttt{whnfCore}]
+  \label{thm:vtc-whnfcore}
+  \lean{Lean4Lean.TypeChecker.Inner.whnfCore'.WF}
+  \leanok
+  \uses{def:vtc-vstate-wf, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{166}
+  \texttt{whnfCore' e cheapProj} returns a term that is \texttt{FVarsBelow e} and translates to
+  the same model term as \texttt{e}. It strips \texttt{mdata}, unfolds free variables, beta
+  reduces an application spine against a lambda head, applies recursor and projection
+  reduction and zeta-expands \texttt{let}, and it maintains the \texttt{whnfCore} memo cache.
+  \thesisref{axioms.tex, the $\beta$ and $\zeta$ rules and the head reduction $e \rightsquigarrow^{*} k$}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-whnffvar, thm:vtc-reducerecursor, thm:vtc-reduceproj, thm:vtc-methods-iface, ind:betareduce, ind:appstack, family:trexprs-uninstantiate}
+  \leanok
+  Structural case analysis on \texttt{e}. The application case builds an \texttt{AppStack},
+  runs an inner loop counting the lambdas peeled, and closes with
+  \texttt{BetaReduce.inst\_reduce} and \texttt{TrExpr.rebuild\_mkAppRevList}; a local
+  \texttt{hsave} lemma re-establishes \texttt{WHNFCache.WF} when the result is inserted into
+  the cache, and a cache hit is discharged by the \texttt{ConditionallyWHNF} entry plus
+  \texttt{TrExprS.uniq}. It depends on the open \ref{thm:vtc-reducerecursor} and, through
+  \ref{thm:vtc-reduceproj}, on \ref{thm:vtc-reduceprojcore}.
+  \axfoot{sorryAx via reduceRecursor.WF, reduceProjCore.WF and TrProj.uniq}
+\end{proof}
+
+\begin{theorem}[Soundness of \texttt{whnf}]
+  \label{thm:vtc-whnf}
+  \lean{Lean4Lean.TypeChecker.Inner.whnf'.WF}
+  \leanok
+  \uses{def:vtc-vstate-wf, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{269}
+  \texttt{whnf' e} returns a term that is \texttt{FVarsBelow e} and translates to the same model
+  term as \texttt{e}: the fuel-bounded loop alternating \texttt{whnfCore'},
+  \texttt{reduceNative}, \texttt{reduceNat} and \texttt{unfoldDefinition}, with its own memo
+  cache.
+  \thesisref{axioms.tex, $e \rightsquigarrow^{*} k$; typesys.tex, \texttt{item:red\_equiv}}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-whnfcore, thm:vtc-reducenative, thm:vtc-reducenat, thm:vtc-unfolddefinition}
+  \leanok
+  Induction on the fuel. Each round chains \ref{thm:vtc-whnfcore}, then
+  \ref{thm:vtc-reducenative} (whose \texttt{some} branch is impossible), then
+  \ref{thm:vtc-reducenat}, then \ref{thm:vtc-unfolddefinition}, composing the
+  \texttt{FVarsBelow} and \texttt{IsDefEqU} facts as it goes; the final cache insertion is
+  justified as in \ref{thm:vtc-whnfcore}.
+  \axfoot{sorryAx via whnfCore'.WF}
+\end{proof}
+
+\section{Type inference}
+
+\begin{lemma}[Soundness of \texttt{ensureForallCore}]
+  \label{thm:vtc-ensureforallcore}
+  \lean{Lean4Lean.TypeChecker.Inner.ensureForallCore.WF, Lean4Lean.TypeChecker.Inner.ensureForallCore.WF'}
+  \leanok
+  \uses{def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{10}
+  \texttt{ensureForallCore e e0} either throws or returns a term that is \texttt{FVarsBelow e},
+  translates to the same model term as \texttt{e}, and is syntactically a \texttt{.forallE}.
+  The primed version takes a \texttt{TrExpr} rather than a \texttt{TrExprS} hypothesis.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-whnf, thm:vtc-methods-iface}
+  \leanok
+  If \texttt{e} is already a pi type, return it; otherwise \texttt{whnf.WF} and a case split on
+  the result, throwing in the remaining branches.
+  \axfoot{sorryAx via whnf.WF}
+\end{proof}
+
+\begin{lemma}[Type inference for atoms]
+  \label{thm:vtc-infer-atoms}
+  \lean{Lean4Lean.TypeChecker.Inner.checkLevel.WF, Lean4Lean.TypeChecker.Inner.inferFVar.WF, Lean4Lean.TypeChecker.Inner.envGet.WF, Lean4Lean.TypeChecker.Inner.inferConstant.WF}
+  \leanok
+  \uses{def:vlevel-oflevel, ind:trlctx, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{28}
+  \texttt{checkLevel} on a metavariable-free level produces a model level
+  (\texttt{VLevel.ofLevel}); \texttt{inferFVar} looks a free variable up in the local context
+  and returns a \texttt{TrTyping}; \texttt{Environment.get} returns exactly what \texttt{find?}
+  says; and \texttt{inferConstant} returns the constant's type instantiated at the given
+  levels together with a \texttt{TrTyping}, provided all levels are metavariable-free, their
+  number matches \texttt{numLevelParams}, and the safety discipline is respected.
+  \thesisref{axioms.tex, \S universe levels; typesys.tex, the variable and constant rules}
+\end{lemma}
+\begin{proof}
+  \uses{family:tr-env-find, thm:trexprs-instl, thm:trexprs-weakfv}
+  \leanok
+  \texttt{inferConstant.WF} folds \texttt{checkLevel.WF} over the level list to get a
+  \texttt{Forall2} of level translations, then uses \texttt{TrEnv.find?\_uniq} and
+  \texttt{TrExprS.instL} followed by \texttt{weakFV} to move the constant's closed model type
+  into the local context.
+  \axfoot{sorryAx inherited through TrExprS.instL -> TrProj.uniq}
+\end{proof}
+
+\begin{lemma}[Soundness of lambda type inference]
+  \label{thm:vtc-inferlambda}
+  \lean{Lean4Lean.TypeChecker.Inner.inferLambda.loop.WF, Lean4Lean.TypeChecker.Inner.inferLambda.WF}
+  \leanok
+  \uses{def:vtc-mkbinders, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{95}
+  \texttt{inferLambda e inferOnly} peels all leading lambda binders into the \texttt{MLCtx} at
+  once, infers the body's type and re-abstracts it with \texttt{mkForall}, returning a type
+  \texttt{ty} with $\exists\, e'\, ty'$, \texttt{TrTyping e ty e' ty'}. The loop invariant
+  carries the partially built \texttt{MLCtx}, the substitution of fresh free variables for the
+  bound ones, an \texttt{AllAbove} free-variable bound and the \texttt{mkLambda} shape of the
+  original term.
+  \thesisref{axioms.tex and typesys.tex, the lambda and pi rules}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-withlocaldecl, thm:vtc-mkbinder-tr, thm:vtc-methods-iface, thm:vtc-ensuresortcore}
+  \leanok
+  Induction along the binder telescope, introducing each binder with
+  \texttt{RecM.WF.withLocalDecl} and re-abstracting with \texttt{MLCtx.WF.mkLambda\_trS} and
+  \texttt{mkForall\_trS}; the domain's type is obtained from \texttt{checkType.WF} and its sort
+  from \texttt{ensureSortCore.WF} (\ref{thm:vtc-ensuresortcore}), not from an \texttt{ensureType}
+  call.
+  \axfoot{sorryAx via checkType.WF and ensureSortCore.WF}
+\end{proof}
+
+\begin{lemma}[Soundness of pi-type inference]
+  \label{thm:vtc-inferforall}
+  \lean{Lean4Lean.TypeChecker.Inner.inferForall.loop.WF, Lean4Lean.TypeChecker.Inner.inferForall.WF}
+  \leanok
+  \uses{def:vtc-mkbinders, def:vlevel-oflevel}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{178}
+  \texttt{inferForall e inferOnly} peels the binders, checks each domain is a sort, and returns
+  \texttt{.sort} of the accumulated \texttt{imax}; the conclusion is
+  $\exists\, e'\, u$, \texttt{TrTyping e ty e' (.sort u)}, so the inferred type is known to be a
+  sort on the model side too.
+  \thesisref{axioms.tex, $\forall x{:}\alpha.\,\beta : \mathcal{U}_{\mathrm{imax}(\ell_1,\ell_2)}$}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-withlocaldecl, thm:vtc-mkbinder-tr, thm:vtc-ensuresortcore, thm:vtc-methods-iface}
+  \leanok
+  As for \ref{thm:vtc-inferlambda}, with the accumulated list of level translations threaded
+  through the loop and \texttt{VLevel.imax} congruence applied at each step;
+  \ref{thm:vtc-ensuresortcore} supplies the sort of each domain.
+  \axfoot{sorryAx via the recursive inferType interface}
+\end{proof}
+
+\begin{lemma}[Soundness of application-spine type inference]
+  \label{thm:vtc-inferapp}
+  \lean{Lean4Lean.TypeChecker.Inner.inferApp.loop.WF, Lean4Lean.TypeChecker.Inner.inferApp.WF}
+  \leanok
+  \uses{ind:appstack, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{236}
+  \texttt{inferApp e} is the \texttt{inferOnly} path: it infers the head's type once and
+  instantiates the pi telescope with the arguments without re-checking them, concluding
+  $\exists\, ty'$, \texttt{TrTyping e ty e' ty'} for the caller's own translation \texttt{e'}.
+  The loop invariant is stated over a three-way split \texttt{ll ++ lm.reverse ++ lr} of the
+  argument array and says that the running instantiation of the head's type is correct.
+  \thesisref{typesys.tex, the application rule and Substitution (\texttt{thm:subst})}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-ensureforallcore, thm:vtc-methods-iface, thm:trexprs-uniq}
+  \leanok
+  Build an \texttt{AppStack} for the spine, infer the head's type, then induct on the argument
+  list: at each step \ref{thm:vtc-ensureforallcore} exposes a pi type, the argument is
+  instantiated into it, and the model side uses the \texttt{app} rule of \texttt{HasType}.
+  \texttt{TrExprS.uniq} finally replaces the internally produced translation by the caller's.
+  \axfoot{sorryAx via ensureForallCore.WF and TrExprS.uniq}
+\end{proof}
+
+\begin{lemma}[Soundness of \texttt{let} type inference]
+  \label{thm:vtc-inferlet}
+  \lean{Lean4Lean.TypeChecker.Inner.inferLet.loop.WF, Lean4Lean.TypeChecker.Inner.inferLet.WF}
+  \leanok
+  \uses{def:vtc-mkbinders, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{291}
+  \texttt{inferLet e inferOnly} pushes every leading \texttt{let} binder into the \texttt{MLCtx}
+  as a \texttt{vlet}, infers the body's type and re-abstracts with \texttt{mkLet} and
+  \texttt{mkForall}, returning a \texttt{TrTyping} for the original \texttt{let} expression.
+  \thesisref{axioms.tex, \S let binders ($\zeta$ reduction)}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-withlocaldecl, thm:vtc-mkbinder-tr, thm:eqvmgr-isdefeq-wf, thm:vtc-methods-iface, thm:vtc-ensuresortcore}
+  \leanok
+  As for \ref{thm:vtc-inferlambda}, using \texttt{RecM.WF.withLetDecl} and
+  \texttt{MLCtx.WF.mkLet\_trS} (the annotated type is checked with \texttt{checkType.WF} and
+  pinned to a sort with \texttt{ensureSortCore.WF}); outside \texttt{inferOnly} mode the value is
+  additionally checked against the annotated type with the memoising \texttt{isDefEq} wrapper. At
+  roughly ninety lines this is the longest single proof in the file, and it is entirely master's.
+  \axfoot{sorryAx via isDefEq.WF, checkType.WF and ensureSortCore.WF}
+\end{proof}
+
+\begin{theorem}[Projection type inference on the structures the model covers (open)]
+  \label{thm:vtc-inferproj-struct}
+  \lean{Lean4Lean.TypeChecker.Inner.inferProj.WF_struct}
+  \leanok
+  \contrib{trproj}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{392}
+  \uses{def:kernel-infer-proj, struct:trprojctor, def:trproj, def:isfvarupset}
+  Let \texttt{st} resolve to an inductive \texttt{ival} that is non-mutual
+  (\texttt{ival.all = [st]}), single-constructor (\texttt{ival.ctors = [ctorName]}),
+  non-indexed (\texttt{ival.numIndices = 0}) and non-recursive
+  (\texttt{ival.isRec = false}). If \texttt{e} translates to \texttt{e'}, the inferred type
+  \texttt{ety} of \texttt{e} translates to \texttt{ety'}, and \texttt{e'} has type
+  \texttt{ety'} in the model, then \texttt{inferProj st i e ety} returns a type \texttt{ty} for
+  which there exist a model term \texttt{e''} and a model type \texttt{ty'} with
+  \texttt{TrTyping (.proj st i e) ty e'' ty'}.
+  \thesisref{no direct counterpart: the thesis's term language has no projection node. The intended content is Wtypes.tex's $\pi_1,\pi_2$ typing rules specialised to a user-declared structure and realised through the recursor.}
+\end{theorem}
+\begin{proof}
+  \textbf{Not proved in Lean.} The declaration is \texttt{:= sorry}. What is missing is the
+  inhabitation of \texttt{TrProjCtor} (\ref{struct:trprojctor}) from the four kernel-side
+  metadata facts, which is what would give the \texttt{TrProj} derivation that
+  \texttt{TrExprS.proj} demands; the derivation is sketched in the module docstring of
+  \texttt{Theory/Proj.lean} and instances are built by hand in \texttt{Tests/ProjInhabit.lean}.
+  \axfoot{sorryAx: the declaration is itself \texttt{sorry} (census \S7.1)}
+  \reviewnote{The docstring advertises the lemma as \texttt{inferProj.WF} ``for the structures
+  the model covers (\texttt{TrProjCtor})'', but \texttt{TrProjCtor} does not occur in the
+  statement: the hypotheses are kernel-side metadata, and the implication from them to
+  \texttt{TrProjCtor} is precisely the unproved content. The census also records that nothing
+  in the project depends on this declaration, so as code it is dead.}
+\end{proof}
+
+\begin{theorem}[Projection type inference, general case (open, and documented as unprovable)]
+  \label{thm:vtc-inferproj}
+  \lean{Lean4Lean.TypeChecker.Inner.inferProj.WF}
+  \leanok
+  \contrib{mixed}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{407}
+  \uses{thm:vtc-inferproj-struct, def:trproj, ind:trexprs, def:kernel-infer-proj}
+  If \texttt{e} translates to \texttt{e'}, its inferred type \texttt{ety} translates to
+  \texttt{ety'}, and \texttt{e'} has type \texttt{ety'}, then \texttt{inferProj st i e ety}
+  returns a type \texttt{ty} for which there exist \texttt{e''} and \texttt{ty'} with
+  \texttt{TrTyping (.proj st i e) ty e'' ty'}. The \texttt{theorem} keyword line is master's;
+  the signature and the conclusion are \texttt{trproj}'s, as is the docstring.
+\end{theorem}
+\begin{proof}
+  \textbf{Not proved in Lean.} The declaration is \texttt{:= sorry}, and its docstring states
+  that it is not provable as stated: \texttt{TrExprS.proj} requires a \texttt{TrProj}
+  derivation, \texttt{TrProj} exists only for non-mutual, single-constructor, non-indexed,
+  non-recursive structures, while \texttt{inferProj} checks neither \texttt{isRec} nor
+  \texttt{all} and so accepts projections of reflexive, indexed and nested single-constructor
+  types (\texttt{Lean.Language.SnapshotTree.element} is one in core), which have no
+  \texttt{TrExprS} derivation at all. The docstring then lists what closing the gap would
+  require: a selector binding the inductive-hypothesis binders, a motive abstracting the
+  indices, extra motives and minors for a nested block, or a projection node in the model with
+  its own $\iota$ and $\eta$ rules.
+  \axfoot{sorryAx: the declaration is itself \texttt{sorry} (census \S7.1)}
+  \reviewnote{The \texttt{trproj} edit is a real fix. Master had
+  \texttt{hasty : c.HasType e' ty'} with \texttt{ty'} an auto-bound implicit unrelated to the
+  \texttt{ty'} of the conclusion, so the hypothesis said only that \texttt{e'} has some type,
+  and master's conclusion asserted \texttt{TrTyping (.proj st i e) ty e' ty'}, that is that the
+  \emph{projection} translates to \texttt{e'}, which is the translation of its \emph{subterm}.
+  The new signature is exactly what the caller supplies at
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{479} and the conclusion now
+  existentially quantifies the projection's own translation. But the lemma is on the import
+  path of \ref{thm:vtc-infertype-prime}, so the project's headline soundness statement now
+  visibly rests on a lemma its own documentation says is false for a class of terms the kernel
+  accepts. Alternatives such as weakening \ref{thm:vtc-infertype-prime}'s conclusion or adding
+  a scope hypothesis are not discussed.}
+\end{proof}
+
+\begin{lemma}[Typing of literals and sorts]
+  \label{thm:vtc-infer-literal-sort}
+  \lean{Lean4Lean.TypeChecker.Inner.literal_is_primitive, Lean4Lean.TypeChecker.Inner.infer_literal, Lean4Lean.TypeChecker.Inner.infer_sort}
+  \leanok
+  \uses{def:vt-containslits, def:vlevel-oflevel, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{412}
+  \texttt{Nat}, \texttt{Char.ofNat} and \texttt{String.ofList} belong to the primitive name set;
+  a literal \texttt{l} whose supporting constants are in the model environment satisfies
+  \texttt{TrTyping (.lit l) l.type (.trLiteral l) (.const l.typeName [])}; and a sort
+  \texttt{.sort u} with \texttt{VLevel.ofLevel lparams u = some u'} satisfies
+  \texttt{TrTyping (.sort u) (.sort u.succ) (.sort u') (.sort u'.succ)}.
+  \thesisref{axioms.tex, $\mathcal{U}_\ell : \mathcal{U}_{S\ell}$}
+\end{lemma}
+\begin{proof}
+  \uses{family:trexprs-literals}
+  \leanok
+  \texttt{TrExprS.trLiteral} gives the literal's translation and typing, and \texttt{const\_inv}
+  recovers the typing of the type constant from it; the primitive-set membership is by
+  \texttt{decide}, and the sort case is \texttt{VLevel.ofLevel} unfolded once.
+  \axfoot{sorryAx inherited through TrExprS.trLiteral}
+\end{proof}
+
+\begin{theorem}[Soundness of the type-inference entry point]
+  \label{thm:vtc-infertype-prime}
+  \lean{Lean4Lean.TypeChecker.Inner.inferType'.WF}
+  \leanok
+  \uses{def:isfvarupset, def:vtc-vstate-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{432}
+  If every free variable of \texttt{e} is in scope and, when \texttt{inferOnly} is set,
+  \texttt{e} already has a translation, then \texttt{inferType' e inferOnly} returns a type
+  \texttt{ty} for which there exist \texttt{e'} and \texttt{ty'} with
+  \texttt{TrTyping e ty e' ty'}: the term translates, its inferred type translates, and the
+  model types the one at the other. The two inference memo caches are maintained soundly.
+  \thesisref{typesys.tex, \texttt{item:alg\_defn}; soundness.tex, the Corollary on the algorithmic typing judgment}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-infer-literal-sort, thm:vtc-inferproj, thm:vtc-infer-atoms, thm:vtc-inferlambda, thm:vtc-inferforall, thm:vtc-inferapp, thm:vtc-inferlet, thm:vtc-ensureforallcore, thm:eqvmgr-isdefeq-wf}
+  \leanok
+  A case analysis on the syntax of \texttt{e} dispatching to the per-constructor lemmas, with a
+  shared local lemma \texttt{hF} that re-establishes \texttt{InferCache.WF} when the inferred
+  type is inserted into whichever of the two caches \texttt{inferOnly} selects. The
+  application case splits: in \texttt{inferOnly} mode it calls \ref{thm:vtc-inferapp},
+  otherwise it re-checks each argument with \ref{thm:vtc-ensureforallcore} and
+  \texttt{isDefEq}.
+  \axfoot{sorryAx via inferProj.WF (itself \texttt{sorry}) and TrProj.uniq}
+  \reviewnote{This is the theorem the file exists for, and it is only partially proved: its
+  projection case is \ref{thm:vtc-inferproj}, which is not merely open but documented as
+  unprovable without extending the model. Since \texttt{checkType.WF}
+  (\ref{thm:vtc-toplevel}) carries no hypothesis that its input is translatable, the gap is
+  reached by every downstream \texttt{Verify/Environment} result.}
+\end{proof}
+
+\section{Algorithmic definitional equality}
+
+\begin{lemma}[Soundness of lambda congruence]
+  \label{thm:vtc-isdefeqlambda}
+  \lean{Lean4Lean.TypeChecker.Inner.isDefEqLambda.WF}
+  \leanok
+  \uses{def:vtc-recm-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{9}
+  \texttt{isDefEqLambda} peels matching lambda binders from both sides at once, accumulating a
+  substitution \texttt{subst} of fresh free variables and comparing the domains lazily. The
+  statement is relative to an \texttt{MLCtx} \texttt{m} and a list \texttt{fvs} with
+  \texttt{subst.toList.reverse = fvs}: if the two instantiated bodies translate, then a
+  \texttt{true} result implies \texttt{IsDefEqU} of the two translations.
+  \thesisref{axioms.tex, the congruence rule for $\lambda$}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-withlocaldecl, thm:vtc-mkbinder-tr, thm:eqvmgr-isdefeq-wf, def:isdefeq}
+  \leanok
+  Induction along the binder telescope with \texttt{RecM.WF.withLocalDecl}; the domains are
+  compared by the memoising \texttt{isDefEq}, the bodies recursively, and the result is
+  re-abstracted with \texttt{MLCtx.WF.mkLambda'\_congr} on top of the \texttt{lamDF}
+  congruence rule.
+  \axfoot{sorryAx via isDefEq.WF}
+\end{proof}
+
+\begin{lemma}[Soundness of pi congruence]
+  \label{thm:vtc-isdefeqforall}
+  \lean{Lean4Lean.TypeChecker.Inner.isDefEqForall.WF}
+  \leanok
+  \uses{def:vtc-recm-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{79}
+  The same statement for \texttt{forallE} binders, concluding \texttt{IsDefEqU} of the two
+  model pi types.
+  \thesisref{axioms.tex, the congruence rule for $\forall$}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-isdefeqlambda, thm:vtc-withlocaldecl, def:isdefeq}
+  \leanok
+  Identical in shape to \ref{thm:vtc-isdefeqlambda}, with \texttt{forallEDF} and
+  \texttt{mkForall'\_congr} in place of the lambda versions.
+  \axfoot{sorryAx via isDefEq.WF}
+\end{proof}
+
+\begin{lemma}[Soundness of the fast structural check]
+  \label{thm:vtc-quickisdefeq}
+  \lean{Lean4Lean.TypeChecker.Inner.quickIsDefEq.WF}
+  \leanok
+  \uses{def:kernel-equiv-manager, def:vtc-vstate-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{149}
+  The union-find-backed structural test followed by the syntactic cases (lambda, forall, sort
+  compared by \texttt{Level.isEquiv}, mdata, literal) returns \texttt{.true} only when the two
+  model terms are definitionally equal, and the update it makes to the union-find preserves the
+  state invariant.
+  \thesisref{axioms.tex, \S Definitional equality, the congruence fragment of $\Leftrightarrow$}
+\end{lemma}
+\begin{proof}
+  \uses{thm:eqvmgr-isequiv-wf, thm:vtc-isdefeqlambda, thm:vtc-isdefeqforall, fam:weakening-iff, thm:lvl-isequiv-prime-wf}
+  \leanok
+  Unfold the \texttt{modifyGet} on the equivalence manager, apply
+  \texttt{EquivManager.isEquiv.WF} at the lifted context recorded in the state invariant, and
+  transport back with \texttt{IsDefEqU.weak'\_iff}; the syntactic cases are then dispatched
+  individually.
+  \axfoot{sorryAx via isDefEq.WF in the lambda and forall cases}
+\end{proof}
+
+\begin{lemma}[Soundness of pointwise argument comparison]
+  \label{thm:vtc-isdefeqargs}
+  \lean{Lean4Lean.TypeChecker.Inner.isDefEqArgs.WF}
+  \leanok
+  \uses{def:vtc-recm-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{182}
+  Given that the two application spines have translating, definitionally equal heads, if
+  \texttt{isDefEqArgs} succeeds pointwise on the arguments then the two spines are
+  definitionally equal. The head hypothesis is stated over \texttt{getAppFn}, so the base case
+  is closed by uniqueness of translation rather than by a syntactic match.
+  \thesisref{axioms.tex, the congruence rule for application}
+\end{lemma}
+\begin{proof}
+  \uses{thm:eqvmgr-isdefeq-wf, def:isdefeq, thm:trexprs-uniq}
+  \leanok
+  Induction on the spine, combining \texttt{isDefEq} on each argument with the \texttt{appDF}
+  congruence; at the head, \texttt{TrExprS.uniq} identifies the two translations with the ones
+  in the hypothesis.
+  \axfoot{sorryAx via isDefEq.WF and TrExprS.uniq}
+\end{proof}
+
+\begin{lemma}[Soundness of $\eta$ expansion]
+  \label{thm:vtc-tryetaexpansion}
+  \lean{Lean4Lean.TypeChecker.Inner.tryEtaExpansionCore.WF, Lean4Lean.TypeChecker.Inner.tryEtaExpansion.WF}
+  \leanok
+  \uses{def:vtc-recm-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{202}
+  If the first side is a lambda, comparing it against the $\eta$-expansion
+  $\lambda x.\, e_2\, x$ of the second soundly implies definitional equality of the two
+  translations; \texttt{tryEtaExpansion} is the symmetric wrapper that tries both orders.
+  \thesisref{axioms.tex, the $(\eta)$ rule; soundness.tex, the \texttt{Eta} case}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-methods-iface, thm:vtc-whnf, def:isdefeq, thm:eqvmgr-isdefeq-wf}
+  \leanok
+  Infer and \texttt{whnf} the type of the second side to expose a pi type, build the model term
+  for the expansion by weakening its typing, and compose the recursive \texttt{isDefEq} result
+  with the \texttt{eta} rule of \texttt{IsDefEq}.
+  \axfoot{sorryAx via inferType.WF and whnf.WF}
+  \reviewnote{Line 211 carries a commented-out \texttt{have}; dead text left in master.}
+\end{proof}
+
+\begin{lemma}[Soundness of structure $\eta$ (open)]
+  \label{thm:vtc-tryetastruct}
+  \lean{Lean4Lean.TypeChecker.Inner.tryEtaStructCore.WF, Lean4Lean.TypeChecker.Inner.tryEtaStruct.WF}
+  \leanok
+  \uses{def:trproj, struct:trprojctor}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{225}
+  If one side reduces to a constructor application of a structure and the other is a value of
+  that structure, comparing field by field against the projections soundly implies definitional
+  equality; \texttt{tryEtaStruct} is the symmetric wrapper.
+  \thesisref{soundness.tex, the $\Sigma$ eta case; note that the thesis adds $\Sigma$-$\eta$ while admitting Lean does not have it}
+\end{lemma}
+\begin{proof}
+  \textbf{Not proved in Lean.} \texttt{tryEtaStructCore.WF} is \texttt{:= sorry} at line 227;
+  the symmetric wrapper is proved modulo it. The missing content is exactly the shape of
+  \texttt{TrProjCtor}'s \texttt{eq} field, and the model has no structure-$\eta$ rule of its
+  own, so this cannot be closed without extending \texttt{IsDefEq}. The \texttt{trproj} branch
+  did not attempt it despite building the surrounding \texttt{TrProj} metatheory.
+\end{proof}
+
+\begin{lemma}[Soundness of head-plus-arguments comparison]
+  \label{thm:vtc-isdefeqapp}
+  \lean{Lean4Lean.TypeChecker.Inner.isDefEqApp.WF}
+  \leanok
+  \uses{ind:appstack}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{237}
+  If both sides are application spines with the same number of arguments, \texttt{isDefEqApp}
+  compares the heads and then the arguments, and on success yields definitional equality of the
+  two translations.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-isdefeqargs, thm:eqvmgr-isdefeq-wf}
+  \leanok
+  \texttt{AppStack.build} on both sides, \texttt{isDefEq} on the heads, then an inner
+  \texttt{loop.WF} that walks the two argument arrays in step and ends in
+  \ref{thm:vtc-isdefeqargs}.
+  \axfoot{sorryAx via isDefEq.WF}
+\end{proof}
+
+\begin{theorem}[Soundness of proof irrelevance]
+  \label{thm:vtc-proofirrel}
+  \lean{Lean4Lean.TypeChecker.Inner.getSortLevel.WF, Lean4Lean.TypeChecker.Inner.isProp.WF, Lean4Lean.TypeChecker.Inner.isDefEqProofIrrel.WF}
+  \leanok
+  \uses{def:vlevel-oflevel, def:hastype-istype}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{282}
+  \texttt{getSortLevel e} returns a level \texttt{l} with a model interpretation \texttt{u'}
+  such that \texttt{e'} has type \texttt{.sort u'}; \texttt{isProp e} returning \texttt{true}
+  gives \texttt{e'} type \texttt{.sort .zero}; and if both sides are proofs of definitionally
+  equal propositions then \texttt{isDefEqProofIrrel} soundly reports them equal.
+  \thesisref{axioms.tex, proof irrelevance; soundness.tex, the \texttt{Proof irrelevance} case}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-methods-iface, thm:vtc-ensuresortcore, def:isdefeq, thm:eqvmgr-isdefeq-wf}
+  \leanok
+  \texttt{getSortLevel} is \texttt{inferType} followed by \ref{thm:vtc-ensuresortcore};
+  \texttt{isProp} additionally uses \texttt{ofLevel\_isAlwaysZero} to see that the level is
+  \texttt{zero} in the model. The irrelevance step applies the \texttt{proofIrrel} rule to the
+  two typings after transporting one along the recursive \texttt{isDefEq} result.
+  \axfoot{sorryAx via inferType.WF and isDefEq.WF}
+\end{proof}
+
+\begin{definition}[Invariant of the lazy-delta reduction status]
+  \label{def:vtc-reductionstatus-wf}
+  \lean{Lean4Lean.TypeChecker.ReductionStatus.WF, Lean4Lean.TypeChecker.ReductionStatus.WF.bool, Lean4Lean.TypeChecker.ReductionStatus.WF.defeq, Lean4Lean.TypeChecker.Inner.cacheFailure.WF, Lean4Lean.TypeChecker.Inner.tryUnfoldProjApp.WF}
+  \leanok
+  \uses{def:vtc-vcontext}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{309}
+  \texttt{ReductionStatus.WF c e1' e2' allowContinue r} says what each outcome of a lazy-delta
+  step guarantees: \texttt{.true} means the two model terms are definitionally equal, while
+  \texttt{.continue}, \texttt{.unknown} and \texttt{.false} all mean that the two terms carried
+  in the status still translate to the original model terms, with \texttt{.continue}
+  additionally requiring that the caller allows another round. \texttt{WF.defeq} transports the
+  invariant along model-level equalities. \texttt{cacheFailure.WF} records that caching a
+  failure preserves the state invariant and \texttt{tryUnfoldProjApp.WF} that the
+  projection-application fast path is sound.
+\end{definition}
+
+\begin{lemma}[Soundness of one lazy-delta step]
+  \label{thm:vtc-lazydeltastep}
+  \lean{Lean4Lean.TypeChecker.Inner.lazyDeltaReductionStep.WF}
+  \leanok
+  \uses{def:vtc-reductionstatus-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{346}
+  One step of the height-ordered delta-unfolding heuristic, which unfolds the side with the
+  larger definition height or both when the heights are equal, with a special case for a
+  projection applied to a spine, returns a \texttt{ReductionStatus} satisfying its invariant at
+  \texttt{allowContinue := true}.
+  \thesisref{axioms.tex, the $\delta$ rule}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-unfolddefinition, thm:vtc-whnfcore}
+  \leanok
+  A local \texttt{delta} lemma packages \ref{thm:vtc-unfolddefinition} followed by
+  \ref{thm:vtc-whnfcore}; the remaining branches are \texttt{split}s over the height comparison
+  and over the \texttt{tryUnfoldProjApp} fast path.
+  \axfoot{sorryAx via whnfCore'.WF}
+\end{proof}
+
+\begin{lemma}[Soundness of the \texttt{Nat} successor-offset shortcut]
+  \label{thm:vtc-isdefeqoffset}
+  \lean{Lean4Lean.TypeChecker.Inner.isNatZero_wf, Lean4Lean.TypeChecker.Inner.isNatSuccOf?_wf, Lean4Lean.TypeChecker.Inner.isDefEqOffset.WF}
+  \leanok
+  \uses{ind:primspec}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{403}
+  The recognisers are faithful on the model side: \texttt{isNatZero e} forces the translation of
+  \texttt{e} to be \texttt{natZero}, and \texttt{isNatSuccOf? e = some e1} forces it to be
+  \texttt{natSucc} applied to the translation of \texttt{e1}. Stripping a common successor
+  before recursing is therefore sound.
+\end{lemma}
+\begin{proof}
+  \uses{family:trexprs-literals, def:trexprs-isunique, def:isdefeq, thm:vtc-methods-iface}
+  \leanok
+  Both recognisers build the canonical numeral translation and close with
+  \texttt{TrExprS.unique}; the shortcut then rebuilds the successor application with the
+  \texttt{appDF} congruence after the recursive \texttt{isDefEqCore} call.
+  \axfoot{sorryAx via TrExprS.unique and isDefEqCore.WF}
+\end{proof}
+
+\begin{lemma}[Soundness of the lazy-delta loop]
+  \label{thm:vtc-lazydeltaloop}
+  \lean{Lean4Lean.TypeChecker.Inner.lazyDeltaReduction.loop.WF}
+  \leanok
+  \uses{def:vtc-reductionstatus-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{439}
+  The fuel-bounded loop alternating the \texttt{Nat} offset shortcut, \texttt{reduceNat},
+  \texttt{reduceNative} and one lazy-delta step returns a \texttt{ReductionStatus} satisfying
+  its invariant with respect to the original two model terms, now at
+  \texttt{allowContinue := false}.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-lazydeltastep, thm:vtc-isdefeqoffset, thm:vtc-reducenat, thm:vtc-reducenative}
+  \leanok
+  Induction on the fuel; exhausted fuel throws, and each \texttt{.continue} result is
+  transported to the original terms through \texttt{ReductionStatus.WF.defeq} with the
+  \texttt{IsDefEqU} facts accumulated so far.
+  \axfoot{sorryAx via lazyDeltaReductionStep.WF}
+\end{proof}
+
+\begin{lemma}[Soundness of string-literal expansion]
+  \label{thm:vtc-trystringlit}
+  \lean{Lean4Lean.TypeChecker.Inner.tryStringLitExpansionCore.WF, Lean4Lean.TypeChecker.Inner.tryStringLitExpansion.WF}
+  \leanok
+  \uses{ind:trexprs}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{472}
+  Expanding a string literal into \texttt{String.mk} applied to the list of its characters
+  before comparing is sound, because the literal's translation is by definition that of its
+  expansion; the wrapper tries both orders.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-methods-iface}
+  \leanok
+  Inversion on the \texttt{TrExprS.lit} constructor hands back the translation of the expansion
+  directly, and the comparison is then the recursive \texttt{isDefEqCore}. This is one of the
+  few results in the group whose axiom footprint is free of \texttt{sorryAx}.
+\end{proof}
+
+\begin{lemma}[Soundness of unit-like structure comparison (open)]
+  \label{thm:vtc-isdefequnitlike}
+  \lean{Lean4Lean.TypeChecker.Inner.isDefEqUnitLike.WF}
+  \leanok
+  \uses{ind:trexprs}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{486}
+  If the two sides translate and \texttt{isDefEqUnitLike} returns \texttt{.true}, which happens
+  when their common type is non-recursive, non-indexed, has exactly one constructor, and that
+  constructor takes no fields at all (\texttt{numFields = 0}, not merely no non-proof fields),
+  then the two model terms are definitionally equal.
+  \thesisref{axioms.tex, \S Large elimination, subsingleton inductives}
+\end{lemma}
+\begin{proof}
+  \textbf{Not proved in Lean.} The declaration is \texttt{:= sorry}. The model has no rule
+  equating two elements of a subsingleton structure, so as with \ref{thm:vtc-tryetastruct} this
+  needs an extension of \texttt{IsDefEq} and not merely an argument.
+\end{proof}
+
+\begin{lemma}[Soundness of projection-headed lazy delta reduction]
+  \label{thm:vtc-lazydeltaproj}
+  \lean{Lean4Lean.TypeChecker.Inner.lazyDeltaProjReduction.finish.WF, Lean4Lean.TypeChecker.Inner.lazyDeltaProjReduction.loop.WF}
+  \leanok
+  \uses{def:trproj}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{490}
+  When both sides are projections at the same index, the loop delta-reduces the two projected
+  subterms and finally either compares the reduced projections or falls back to comparing the
+  subterms; success implies definitional equality of the two model projections.
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-reduceprojcore, thm:vtc-lazydeltastep, thm:trproj-defeqdfc, thm:trproj-uniq}
+  \leanok
+  Induction on the fuel. At each round \ref{thm:vtc-lazydeltastep} reduces the subterms and
+  \texttt{TrProj.defeqDFC} moves the projection derivation along the resulting equality;
+  \texttt{TrProj.uniq}, reached through \texttt{TrExprS.uniq}, identifies the two model
+  projections at the end. \texttt{finish.WF} uses \ref{thm:vtc-reduceprojcore}, which is open.
+  \axfoot{sorryAx via reduceProjCore.WF and TrProj.uniq (Verify/Typing/Lemmas.lean:995)}
+\end{proof}
+
+\begin{theorem}[Soundness of the algorithmic definitional-equality checker]
+  \label{thm:vtc-isdefeqcore}
+  \lean{Lean4Lean.TypeChecker.Inner.isDefEqCore'.WF}
+  \leanok
+  \uses{ind:trexprs, def:isdefeq}
+  \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{528}
+  If \texttt{e1} and \texttt{e2} translate to $e_1'$ and $e_2'$ and
+  \texttt{isDefEqCore' e1 e2} returns \texttt{true}, then $e_1'$ and $e_2'$ are definitionally
+  equal in the model. This is the mechanised form of ``algorithmic equality implies
+  definitional equality''; the converse is false, and the thesis stresses that the algorithmic
+  relation is not even transitive.
+  \thesisref{typesys.tex, \texttt{item:alg\_defn}: if $\Gamma \vdash e \Leftrightarrow e'$ and both are typed then $\Gamma \vdash e \equiv e'$}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-quickisdefeq, thm:vtc-whnfcore, thm:vtc-methods-iface, thm:vtc-proofirrel, thm:vtc-lazydeltaloop, thm:vtc-isdefeqapp, thm:vtc-tryetaexpansion, thm:vtc-tryetastruct, thm:vtc-trystringlit, thm:vtc-isdefequnitlike, thm:vtc-lazydeltaproj}
+  \leanok
+  A long sequence of stages, each discharged by its own lemma: the fast structural check, the
+  \texttt{Bool} literal shortcut, \texttt{whnfCore} on both sides, proof irrelevance, the
+  lazy-delta loop, comparison of constant, free-variable and projection heads, then
+  \texttt{isDefEqApp}, $\eta$ expansion, structure $\eta$, string-literal expansion and the
+  unit-like case. The running \texttt{IsDefEqU} facts are composed with \texttt{trans} and
+  \texttt{symm} at every stage. It is partial because of \ref{thm:vtc-tryetastruct},
+  \ref{thm:vtc-isdefequnitlike} and, through \texttt{whnf}, \ref{thm:vtc-reducerecursor} and
+  \ref{thm:vtc-reduceprojcore}.
+  \axfoot{sorryAx via tryEtaStructCore.WF, isDefEqUnitLike.WF, reduceRecursor.WF, reduceProjCore.WF}
+\end{proof}
+
+\section{The top-level interface}
+
+\begin{definition}[Model environments at every safety level]
+  \label{def:vtc-venvs}
+  \lean{Lean4Lean.VEnvs, Lean4Lean.VEnvs.WF, Lean4Lean.VEnvs.axiom_of_choice}
+  \leanok
+  \uses{ind:tr-env, ind:primspec}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{10}
+  \texttt{VEnvs} bundles one \texttt{VEnv} per \texttt{DefinitionSafety}. \texttt{VEnvs.WF env
+  ves} says each is a translation of the kernel environment at that level, has the primitives,
+  agrees with the kernel on the safety and level-parameter list of primitive constants, and
+  that the family is antitone in safety. \texttt{VEnvs.axiom\_of\_choice} turns a pointwise
+  existential into such a bundle; despite the name it is a three-way case split, and its
+  docstring says so.
+  \reviewnote{A reader grepping the project for uses of choice will be misled by the name, even
+  though the docstring is explicit.}
+\end{definition}
+
+\begin{definition}[Model environment at a single safety level]
+  \label{def:vtc-venvat}
+  \lean{Lean4Lean.VEnvAt, Lean4Lean.VEnvs.WF.toVEnvAt}
+  \leanok
+  \uses{def:vtc-venvs}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{33}
+  \texttt{VEnvAt env safety venv} is the single-level fragment of \texttt{VEnvs.WF}, which is
+  all the type checker consumes, and \texttt{toVEnvAt} is the evident projection. The docstring
+  records why the weaker form is needed: while a \texttt{partial} mutual block is being checked
+  its members appear as axioms tagged \texttt{safe}, since an \texttt{AxiomVal} cannot be
+  tagged \texttt{partial}, and their types were only checked at \texttt{partial}, so no
+  \texttt{safe}-level model of that environment exists.
+\end{definition}
+
+\begin{theorem}[The fuel-indexed method table is sound]
+  \label{thm:vtc-withfuel}
+  \lean{Lean4Lean.TypeChecker.Methods.withFuel.WF, Lean4Lean.TypeChecker.RecM.WF.run}
+  \leanok
+  \uses{def:vtc-methods-wf, def:vtc-recm-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{48}
+  For every fuel \texttt{n}, \texttt{Methods.withFuel n} satisfies \texttt{Methods.WF}: at fuel
+  \texttt{0} every method throws, which is vacuously sound, and at fuel \texttt{n+1} each
+  method is the corresponding primed soundness proof applied to the table at fuel \texttt{n}.
+  Consequently \texttt{RecM.run x} inherits any \texttt{RecM.WF} property of \texttt{x}.
+  \thesisref{typesys.tex, \S Undecidability of definitional equality: the fuel bound is why the checker terminates at all}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-isdefeqcore, thm:vtc-whnfcore, thm:vtc-whnf, thm:vtc-infertype-prime}
+  \leanok
+  Induction on \texttt{n}, feeding the induction hypothesis to \ref{thm:vtc-isdefeqcore},
+  \ref{thm:vtc-whnfcore}, \ref{thm:vtc-whnf} and \ref{thm:vtc-infertype-prime}. This is where
+  the mutual recursion is tied off, and the reason every individual proof above may assume its
+  recursive calls sound.
+  \axfoot{sorryAx via all four component theorems}
+\end{proof}
+
+\begin{definition}[Initial context and state]
+  \label{def:vtc-vcontext-mk}
+  \lean{Lean4Lean.TypeChecker.VContext.mk1, Lean4Lean.TypeChecker.VContext.mk', Lean4Lean.TypeChecker.VState.WF.empty1, Lean4Lean.TypeChecker.VState.WF.empty}
+  \leanok
+  \uses{def:vtc-venvat, def:vtc-vcontext, def:vtc-vstate-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{64}
+  \texttt{VContext.mk1} builds the verification context from a \texttt{VEnvAt}, a list of level
+  parameters and a fuel configuration, with \texttt{MLCtx.nil} as local context;
+  \texttt{mk'} is the \texttt{VEnvs} variant. \texttt{VState.WF.empty1} shows the empty state
+  satisfies the invariant: empty caches, empty union-find, no reserved variables.
+\end{definition}
+
+\begin{theorem}[Discharging the monad at the top level]
+  \label{thm:vtc-m-run}
+  \lean{Lean4Lean.TypeChecker.M.WF.run1, Lean4Lean.TypeChecker.M.WF.run}
+  \leanok
+  \uses{def:vtc-vcontext-mk, def:vtc-m-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{96}
+  If \texttt{x : M} $\alpha$ satisfies \texttt{M.WF} in the initial context and the empty state
+  with a state-independent postcondition \texttt{Q}, then
+  \texttt{M.run env safety \{\} lparams fuel x} satisfies \texttt{Except.WF Q}: any value the
+  checker actually returns is justified by the model.
+  \thesisref{soundness.tex, the Corollary; note that the consistency half of the thesis has no counterpart in the repository}
+\end{theorem}
+\begin{proof}
+  \leanok
+  Unfold \texttt{M.run}, discard the error branch, and apply the hypothesis at the empty state
+  supplied by \texttt{VState.WF.empty1}.
+\end{proof}
+
+\begin{lemma}[Loop rules for the declaration checker]
+  \label{thm:vtc-forin}
+  \lean{Lean4Lean.TypeChecker.M.WF.forIn, Lean4Lean.TypeChecker.M.WF.bindThrow, Lean4Lean.TypeChecker.M.WF.forInFresh, Lean4Lean.TypeChecker.M.WF.forInForall₂}
+  \leanok
+  \uses{def:vtc-m-wf}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{113}
+  Three Hoare rules for \texttt{for ... in} loops in \texttt{M}: a generic invariant rule
+  indexed by the list still to be processed, so that the conclusion \texttt{Inv []} records
+  that every element was handled (the body must \texttt{yield}, since a loop that can
+  \texttt{break} is out of scope and none of the kernel's loops do); a rule for
+  \texttt{addMutual}'s header loop whose accumulator is the set of names seen, concluding that
+  the block is duplicate-free; and a rule for a loop whose elements are already
+  \texttt{Forall2}-related to a list of data. \texttt{bindThrow} discharges a bind whose first
+  component cannot return.
+\end{lemma}
+\begin{proof}
+  \leanok
+  Induction on the list, threading the invariant through \texttt{M.WF.bind}; the fresh-name
+  rule additionally derives \texttt{Nodup} from the per-iteration freshness test. These rules
+  are consumed by the declaration-checking group, not by this one.
+\end{proof}
+
+\begin{lemma}[The public soundness interface of the kernel]
+  \label{thm:vtc-toplevel}
+  \lean{Lean4Lean.TypeChecker.whnf.WF, Lean4Lean.TypeChecker.whnfCore.WF, Lean4Lean.TypeChecker.unfoldDefinition.WF, Lean4Lean.TypeChecker.inferType.WF', Lean4Lean.TypeChecker.inferType.WF, Lean4Lean.TypeChecker.checkType.WF, Lean4Lean.TypeChecker.isDefEq.WF, Lean4Lean.TypeChecker.isProp.WF, Lean4Lean.TypeChecker.ensureSort.WF, Lean4Lean.TypeChecker.ensureForall.WF, Lean4Lean.TypeChecker.ensureType.WF', Lean4Lean.TypeChecker.ensureType.WF}
+  \leanok
+  \uses{def:vtc-m-wf, def:isfvarupset}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{186}
+  Every entry point the declaration checker calls, stated at the \texttt{M} level:
+  \texttt{whnf} and \texttt{whnfCore} preserve the model term and the free-variable bound;
+  \texttt{unfoldDefinition} falls back to its input when there is nothing to unfold, so its
+  result is always model-equal; \texttt{inferType} and \texttt{checkType} produce a
+  \texttt{TrTyping}; \texttt{isDefEq} returning \texttt{true} gives \texttt{IsDefEqU};
+  \texttt{isProp} gives a typing at \texttt{.sort .zero}; and
+  \texttt{ensureSort}/\texttt{ensureForall}/\texttt{ensureType} additionally pin the syntactic
+  shape of the result.
+  \thesisref{typesys.tex, \texttt{item:alg\_defn}; soundness.tex, the Corollary}
+\end{lemma}
+\begin{proof}
+  \uses{thm:vtc-withfuel, thm:vtc-infertype-prime, thm:vtc-isdefeqcore, thm:vtc-whnf, thm:vtc-proofirrel, thm:vtc-ensuresortcore, thm:vtc-ensureforallcore}
+  \leanok
+  Each is the corresponding \texttt{Inner} lemma composed with \texttt{RecM.WF.run};
+  \texttt{ensureType.WF'} additionally chains \texttt{inferType.WF'} with \texttt{ensureSort.WF}
+  and transports the typing along the resulting defeq. This is the contract the rest of the
+  verification consumes, and every item in it is partial because of the six remaining
+  \texttt{sorry}s of the group.
+  \axfoot{sorryAx via inferProj.WF, reduceRecursor.WF, reduceProjCore.WF, tryEtaStructCore.WF, isDefEqUnitLike.WF, TrProj.uniq}
+  \reviewnote{\texttt{checkType.WF} takes only \texttt{e.FVarsIn (· ∈ c.vlctx.fvars)}, with no
+  hypothesis that \texttt{e} is translatable. That is the right statement to want, and it is
+  also why the gap recorded at \ref{thm:vtc-inferproj} propagates to every caller.}
+\end{proof}
+
+\section{Contribution summary}
+
+The two branches added 163 lines to this group, in two disjoint places.
+
+\textbf{\texttt{iota}.} Upstream, \texttt{inductiveReduceRec} was one monolithic kernel
+function. The branch split out the pure $\iota$ step as \texttt{inductiveReduceRecCore}
+(\ref{def:kernel-iota-core}) and proved \ref{thm:vtc-iota-reduce-core} about it, 129 lines of
+tactic script. The decomposition is the right one: the K-like conversion, the
+literal-to-constructor conversion and the structure-eta of the major premise are monadic and
+belong in the caller, whereas the $\iota$ step itself is pure and is the only part that has to
+be matched against the model's registered rules (\ref{thm:tr-env-iota-rec}). The proof is a
+genuinely fiddly index-arithmetic argument, carried out by slicing both spines and matching them
+against the pattern machinery of \ref{thm:pattern-matches-varn-const} and
+\ref{thm:pattern-iota-rhs-apply}; it is well commented, contains no \texttt{sorry}, and its
+docstring is accurate about the saturation caveat. What it does not do is connect to anything:
+\ref{thm:vtc-reducerecursor} is still open, no other declaration in the repository mentions the
+lemma, and the hypothesis that the major premise is already a constructor application is
+stronger than what the kernel's call site provides. The value of the contribution is therefore
+prospective, and the missing bridging lemma is exactly the step that would make it a statement
+about a kernel step rather than about a syntactic redex.
+
+\textbf{\texttt{trproj}.} Twenty-two lines in the projection case of type inference. The
+signature of \ref{thm:vtc-inferproj} was repaired, and the repair is real: master's version had
+an auto-bound implicit standing where the caller's type should be, and asserted that the
+projection translates to the translation of its own subterm. \ref{thm:vtc-inferproj-struct} was
+added as the same statement scoped to the structures \texttt{TrProjCtor}
+(\ref{struct:trprojctor}) covers. The substantive contribution, however, is the documentation:
+it records that the general statement is not provable as stated and why, and lists the four
+model extensions that would be needed to close it. That is an honest and correct diagnosis of a
+pre-existing hole in the project's headline soundness theorem. Against it: all three
+declarations remain \texttt{sorry}, \ref{thm:vtc-inferproj-struct} has no consumer at all, its
+hypotheses are kernel metadata rather than \texttt{TrProjCtor}, and the two obligations that the
+new \texttt{TrProj} metatheory was built to support and that sit in this very group,
+\ref{thm:vtc-reduceprojcore} and \ref{thm:vtc-tryetastruct}, were not attempted.
+
+\section{Review notes}
+
+\begin{itemize}
+  \item \textbf{High.} \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{400}: the
+    \texttt{trproj} docstring states that \ref{thm:vtc-inferproj} is not provable as stated,
+    because kernel-accepted projections of reflexive, indexed and nested single-constructor
+    structures have no \texttt{TrExprS} derivation at all. Since
+    \ref{thm:vtc-infertype-prime} consumes it and \texttt{checkType.WF} has no hypothesis that
+    its input is translatable, the top-level statements \texttt{inferType.WF'} and
+    \texttt{checkType.WF} (\srcloc{Lean4Lean/Verify/TypeChecker.lean}{204},
+    \srcloc{Lean4Lean/Verify/TypeChecker.lean}{215}) are, as of \texttt{trproj}, known to be
+    unprovable without extending the model. The observation is correct and valuable, but it
+    leaves an admitted-false lemma on the build path of the project's headline theorem, and the
+    alternatives (weakening the conclusion, or adding a scope hypothesis) are not discussed.
+  \item \textbf{Medium.} \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17}:
+    \ref{thm:vtc-iota-reduce-core} has no consumer. \ref{thm:vtc-reducerecursor}, two
+    declarations below, is still \texttt{sorry}, and a repository-wide grep finds no other
+    reference. The contribution proves the hard arithmetic of the $\iota$ step but does not
+    connect it to any statement about the kernel.
+  \item \textbf{Medium.} \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{24}: the hypothesis
+    \texttt{hmaj} requires the major premise \emph{as it occurs in the recursor spine} to
+    already be a constructor application, whereas \texttt{inductiveReduceRec}
+    (\srcloc{Lean4Lean/Inductive/Reduce.lean}{105}) passes a major obtained from
+    \texttt{recArgs[majorIdx]!} by \texttt{toCtorWhenK}, \texttt{whnf}, literal-to-constructor
+    conversion and \texttt{toCtorWhenStruct}. A consumer must first rebuild the spine with the
+    converted major and transport the translation across the resulting \texttt{IsDefEqU}; that
+    bridging step is neither provided nor mentioned in the docstring, which flags only the
+    saturation caveat.
+  \item \textbf{Medium.} \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{23}: \texttt{hsat},
+    exact saturation of the constructor application, is assumed. The docstring says it ``is a
+    consequence of the redex being well-typed, and is left to the caller'', but that
+    consequence is proved nowhere in the repository, so it is a second deferred obligation of
+    unquantified difficulty. It also excludes over-applied constructor applications, which is
+    exactly the case where the kernel's ``last \texttt{nfields} arguments'' slicing and the
+    pattern's ``arguments past \texttt{numParams}'' slicing genuinely disagree, so the
+    hypothesis is doing real work rather than being a convenience.
+  \item \textbf{Medium.} \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{392}:
+    \ref{thm:vtc-inferproj-struct} is \texttt{sorry} and unused, referenced only from
+    docstrings (\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{15},
+    \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{125}); the census records zero dependants. It
+    functions as a written-down specification of future work rather than as a result. Its
+    docstring advertises it as covering ``the structures the model covers
+    (\texttt{TrProjCtor})'' but \texttt{TrProjCtor} does not occur in the statement: the
+    hypotheses are kernel-side metadata facts whose implication of \texttt{TrProjCtor} is
+    itself the unproved content. The listed conditions are also not the ones \texttt{inferProj}
+    checks, so even once proved the lemma could not discharge \ref{thm:vtc-inferproj}.
+  \item \textbf{Low.} \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17}:
+    \texttt{\#print axioms} on \ref{thm:vtc-iota-reduce-core} reports \texttt{sorryAx}. The
+    proof script itself is complete; the dependency comes through \texttt{TrExprS.instL} and
+    \texttt{TrExpr.proj} to the still-open \texttt{TrProj.uniq}
+    (\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{995}) (checked by BFS over the constant
+    dependency graph: the declaration does not reach the other open \texttt{TrProj} lemma,
+    \texttt{TrProj.weak'\_inv}). Not the contribution's doing, but the lemma should not be
+    advertised as unconditional.
+  \item \textbf{Low.} \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143}:
+    \ref{thm:vtc-reduceprojcore} and \ref{thm:vtc-tryetastruct}
+    (\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{227}) are the two structure-side
+    obligations that the much richer \texttt{TrProj}/\texttt{TrProjCtor} metatheory was built
+    to support, and neither was attempted on \texttt{trproj}. Given that the branch closed five
+    of master's seven \texttt{TrProj} \texttt{sorry}s in
+    \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1}, leaving these untouched makes the
+    contribution visible in this group look narrower than its supporting infrastructure.
+  \item \textbf{Low.} \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{21}:
+    \texttt{reduceBinNatOpG} is an executable definition introduced inside a verification file
+    as a generalisation of the kernel's \texttt{reduceBinNatOp}; the kernel function itself is
+    only reached indirectly, through \ref{thm:vtc-reducenat}. Duplicating kernel code in a
+    proof file is a small maintenance hazard. Master, not contributed.
+  \item \textbf{Low (attribution).} \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{1}: the
+    precomputed per-line blame tags all 141 new lines in this file as \texttt{trproj}, but
+    \texttt{git diff iota trproj} on the file is empty and commits \texttt{7a68882} (iota) and
+    \texttt{6fd8a1d} (trproj) are the same patch with the same author date. The lines are the
+    \texttt{iota} contribution; \texttt{trproj} carries a duplicate of the commit and then
+    merges \texttt{iota} on top in \texttt{20ec229}. Any count of ``trproj lines'' taken from
+    the blame files over-attributes this file by 141 lines.
+  \item \textbf{Low.} \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{211}: a commented-out
+    \texttt{have} is left inside \ref{thm:vtc-tryetaexpansion}. Dead text in master.
+  \item \textbf{Low.} \srcloc{Lean4Lean/Verify/TypeChecker.lean}{21}:
+    \texttt{VEnvs.axiom\_of\_choice} is a deliberately misleading name for a finite case split.
+    The docstring says so, but a reader auditing the project for appeals to choice will still
+    be surprised by the grep hit.
+  \item \textbf{Context.} Six \texttt{sorry}s remain in the group. Four are master's:
+    \ref{thm:vtc-reduceprojcore}, \ref{thm:vtc-reducerecursor}, \ref{thm:vtc-tryetastruct} and
+    \ref{thm:vtc-isdefequnitlike}. The other two are not master's:
+    \ref{thm:vtc-inferproj-struct} is new on \texttt{trproj} (master has no such declaration),
+    and \ref{thm:vtc-inferproj} is \texttt{mixed}, its signature and conclusion rewritten by
+    \texttt{trproj} over master's \texttt{theorem} keyword line. Every statement in
+    \ref{thm:vtc-toplevel} is partial as a result, and the
+    whole group additionally inherits \texttt{sorryAx} from \texttt{TrProj.uniq} through
+    \texttt{TrExprS.uniq}.
+\end{itemize}

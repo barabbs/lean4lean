@@ -1,0 +1,6 @@
+# New code issues noted while completing experimental-logrel
+
+- LogRel (ShapeLogRel.lean:5271) has nineteen closure obligations, not the twenty asserted by the node map and the group narrative; counted field-by-field from the source (sort_iff, sort_iff_ty, bot, toType, left, left_ty, symm, symm_ty, trans, trans', trans_ty, conv, mono_r_2, mono_r_2_ty, mono_r_1, mono_l, join_ty, whr, whr_ty). The chapter states nineteen.
+- The LRS record literal spans ShapeLogRel.lean:5657-5895, i.e. 239 lines, not the 240 quoted in the node map; the chapter uses 239.
+- Lean4Lean.SExpr.Classifier (LogRel.lean:16) discards all three of its indices exactly as Lean4Lean.VEnv.Classifier does in CoinductiveLogRel.lean:17. The node map flags the phantom-index problem only for the coinductive scratch file; it is the same defect in the logrel-mltt branch, and the chapter records it for both.
+- Census/registry line numbers for ShapeLogRelAdequacy.lean are one or two lines below the actual declaration heads (LR.adequacy 105 vs 106, forallE_inv 448 vs 450, sort_inv 458 vs 459) because the docstrings precede them; srcloc values in the new nodes follow the census/registry numbers for consistency with the rest of the chapter.

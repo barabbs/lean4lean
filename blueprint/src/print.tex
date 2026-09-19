@@ -1,0 +1,47 @@
+% This file makes a printable version of the blueprint.
+% It should include all the \usepackage needed for the pdf version.
+% It assumes a modern unicode-aware TeX compiler; latexmkrc selects xelatex.
+
+\documentclass[a4paper]{report}
+
+\usepackage{geometry}
+
+\usepackage{expl3}
+
+\usepackage{amssymb, amsthm, mathtools}
+\usepackage[unicode,colorlinks=true,linkcolor=blue,urlcolor=magenta, citecolor=blue]{hyperref}
+
+\usepackage[warnings-off={mathtools-colon,mathtools-overbracket}]{unicode-math}
+
+% ---------------------------------------------------------------------------
+% Text fonts.
+%
+% The blueprint quotes Lean 4 source, so the text fonts must cover at least
+% the following: iota, box, turnstile, Gamma, equiv, angle brackets, strict
+% implicit braces, arrow, forall, lambda, Pi, Oxford brackets, i.e.
+%   U+03B9 U+25A1 U+22A2 U+0393 U+2261 U+27E8 U+27E9 U+2983 U+2984
+%   U+2192 U+2200 U+03BB U+03A0 U+27E6 U+27E7
+% Checked with fc-list on this machine: FreeSerif and FreeSans cover all of
+% them (DejaVu is not installed here; FreeSerif is the widest-coverage serif
+% available), and JetBrains Mono covers all of them plus U+2987/U+2988.
+% Math typesetting stays on Latin Modern Math, the unicode-math default.
+% ---------------------------------------------------------------------------
+\usepackage{fontspec}
+\setmainfont{FreeSerif}
+\setsansfont{FreeSans}
+\setmonofont{JetBrains Mono}[Scale=MatchLowercase]
+
+% Long monospace source paths are hard to break; give TeX some slack.
+\setlength{\emergencystretch}{3em}
+
+\input{macros/common}
+\input{macros/print}
+
+\title{lean4lean blueprint}
+\author{Alessandro Sosso (iota/trproj contributions); upstream lean4lean by Mario Carneiro}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\input{content}
+\end{document}

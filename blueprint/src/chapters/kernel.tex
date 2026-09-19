@@ -1,0 +1,1329 @@
+\chapter{The executable kernel}
+\label{chap:kernel}
+
+This chapter describes \emph{the code that is being verified}: the Lean 4 re-implementation of
+Lean's C++ kernel (\texttt{src/kernel/*.cpp}) that the \texttt{Lean4Lean/Verify/} layer reasons
+about. Eighteen files and 4040 lines are in scope: the type checker
+\srcloc{Lean4Lean/TypeChecker.lean}{1} (979 lines), the inductive-block adder
+\srcloc{Lean4Lean/Inductive/Add.lean}{1} (776) and its reduction companion
+\srcloc{Lean4Lean/Inductive/Reduce.lean}{1} (117), the primitive recognizer
+\srcloc{Lean4Lean/Primitive.lean}{1} (611), universe levels
+\srcloc{Lean4Lean/Level.lean}{1} (363), the replay driver
+\srcloc{Lean4Lean/Replay.lean}{1} (325) with \srcloc{Main.lean}{1} (148), declaration admission
+\srcloc{Lean4Lean/Environment.lean}{1} (129) over the environment utilities
+\srcloc{Lean4Lean/Environment/Basic.lean}{1} (138), quotients
+\srcloc{Lean4Lean/Quot.lean}{1} (121), and the small support modules
+\srcloc{Lean4Lean/Expr.lean}{1} (105), \srcloc{Lean4Lean/EquivManager.lean}{1} (64),
+\srcloc{Lean4Lean/Instantiate.lean}{1} (33), \srcloc{Lean4Lean/FuelConfig.lean}{1} (31),
+\srcloc{Lean4Lean/ForEachExprV.lean}{1} (30), \srcloc{Lean4Lean/Declaration.lean}{1} (27),
+\srcloc{Lean4Lean/PtrEq.lean}{1} (22) and \srcloc{Lean4Lean/LocalContext.lean}{1} (21).
+
+Notation follows the thesis. $\Gamma \vdash e : \alpha$ is the typing judgment,
+$\Gamma \vdash e \equiv e'$ the ideal definitional equality, $\Gamma \vdash e \Leftrightarrow e'$
+the algorithmic equality that the kernel actually decides, and $e \rightsquigarrow e'$ head
+reduction. The correspondence with Carneiro's \emph{The Type Theory of Lean} is close but
+incomplete in both directions. The file \texttt{axioms.tex} (\S2) supplies the rules that
+\texttt{inferType'}, \texttt{isDefEqCore'}, \texttt{checkPositivity},
+\texttt{isLargeEliminator}, \texttt{mkRecInfos}, \texttt{mkRecRules},
+\texttt{inductiveReduceRecCore}, \texttt{toCtorWhenK} and \texttt{addQuot} implement; but three
+substantial pieces of the executable kernel have no thesis counterpart at all, namely
+\texttt{Expr.proj} with \texttt{inferProj}/\texttt{reduceProjCore}/\texttt{toCtorWhenStruct},
+nested inductive elimination (\texttt{ElimNestedInductive}), and the primitive \texttt{Nat}
+arithmetic that \texttt{Primitive.checkDef} exists to justify. The first of these is exactly the
+gap the \texttt{trproj} branch fills on the model side (Chapter \ref{chap:proj}).
+
+Two design decisions dominate the code. First, nothing in the type checker is \texttt{partial}:
+the four mutually recursive operations are bundled in a \texttt{Methods} record and the knot is
+tied at a finite depth by \texttt{Methods.withFuel}, so every definition has usable equations for
+the verification layer. The price is a real behavioural divergence, since the kernel can report
+\texttt{.deepRecursion} or \texttt{.deterministicTimeout} where the C++ kernel would keep going.
+Second, several definitions are shaped by their proofs rather than by the algorithm:
+\texttt{reduceProj} is written with an explicit bind so that \texttt{reduceProj.WF} can see
+through it, and the contributed split of \texttt{inductiveReduceRecCore} exists for the same
+reason. The repository documents fourteen deliberate divergences from the C++ kernel in
+\texttt{divergences.md}, which should be read as part of the deliverable.
+
+Of the 4040 lines, exactly 22 are contributed: 21 on \texttt{trproj} in
+\srcloc{Lean4Lean/Inductive/Reduce.lean}{75} (the extraction of the pure $\iota$ step into
+\texttt{inductiveReduceRecCore}, plus the one call site at line 115) and 1 on \texttt{iota} in
+\srcloc{Lean4Lean/Quot.lean}{24} (rejecting an \texttt{unsafe} \texttt{Eq} during quotient
+initialization). Everything else in this chapter is Mario Carneiro's upstream code. The ratio is
+the headline finding for this chapter, and it is a favourable one: both changes are small, both
+are motivated by a concrete proof obligation rather than by taste, both are recorded in the
+commit message \emph{and} in \texttt{divergences.md}, and the \texttt{iota} line discharges a
+global assumption (\texttt{Environment.EqSafe}) instead of adding one. The \texttt{trproj} split
+is behaviour-preserving: the extracted body is the master body verbatim, with the caller's
+\texttt{let majorIdx} recomputed as \texttt{rval.getMajorIdx} at the two use sites. The only
+criticisms are cosmetic (a duplicated docstring and a misleading \texttt{section} placement) and
+are recorded in the review notes.
+
+\section{Expressions, contexts and small helpers}
+
+\begin{definition}[Delta-reducible value of a constant, \texttt{deltaValue?}]
+\label{def:kernel-delta-value}
+\lean{Lean.ConstantInfo.deltaValue?}
+\leanok
+The value a constant unfolds to under $\delta$-reduction: \texttt{defnInfo} and \texttt{thmInfo}
+have one, every other \texttt{ConstantInfo} does not. This is deliberately not Lean's
+\texttt{ConstantInfo.value?}, whose meaning changed in lean4\#12973 so that it excludes theorems,
+while the C++ \texttt{constant\_info::has\_value()} was left untouched and the kernel therefore
+still unfolds theorems.
+\thesisref{axioms.tex \S2.5, the $\delta$ rule $c_{\bar\ell} \rightsquigarrow v_{\bar\ell}(c)$}
+\end{definition}
+
+\begin{definition}[Reducibility-hint ordering, \texttt{lt'}]
+\label{def:kernel-reducibility-lt}
+\lean{Lean.ReducibilityHints.lt'}
+\leanok
+The strict order on \texttt{ReducibilityHints} that lazy delta reduction uses to choose which of
+two $\delta$-reducible heads to unfold: nothing is below \texttt{opaque}, \texttt{abbrev} is below
+nothing, and \texttt{regular $d_1$} is below \texttt{regular $d_2$} iff $d_1 < d_2$. No thesis
+counterpart; it is a heuristic of the algorithm, not a rule of the theory.
+\reviewnote{The single marker \texttt{-- lean4\#2750} is the only record that the C++ hint
+comparison is known to differ subtly from this one.}
+\end{definition}
+
+\begin{definition}[Expression constructors and recognizers]
+\label{family:kernel-expr-helpers}
+\lean{Lean.Expr.prop, Lean.Expr.arrow, Lean.Expr.lam0, Lean.Expr.natZero, Lean.Expr.natSucc, Lean.Expr.isConstructorApp?'}
+\leanok
+Short names for expressions the kernel builds constantly: $\mathsf{Prop} = \mathsf{Sort}\;0$, the
+non-dependent arrow, an anonymous lambda, and the constants \texttt{Nat.zero} and
+\texttt{Nat.succ}. \texttt{isConstructorApp?'} returns the head constant of an application when
+that constant is a constructor of the given environment, and \texttt{none} otherwise.
+\end{definition}
+
+\begin{definition}[Monadic expression replacement, \texttt{replaceM}]
+\label{def:kernel-expr-replace}
+\lean{Lean.Expr.replaceM, Lean.Expr.replaceNoCacheT, Lean.Expr.ReplaceImpl.replaceUnsafe', Lean.Expr.ReplaceImpl.replaceUnsafeT}
+\leanok
+\texttt{replaceM f? e} rewrites $e$ top-down by the partial function \texttt{f?}, recursing into
+subterms wherever \texttt{f?} declines. The reference implementation \texttt{replaceNoCacheT} is
+structurally recursive; a pointer-keyed memoizing \texttt{unsafe} version is installed over it
+with \texttt{@[implemented\_by]}.
+\reviewnote{\texttt{replaceM} is itself \texttt{partial} even though \texttt{replaceNoCacheT} is
+not, so it has no equation lemmas, and the cached implementation is trusted. A \texttt{TODO} at
+\srcloc{Lean4Lean/Expr.lean}{44} acknowledges this.}
+\end{definition}
+
+\begin{definition}[Literal expansion to constructor applications]
+\label{def:kernel-lit-to-ctor}
+\lean{Lean.Expr.natLitToConstructor, Lean.Expr.strLitToConstructor, Lean.Literal.toConstructor, Lean.Literal.typeName}
+\leanok
+Expansion of the kernel's compact literals into constructor applications: $0 \mapsto
+\mathsf{Nat.zero}$ and $n+1 \mapsto \mathsf{Nat.succ}\;n$ with the predecessor kept as a literal,
+and a string literal into \texttt{String.ofList} applied to an explicit \texttt{List Char} of
+\texttt{Char.ofNat} applications. \texttt{typeName} names the type of a literal. This is the
+bridge that lets the $\iota$ rule fire on literals, and hence the reason the primitive status of
+\texttt{Nat} is a soundness obligation (Definition \ref{def:kernel-primitive-checkinductive}).
+\end{definition}
+
+\begin{definition}[Substitution-free beta reduction, \texttt{cheapBetaReduce}]
+\label{def:kernel-cheap-beta}
+\lean{Lean.Expr.cheapBetaReduce}
+\leanok
+Beta-reduces $(\lambda x_1\dots x_n.\;b)\,a_1\dots a_m$ in exactly the two cases that need no
+substitution: to $b\,a_{n+1}\dots a_m$ when $b$ has no loose bound variables, and to
+$a_i\,a_{n+1}\dots a_m$ when $b$ is the bound variable $x_i$. Any other term is returned
+unchanged. It is used to tidy the inferred types produced by \texttt{inferLambda} and
+\texttt{inferLet}.
+\thesisref{axioms.tex \S2.2, the $\beta$ rule, restricted to substitution-free instances}
+\reviewnote{The $x_i$ branch is guarded by \texttt{assert! n < i} at
+\srcloc{Lean4Lean/Instantiate.lean}{24}; the invariant is not established here.}
+\end{definition}
+
+\begin{definition}[Scoped local declarations]
+\label{def:kernel-monad-localnamegen}
+\lean{Lean4Lean.MonadLocalNameGenerator, Lean4Lean.withLocalDecl, Lean4Lean.withLetDecl}
+\leanok
+\texttt{MonadLocalNameGenerator} abstracts the supply of fresh \texttt{FVarId}s;
+\texttt{withLocalDecl} and \texttt{withLetDecl} extend the ambient \texttt{LocalContext} with a
+fresh free variable of a given type (respectively, with a value) for the duration of a
+continuation. Every telescope walk in the kernel uses these, so they are how the context
+extension $\Gamma, x{:}\alpha$ of the thesis becomes an operation on a concrete context.
+\thesisref{axioms.tex \S2.1, context extension $\Gamma, x{:}\alpha$}
+\end{definition}
+
+\begin{definition}[Cached expression traversal without opaques, \texttt{forEachV}]
+\label{def:kernel-foreach-exprv}
+\lean{Lean.Expr.forEachV, Lean.Expr.forEachV', Lean.ForEachExprV.visit}
+\leanok
+A copy of \texttt{Expr.forEach} built on \texttt{MonadStateCacheT} rather than
+\texttt{StateRefT}, so the traversal is a plain definition instead of an \texttt{opaque} and can
+therefore be unfolded in proofs.
+\reviewnote{The module is imported by \texttt{TypeChecker.lean} but neither \texttt{forEachV} nor
+\texttt{forEachV'} has a call site anywhere under \texttt{Lean4Lean/}; this looks like dead code
+left from an earlier version of the expression scope check.}
+\end{definition}
+
+\section{Universe levels}
+
+\begin{definition}[Undefined level parameter detection, \texttt{getUndefParam}]
+\label{def:kernel-level-getundefparam}
+\lean{Lean.Level.getUndefParam, Lean.Level.forEach}
+\leanok
+\texttt{getUndefParam l ps} returns some parameter occurring in $\ell$ but not in the
+declaration's list $\bar u$ of universe variables, by a short-circuiting \texttt{forEach} over the
+level. \texttt{checkLevel} (Definition \ref{def:kernel-infer-constant}) uses it to enforce the
+thesis's side condition that the universe variables of a declaration are contained in $\bar u$.
+\thesisref{axioms.tex \S2.5, ``the universe variables in $\alpha$ and $\ell$ are contained in $\bar u$''}
+\end{definition}
+
+\begin{definition}[Canonical form for universe levels, \texttt{Normalize.normalize}]
+\label{def:kernel-level-normalize}
+\lean{Lean.Level.Normalize.normalize, Lean.Level.Normalize.normalizeAux, Lean.Level.Normalize.NormLevel, Lean.Level.Normalize.Node, Lean.Level.Normalize.VarNode, Lean.Level.Normalize.NormLevel.subsumption, Lean.Level.Normalize.NormLevel.toTree, Lean.Level.Normalize.Tree.reify, Lean.Level.normalize'}
+\leanok
+A canonical form for the level algebra $\ell ::= u \mid 0 \mid \ell+1 \mid \max \mid \mathrm{imax}$,
+following G\'eran's ``A Canonical Form for Universe Levels in Impredicative Type Theory''. A level
+becomes a map from $\mathrm{imax}$ condition sets (sorted lists of parameter names) to a
+\texttt{Node} recording the largest constant and the largest offset of each parameter;
+\texttt{subsumption} deletes dominated sublevels, and \texttt{toTree}/\texttt{Tree.reify} read a
+canonical \texttt{Level} back out, choosing the lexicographically least admissible
+$\mathrm{imax}$ chain so that the output depends only on the canonical sublevels.
+\thesisref{axioms.tex \S2.2, the level syntax and the judgment $\ell \le \ell' + n$}
+\reviewnote{Substantial new algorithmic content, but its correctness is not established in this
+chapter's scope: Chapter \ref{chap:levels} proves it, in full and sorry-free, as
+\texttt{Lean.Level.Normalize.normalize\_complete} and \texttt{Lean.Level.isEquiv'\_complete}
+($\texttt{isEquiv'}\;u\;v \leftrightarrow u \approx v$ against the semantic model
+\texttt{VLevel}), so this is not the unverified new component it might appear to be in isolation.}
+\end{definition}
+
+\begin{definition}[Sublevel comparison on canonical forms, \texttt{NormLevel.le}]
+\label{def:kernel-level-le}
+\lean{Lean.Level.Normalize.NormLevel.le, Lean.Level.Normalize.NormLevel.addable, Lean.Level.Normalize.NormLevel.feasible, Lean.Level.Normalize.NormLevel.lexChain}
+\leanok
+\uses{def:kernel-level-normalize}
+Decides $\ell_1 \le \ell_2$ on canonical forms: every sublevel of $\ell_1$ must be dominated by
+sublevels of $\ell_2$, where each entry of $\ell_2$ discharges what it can of an outstanding node
+of $\ell_1$ and the node counts as dominated once nothing is left.
+\texttt{addable}/\texttt{feasible}/\texttt{lexChain} build the lexicographically least admissible
+condition chain used by reification.
+\thesisref{axioms.tex \S2.2, the algorithmic inequality $\ell \le \ell' + n$}
+\reviewnote{Cited in this docstring only as ``Theorem 39 of the paper'', with no formal
+bibliography entry, though the paper itself (Yoan G\'eran, ``A Canonical Form for Universe Levels
+in Impredicative Type Theory'') is named with a working URL earlier in the same file, at
+\srcloc{Lean4Lean/Level.lean}{27}. In any case the claim is not merely cited on trust: Chapter
+\ref{chap:levels} reproves it from scratch in Lean, sorry-free, as
+\texttt{Lean.Level.Normalize.NormLevel.le\_complete} and \texttt{Lean.Level.geq'\_complete}.}
+\end{definition}
+
+\begin{definition}[Complete level equality and comparison, \texttt{isEquiv'}]
+\label{def:kernel-level-isequiv}
+\lean{Lean.Level.isEquiv', Lean.Level.isEquivList, Lean.Level.geq'}
+\leanok
+\uses{def:kernel-level-normalize, def:kernel-level-le}
+$\ell_1 \equiv \ell_2$ is decided by running core Lean's sound-but-incomplete \texttt{isEquiv}
+first and falling back to equality of canonical forms; $\ell_1 \ge \ell_2$ likewise falls back to
+\texttt{NormLevel.le}. \texttt{isEquivList} lifts equality pointwise to the level arguments of a
+constant. This is a documented divergence in the \emph{accept-more} direction: lean4lean decides
+level equality and $\ge$ for strictly more pairs than either the standard library or the C++
+kernel, so it accepts declarations the kernel rejects for level incompleteness and never the
+converse.
+\thesisref{axioms.tex \S2.2, $\ell \le \ell'$ and $\ell' \le \ell$ imply $\ell \equiv \ell'$}
+\reviewnote{The docstring quotes a measurement (261k comparisons over Lean, Std and Batteries;
+roughly 20 times cheaper than normalizing) that no script in the repository reproduces.}
+\end{definition}
+
+\section{The kernel environment}
+
+\begin{definition}[Reserved primitive names, \texttt{primitives}]
+\label{def:kernel-primitives}
+\lean{Lean.Kernel.Environment.primitives}
+\leanok
+The name set with special kernel support: \texttt{Bool} and its two constructors, \texttt{Nat}
+with \texttt{zero}/\texttt{succ} and its arithmetic and bitwise operations, \texttt{String.ofList}
+and \texttt{Char.ofNat}. A declaration may claim one of these names only if
+\texttt{Primitive.checkDef} or \texttt{Primitive.checkInductive} has certified that it has the
+expected shape.
+\end{definition}
+
+\begin{definition}[Environment lookup and pre-addition hygiene checks]
+\label{family:kernel-env-checks}
+\lean{Lean.Kernel.Environment.contains, Lean.Kernel.Environment.get, Lean.Kernel.Environment.checkDuplicatedUnivParams, Lean.Kernel.Environment.checkNoMVar, Lean.Kernel.Environment.checkNoFVar, Lean.Kernel.Environment.checkNoMVarNoFVar, Lean.Kernel.Environment.checkName}
+\leanok
+\uses{def:kernel-primitives}
+Lookup of a constant by name (\texttt{get}, failing with \texttt{unknownConstant}), rejection of a
+repeated universe parameter in a declaration's level parameter list, rejection of metavariables
+and free variables in a declaration's type and value, and \texttt{checkName}, which rejects a name
+already present in the environment and, unless \texttt{allowPrimitive} is set, any reserved
+primitive name.
+\thesisref{axioms.tex \S2.5, the admissibility side conditions on $\mathsf{constant}\;c_{\bar u}:\alpha$ and $\mathsf{def}\;c_{\bar u}:\alpha := e$}
+\end{definition}
+
+\begin{definition}[Non-recursive structure predicate, \texttt{isNonRecStructure}]
+\label{def:kernel-is-nonrec-structure}
+\lean{Lean.Kernel.Environment.isNonRecStructure}
+\leanok
+True exactly when the name resolves to an \texttt{inductInfo} with \texttt{isRec := false}, a
+single constructor and no indices. This delimits the class of types for which the kernel supports
+structure $\eta$ and \texttt{Expr.proj}, and the docstring records that it must stay in sync with
+the C++ \texttt{is\_non\_rec\_structure()}.
+\reviewnote{The thesis's type theory has neither projections nor structure $\eta$, so this
+predicate delimits precisely the extension the \texttt{trproj} model work has to cover
+(Chapter \ref{chap:proj}).}
+\end{definition}
+
+\begin{definition}[Empty and imported kernel environments]
+\label{def:kernel-env-empty-import}
+\lean{Lean.Kernel.Environment.empty, Lean.Kernel.Environment.finalizeImport, Lean.Kernel.Environment.throwAlreadyImported}
+\leanok
+The two constructors the checker starts from. \texttt{empty} builds a fresh environment for a main
+module; \texttt{finalizeImport} merges the constant maps of a list of imported modules, keeping a
+declaration that subsumes the one already recorded and rejecting a genuine clash. Both reach into
+Lean internals through \texttt{open private}, so they are sensitive to core refactors.
+\reviewnote{\srcloc{Lean4Lean/Environment/Basic.lean}{124} sets \texttt{quotInit := !imports.isEmpty}
+unconditionally, that is, it \emph{assumes} any non-empty import set has already initialized
+quotients. \texttt{Replay.checkQuotInit} is the compensating check, but an imported environment is
+never re-checked, so \texttt{checkEqType} never runs on one.}
+\end{definition}
+
+\section{Pointer equality, fuel and the equivalence cache}
+
+\begin{definition}[Pointer equality and its soundness axioms]
+\label{axiom:kernel-ptr-eq}
+\lean{Lean4Lean.ptrEqExpr, Lean4Lean.ptrEqExpr_eq, Lean4Lean.ptrEqConstantInfo, Lean4Lean.ptrEqConstantInfo_eq}
+\leanok
+\texttt{ptrEqExpr} and \texttt{ptrEqConstantInfo} are \texttt{opaque} Booleans implemented by
+\texttt{ptrAddrUnsafe} comparison, and \texttt{ptrEqExpr\_eq}/\texttt{ptrEqConstantInfo\_eq} are
+\texttt{axiom}s stating that a \texttt{true} result implies actual equality. The converse is
+correctly \emph{not} assumed. The docstring explains why \texttt{withPtrEq} cannot be used: the
+kernel's behaviour, not merely its speed, depends on pointer identity, since identical objects
+receiving different addresses can make it reject inputs it would otherwise accept.
+\axfoot{Lean4Lean.ptrEqExpr\_eq; Lean4Lean.ptrEqConstantInfo\_eq; Classical.choice}
+\reviewnote{These are two of the project's genuine trusted axioms, used in only two places
+(\srcloc{Lean4Lean/Verify/EquivManager.lean}{264} and
+\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{384}), so the trusted surface is small. But at
+\srcloc{Lean4Lean/TypeChecker.lean}{739} \texttt{ptrEqConstantInfo dt ds} gates a \emph{different
+algorithm} (congruence on arguments before unfolding), not merely a shortcut, which is exactly
+what the file's own docstring warns about.}
+\end{definition}
+
+\begin{definition}[Fuel bounds for the kernel's loops, \texttt{FuelConfig}]
+\label{structure:kernel-fuel-config}
+\lean{Lean4Lean.FuelConfig}
+\leanok
+One \texttt{Nat} per bounded loop: the \texttt{whnf'} unfold loop in its ordinary
+(\texttt{whnf}, default 100000) and eager (\texttt{whnfEager}, 1000000) forms,
+\texttt{lazyDelta} (1000), \texttt{etaExpand} (1000), the starting fuel \texttt{recDepth} (50000)
+for \texttt{Methods.withFuel}, and \texttt{inductiveFuel} (1000) shared by the structural loops of
+the inductive adder. Exhaustion throws \texttt{.deterministicTimeout} or \texttt{.deepRecursion}.
+This replaces the C++ kernel's \texttt{maxRecDepth} (lean4\#13956) and is recorded as a divergence.
+\reviewnote{Every field's docstring names the loop it bounds, which is exemplary; the docstring's
+claim that ``defaults are set so mathlib passes'' is backed by nothing in the repository.}
+\end{definition}
+
+\begin{definition}[Union-find cache of definitional equalities, \texttt{EquivManager}]
+\label{def:kernel-equiv-manager}
+\lean{Lean4Lean.EquivManager, Lean4Lean.EquivManager.isEquiv, Lean4Lean.EquivManager.addEquiv, Lean4Lean.EquivManager.find, Lean4Lean.EquivManager.merge, Lean4Lean.EquivManager.toNode}
+\leanok
+\uses{axiom:kernel-ptr-eq}
+A \texttt{Batteries.UnionFind} over expressions recording pairs already found definitionally
+equal, plus \texttt{isEquiv}, a structural comparison that short-circuits on pointer equality, on
+a hash mismatch when \texttt{useHash} is set, and on a shared union-find root, then recurses
+congruentially and merges the two roots on success. \texttt{addEquiv} records a successful
+\texttt{isDefEq} verdict.
+\reviewnote{Since \texttt{addEquiv} records pairs equated by the \emph{algorithmic} relation, and
+that relation is not transitive, the union-find's transitive closure can claim equalities the
+algorithm would not decide. This matches the C++ kernel, but it means \texttt{isEquiv} is not a
+conservative optimization and the verification layer has to account for it.}
+\end{definition}
+
+\section{Quotient types}
+
+\begin{definition}[Pure expression-building monad, \texttt{ExprBuildT}]
+\label{def:kernel-exprbuildt}
+\lean{Lean4Lean.ExprBuildT, Lean4Lean.ExprBuildT.run}
+\leanok
+\uses{def:kernel-monad-localnamegen}
+\texttt{ExprBuildT m} is \texttt{ReaderT LocalContext (ReaderT NameGenerator m)}: a local context
+plus a deterministic name generator, which is exactly enough to run \texttt{withLocalDecl} and
+\texttt{withLetDecl} while building closed expressions without a type checker. It is used to
+write the quotient constants' types as telescopes. Because \texttt{run} starts the generator from
+a fixed state, the resulting expressions are literally computable, which is what lets
+\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1} evaluate those telescopes.
+\end{definition}
+
+\begin{definition}[Validation of the prelude's \texttt{Eq}, \texttt{checkEqType}]
+\label{def:kernel-check-eq-type}
+\contrib{mixed} \srcloc{Lean4Lean/Quot.lean}{20}
+\lean{Lean4Lean.checkEqType}
+\leanok
+\uses{family:kernel-env-checks, def:kernel-exprbuildt, def:kernel-monad-localnamegen}
+Checks, before quotient initialization, that the environment's \texttt{Eq} is an inductive with
+exactly one universe parameter $u$ and one constructor, that its type is
+$\forall\,\{\alpha : \mathsf{Sort}\;u\},\ \alpha \to \alpha \to \mathsf{Prop}$ and the
+constructor's is $\forall\,\{\alpha : \mathsf{Sort}\;u\}\,(a:\alpha),\ \mathsf{Eq}\;\alpha\;a\;a$
+(compared as built terms, so up to binder names), and, added on \texttt{iota} at
+\srcloc{Lean4Lean/Quot.lean}{24}, that \texttt{Eq} is not declared \texttt{unsafe}.
+\thesisref{axioms.tex \S2.6.2 (sec:large\_elim), $\mathsf{eq}_a := \mu\,t:\alpha\to\mathsf{Prop}.\,(\mathsf{refl} : t\;a)$}
+\axfoot{propext; Classical.choice; Quot.sound (no sorryAx)}
+The \texttt{iota} line is the only change to kernel code on that branch and is a deliberate
+divergence in the reject-more direction: \texttt{quot.cpp}'s \texttt{check\_eq\_type} pins the
+shape of \texttt{Eq} but not its safety, the four quotient constants carry no safety flag and are
+therefore safe, and \texttt{Quot.lift}'s type mentions \texttt{Eq}, so an \texttt{unsafe
+inductive Eq} would leave safe constants depending on an unsafe one and the safe-level abstract
+environment would have no model. It pays for itself: \texttt{addQuot.WF} and \texttt{addDecl.WF}
+both lost the \texttt{Environment.EqSafe} hypothesis, which was deleted outright.
+\reviewnote{The guarantee is narrower than the commit message suggests.
+\texttt{Environment.addQuot} returns immediately when \texttt{env.quotInit} is already true, and
+\texttt{finalizeImport} sets \texttt{quotInit} for any non-empty import set, so on an imported
+environment neither the shape check nor the new safety check ever runs. The new property holds
+only for environments built from scratch, where \texttt{Init.Prelude} is replayed. This is a
+pre-existing gap, not one the contribution introduced, but it bounds what removing
+\texttt{EqSafe} buys.}
+\end{definition}
+
+\begin{definition}[Quotient initialization, \texttt{addQuot}]
+\label{def:kernel-add-quot}
+\lean{Lean4Lean.Environment.addQuot}
+\leanok
+\uses{def:kernel-check-eq-type, family:kernel-env-checks, def:kernel-exprbuildt, def:kernel-monad-localnamegen}
+Returns the environment unchanged if \texttt{quotInit} is already set; otherwise runs
+\texttt{checkEqType}, checks that none of the four names is taken, and adds \texttt{Quot},
+\texttt{Quot.mk}, \texttt{Quot.lift} and \texttt{Quot.ind} as \texttt{quotInfo} declarations with
+types built explicitly as telescopes, marking the environment quotient-initialized.
+\texttt{Quot.sound} is not added here: it is an ordinary axiom of the prelude, exactly as in the
+thesis, where it is the only genuine axiom among the quotient constants.
+\thesisref{axioms.tex \S2.7, $\alpha/R : \mathcal{U}_u$, $\mathrm{mk}_R$, $\mathrm{lift}_R$, $\mathrm{sound}_R$}
+\end{definition}
+
+\begin{definition}[Quotient computation rule, \texttt{quotReduceRec}]
+\label{def:kernel-quot-reduce-rec}
+\lean{Lean4Lean.quotReduceRec}
+\leanok
+Reduces $\mathrm{lift}\;\alpha\;r\;\beta\;f\;h\;(\mathrm{mk}\;r\;a)\;\bar c \rightsquigarrow
+f\;a\;\bar c$ and $\mathrm{ind}\;\alpha\;r\;\beta\;p\;(\mathrm{mk}\;r\;a)\;\bar c \rightsquigarrow
+p\;a\;\bar c$: it normalizes the argument at the fixed major position (index 5 for
+\texttt{Quot.lift}, 4 for \texttt{Quot.ind}), requires it to be a \texttt{Quot.mk} application of
+arity 3, applies the function argument (index 3 in both cases) to its last argument, and
+re-applies any trailing arguments.
+\thesisref{axioms.tex \S2.7, $\mathrm{lift}_R\;\beta\;f\;h\;(\mathrm{mk}_R\;a) \rightsquigarrow f\;a$}
+\reviewnote{The positions 5/4 and 3/3 are magic numbers justified only by the type signatures
+quoted in the surrounding docstring. Unlike the inductive $\iota$ rule, nothing here checks that
+the eliminator is saturated: a partially applied \texttt{Quot.lift} simply fails to match.}
+\end{definition}
+
+\section{Recursor reduction}
+
+\begin{definition}[Nullary constructor application for a type]
+\label{def:kernel-get-first-ctor}
+\lean{Lean4Lean.getFirstCtor, Lean4Lean.mkNullaryCtor}
+\leanok
+\texttt{getFirstCtor} returns the head of an inductive's constructor list;
+\texttt{mkNullaryCtor type nparams} decomposes $I\;\bar a$ and returns $I$'s first constructor at
+the same levels applied to the first \texttt{nparams} of those arguments, that is, applied to the
+parameters only.
+\end{definition}
+
+\begin{definition}[K-like reduction, \texttt{toCtorWhenK}]
+\label{def:kernel-to-ctor-when-k}
+\lean{Lean4Lean.toCtorWhenK}
+\leanok
+\uses{def:kernel-get-first-ctor}
+For a recursor with \texttt{rval.k} set, replaces a major premise $e$ whose type weak-head
+normalizes to an application of the recursor's own inductive by the nullary constructor
+application of that same type, provided the two types are definitionally equal (which pins the
+indices) and no index carries a metavariable. Otherwise $e$ is returned unchanged. For example
+$e : a = a$ becomes $\mathsf{Eq.refl}\;a$, which is definitionally equal to $e$ by proof
+irrelevance.
+\thesisref{axioms.tex \S2.6.4 (sec:iota), the K-like reduction rule}
+\reviewnote{The thesis describes this step as ``proof irrelevance to change the major premise into
+a constructor, followed by the iota rule'', which is exactly the factoring the \texttt{trproj}
+branch made explicit in code. \texttt{reduceRecursor.WF} remains open precisely because this step
+has no \texttt{IsDefEq} counterpart in the model yet.}
+\end{definition}
+
+\begin{definition}[Structure-eta expansion of a major premise, \texttt{toCtorWhenStruct}]
+\label{def:kernel-to-ctor-when-struct}
+\lean{Lean4Lean.toCtorWhenStruct, Lean4Lean.expandEtaStruct}
+\leanok
+\uses{def:kernel-get-first-ctor, def:kernel-is-nonrec-structure}
+When the major's inductive is a non-recursive structure, the major is not already a constructor
+application, its type normalizes to that structure, and the structure's universe
+\texttt{isNeverZero}, replaces $e$ by
+$\mathsf{S.mk}\;\bar a\;(e.0)\dots(e.(n{-}1))$, which is definitionally equal to $e$ by structure
+$\eta$, so that the $\iota$ rule can then fire. No thesis counterpart: the thesis's system has
+neither projections nor structure $\eta$.
+\reviewnote{Second site of the documented \texttt{isNeverZero} versus \texttt{!isAlwaysZero}
+divergence from the C++ kernel; it narrows the class of projections any \texttt{TrProj} theorem
+can be about.}
+\end{definition}
+
+\begin{definition}[Recursor rule lookup, \texttt{getRecRuleFor}]
+\label{def:kernel-get-rec-rule-for}
+\lean{Lean4Lean.getRecRuleFor}
+\leanok
+Given a recursor's \texttt{RecursorVal} and a major premise, returns the \texttt{RecursorRule}
+whose \texttt{ctor} field matches the head constant of the major, and \texttt{none} if the head is
+not a constant or no rule matches. This is the selection of the clause $e_c$ for the constructor
+$c$.
+\thesisref{axioms.tex \S2.6.4 (sec:iota), selecting the minor premise $e_c$ for constructor $c$}
+\end{definition}
+
+\begin{definition}[The pure $\iota$ step, \texttt{inductiveReduceRecCore}]
+\label{def:kernel-iota-core}
+\contrib{trproj} \srcloc{Lean4Lean/Inductive/Reduce.lean}{75}
+\lean{Lean4Lean.inductiveReduceRecCore}
+\leanok
+\uses{def:kernel-get-rec-rule-for}
+A pure, monad-free \texttt{Option Expr}-valued function performing the $\iota$ rule on a major
+premise that is already a constructor application. Given \texttt{rval}, the recursor's level
+arguments \texttt{ls}, the redex's argument array \texttt{recArgs} and the major, it looks up the
+rule for the major's head constructor, instantiates \texttt{rule.rhs} at \texttt{rval.levelParams
+:= ls}, and applies the result to \texttt{recArgs} up to \texttt{rval.getFirstIndexIdx} (the
+parameters, motives and minor premises; the indices are determined by the constructor), then to
+the \emph{last} \texttt{rule.nfields} arguments of the major (its fields), then to any arguments
+of the redex after position \texttt{rval.getMajorIdx}. It returns \texttt{none} if no rule
+matches, if the major has fewer than \texttt{rule.nfields} arguments, or if the number of level
+arguments disagrees with \texttt{rval.levelParams}.
+\thesisref{axioms.tex \S2.6.4 (sec:iota), $\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b) \rightsquigarrow e_c\;b\;v$}
+\axfoot{propext; Quot.sound (no sorryAx)}
+This is the whole of the \texttt{trproj} change to kernel code. The body is master's verbatim: the
+only textual difference is that the caller's \texttt{let majorIdx := info.getMajorIdx} binding
+becomes \texttt{rval.getMajorIdx} at the two use sites, which is the same value, so the split is
+behaviour-preserving as the commit claims. The purpose is proof-side: \texttt{inductiveReduceRec}
+is monadic only because of its K-like and structure-$\eta$ preludes, whereas the $\iota$ step
+itself is pure and total, so extracting it lets
+\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17} state
+\texttt{inductiveReduceRecCore.WF} about a function with no monad, no environment lookup and no
+well-typedness side conditions beyond its hypotheses. The commit is explicit that
+\texttt{reduceRecursor.WF} therefore stays open, which is an honest scoping statement rather than
+an overclaim. The extracted function is also used as a differential oracle by
+\srcloc{Lean4Lean/Tests/IotaShape.lean}{151}.
+\reviewnote{Three cosmetic blemishes. (a) The definition sits inside the \texttt{section} opened at
+\srcloc{Lean4Lean/Inductive/Reduce.lean}{9} whose variables (\texttt{[Monad m]}, \texttt{env},
+\texttt{whnf}, \texttt{inferType}, \texttt{isDefEq}) it uses none of; Lean binds only used section
+variables so the arity is the intended four, but a later edit that touches \texttt{env} would
+silently change the signature and break the \texttt{WF} statement. (b) The new docstring
+duplicates the slicing description in the unchanged caller docstring. (c) It collapses ``no rule
+for this constructor'', ``major has too few arguments'' and ``wrong number of universe
+arguments'' into one \texttt{none}, which is why the \texttt{WF} theorem must take saturation as
+an external hypothesis rather than deriving it; the commit message says so plainly.}
+\end{definition}
+
+\begin{definition}[Recursor reduction, \texttt{inductiveReduceRec}]
+\label{def:kernel-inductive-reduce-rec}
+\contrib{mixed} \srcloc{Lean4Lean/Inductive/Reduce.lean}{100}
+\lean{Lean4Lean.inductiveReduceRec}
+\leanok
+\uses{def:kernel-to-ctor-when-k, def:kernel-to-ctor-when-struct, def:kernel-iota-core, def:kernel-lit-to-ctor}
+Performs recursor reduction on a redex whose head is a recursor constant: it reads the major
+premise at \texttt{info.getMajorIdx}, applies K-like reduction when \texttt{info.k}, weak-head
+normalizes the major, converts a \texttt{Nat} literal by \texttt{natLitToConstructor}, a
+\texttt{String} literal by normalizing \texttt{strLitToConstructor}, and anything else by
+\texttt{toCtorWhenStruct}, and then delegates the $\iota$ step to
+\texttt{inductiveReduceRecCore}. It returns \texttt{none} when no rule applies.
+\thesisref{axioms.tex \S2.6.4 (sec:iota), the $\iota$ rule and the K-like rule}
+\axfoot{propext; Classical.choice; Quot.sound (no sorryAx)}
+This is a master definition whose last line (\srcloc{Lean4Lean/Inductive/Reduce.lean}{115}) was
+changed on \texttt{trproj} to call the extracted core.
+\reviewnote{The master docstring at \srcloc{Lean4Lean/Inductive/Reduce.lean}{91} was left
+untouched and still describes the $\iota$ slicing in full, work that is now done in
+\texttt{inductiveReduceRecCore} and documented there too. Trimming it to the preprocessing the
+caller still performs would have completed the refactor.}
+\end{definition}
+
+\section{The type checker monad}
+
+\begin{definition}[The type checker monad, \texttt{TypeChecker.M}]
+\label{structure:kernel-tc-monad}
+\lean{Lean4Lean.TypeChecker.State, Lean4Lean.TypeChecker.Context, Lean4Lean.TypeChecker.M, Lean4Lean.TypeChecker.M.run}
+\leanok
+\uses{structure:kernel-fuel-config, def:kernel-equiv-manager}
+$\texttt{M} = \texttt{ReaderT Context (StateT State (Except Exception))}$. The context carries the
+environment, the local context $\Gamma$, the \texttt{DefinitionSafety} level, the
+\texttt{eagerReduce} flag, the declaration's universe parameters $\bar u$ and the fuel bounds; the
+state carries the two inference caches (one per \texttt{inferOnly} mode), the \texttt{whnfCore}
+and \texttt{whnf} caches, the name generator, the equivalence manager, the failure cache and the
+delta-unfolding cache.
+\reviewnote{Keeping \texttt{lparams} fixed for the whole run is one of the documented divergences:
+the C++ kernel sets and unsets level parameters around \texttt{check}, so its \texttt{ensure\_sort}
+runs without them.}
+\end{definition}
+
+\begin{definition}[Fuel-bounded mutual recursion, \texttt{Methods.withFuel}]
+\label{structure:kernel-methods-fuel}
+\lean{Lean4Lean.TypeChecker.Methods, Lean4Lean.TypeChecker.RecM, Lean4Lean.TypeChecker.Methods.withFuel, Lean4Lean.TypeChecker.RecM.run}
+\leanok
+\uses{structure:kernel-fuel-config, structure:kernel-tc-monad}
+The four mutually recursive operations \texttt{isDefEqCore}, \texttt{whnfCore}, \texttt{whnf} and
+\texttt{inferType} are fields of a record \texttt{Methods} threaded through $\texttt{RecM} =
+\texttt{ReaderT Methods M}$. \texttt{Methods.withFuel 0} makes all four throw
+\texttt{.deepRecursion}; \texttt{withFuel (n+1)} fills them with the primed implementations
+applied to \texttt{withFuel n}. \texttt{RecM.run} starts the knot at \texttt{FuelConfig.recDepth}.
+This is what replaces \texttt{partial def} and gives every definition in the file equations to
+reason about.
+\reviewnote{Central design decision of the project, and the source of a real behavioural
+divergence: a declaration the C++ kernel accepts can be rejected here with
+\texttt{.deepRecursion}.}
+\end{definition}
+
+\section{Weak-head normalization}
+
+\begin{definition}[The $\iota$ step of normalization, \texttt{reduceRecursor}]
+\label{def:kernel-reduce-recursor}
+\lean{Lean4Lean.TypeChecker.Inner.reduceRecursor}
+\leanok
+\uses{def:kernel-quot-reduce-rec, def:kernel-inductive-reduce-rec}
+Tries quotient reduction first, but only when the environment reports \texttt{quotInit}, and then
+inductive recursor reduction, returning the first reduct found and \texttt{none} otherwise.
+\thesisref{axioms.tex \S2.6.4 (sec:iota) and \S2.7}
+\reviewnote{\texttt{reduceRecursor.WF} is explicitly still open in the verification layer, since
+the K-like and structure-$\eta$ paths have no \texttt{IsDefEq} counterpart; the \texttt{trproj}
+contribution verifies only the pure $\iota$ core beneath it.}
+\end{definition}
+
+\begin{definition}[Projection reduction, \texttt{reduceProj}]
+\label{def:kernel-reduce-proj}
+\lean{Lean4Lean.TypeChecker.Inner.reduceProjCore, Lean4Lean.TypeChecker.Inner.reduceProj}
+\leanok
+\texttt{reduceProjCore idx s} expands a string literal to a \texttt{String.ofList} application,
+then, if the head is a constructor, returns the argument at position
+$\texttt{numParams} + \texttt{idx}$ (and \texttt{none} if that position does not exist).
+\texttt{reduceProj} first normalizes the structure argument, with \texttt{whnfCore} instead of
+\texttt{whnf} when \texttt{cheapProj} is set. No thesis counterpart: this is the reduction rule
+the \texttt{trproj} branch models. \texttt{reduceProj}, \texttt{whnfCore} (\ref{def:kernel-whnf-core})
+and \texttt{whnf} (\ref{def:kernel-whnf}) are mutually recursive; to keep the dependency graph
+acyclic only the back-edges from those later nodes to this one are recorded via \texttt{\textbackslash uses}.
+\reviewnote{The comment at \srcloc{Lean4Lean/TypeChecker.lean}{356} states that the explicit
+\texttt{>>=} is written that way because \texttt{reduceProj.WF} ``cannot see through'' the
+\texttt{do}-elaborator's bind lifting. That is the implementation being bent to suit its proof;
+defensible in a verification-first project, but worth naming.}
+\end{definition}
+
+\begin{definition}[Delta reduction, \texttt{unfoldDefinition}]
+\label{def:kernel-delta-unfold}
+\lean{Lean4Lean.TypeChecker.Inner.isDelta, Lean4Lean.TypeChecker.Inner.instantiateDeltaValue, Lean4Lean.TypeChecker.Inner.unfoldDefinitionCore, Lean4Lean.TypeChecker.Inner.unfoldDefinition}
+\leanok
+\uses{def:kernel-delta-value}
+\texttt{isDelta} recognizes an expression whose head is a constant that has a delta value and is
+applied to exactly \texttt{numLevelParams} universe arguments. \texttt{unfoldDefinitionCore}
+replaces such a head constant by its value with the level parameters instantiated, memoizing the
+result in the \texttt{unfold} cache when the level list is non-empty;
+\texttt{unfoldDefinition} does the same at the head of an application and re-applies the
+arguments.
+\thesisref{axioms.tex \S2.5, $c_{\bar\ell} \rightsquigarrow v_{\bar\ell}(c)$}
+\end{definition}
+
+\begin{definition}[Primitive \texttt{Nat} reduction, \texttt{reduceNat}]
+\label{def:kernel-reduce-nat}
+\lean{Lean4Lean.TypeChecker.Inner.reduceNat, Lean4Lean.TypeChecker.Inner.reduceBinNatOp, Lean4Lean.TypeChecker.Inner.reduceBinNatPred, Lean4Lean.TypeChecker.Inner.reducePow, Lean4Lean.TypeChecker.Inner.rawNatLitExt?, Lean4Lean.TypeChecker.Inner.reduceNative, Lean4Lean.TypeChecker.Inner.reducePowMaxExp}
+\leanok
+The fast path for machine arithmetic: a unary \texttt{Nat.succ} application and the binary
+\texttt{add}, \texttt{sub}, \texttt{mul}, \texttt{pow}, \texttt{gcd}, \texttt{mod}, \texttt{div},
+\texttt{land}, \texttt{lor}, \texttt{xor}, \texttt{shiftLeft} and \texttt{shiftRight} reduce to a
+\texttt{Nat} literal when their arguments normalize to literals, and \texttt{beq}/\texttt{ble} to
+a \texttt{Bool} literal. \texttt{reducePow} refuses exponents above
+$\texttt{reducePowMaxExp} = 2^{24}$. \texttt{reduceNative} throws on \texttt{reduceBool} and
+\texttt{reduceNat} markers, which lean4lean does not support because that would require verified
+compilation. \texttt{reduceNat} and \texttt{whnf} (\ref{def:kernel-whnf}) are mutually recursive;
+the edge is recorded only in that other direction to keep the dependency graph acyclic.
+\reviewnote{This is the one place where the checker's answers depend on the prelude really
+defining \texttt{Nat.add} and friends correctly, which is why
+Definition \ref{def:kernel-primitive-checkdef} exists. The exponent cap is a silent
+incompleteness (a legitimate \texttt{Nat.pow} simply fails to reduce) and is not listed in
+\texttt{divergences.md}, though the C++ kernel has the same cap.}
+\end{definition}
+
+\begin{definition}[Weak-head normalization without delta, \texttt{whnfCore'}]
+\label{def:kernel-whnf-core}
+\lean{Lean4Lean.TypeChecker.Inner.whnfCore', Lean4Lean.TypeChecker.Inner.whnfCore, Lean4Lean.TypeChecker.Inner.whnfFVar, Lean4Lean.TypeChecker.Inner.isLetFVar}
+\leanok
+\uses{def:kernel-reduce-recursor, def:kernel-reduce-proj}
+Reduces to weak-head normal form using $\beta$ (iterated at the head, with the remaining arguments
+re-applied), $\zeta$ (\texttt{let} and let-bound free variables, via \texttt{whnfFVar}), $\iota$
+(through \texttt{reduceRecursor}) and projection reduction, but never unfolding definitions.
+Results are memoized unless \texttt{cheapProj} is set, in which case the structure argument of a
+projection is reduced only with \texttt{whnfCore} and nothing is cached.
+\thesisref{axioms.tex \S2.3, the head reduction $e \rightsquigarrow^* k$; the $\beta$, $\zeta$ and $\iota$ rules}
+\reviewnote{The docstring records that the C++ companion flag \texttt{cheap\_rec} is omitted
+because nothing has set it since lean4\#9275, and the comment at
+\srcloc{Lean4Lean/TypeChecker.lean}{404} justifies the re-decomposition branch. Both are the kind
+of invariant note the proofs need.}
+\end{definition}
+
+\begin{definition}[Full weak-head normalization, \texttt{whnf'}]
+\label{def:kernel-whnf}
+\lean{Lean4Lean.TypeChecker.Inner.whnf', Lean4Lean.TypeChecker.Inner.whnf, Lean4Lean.TypeChecker.whnf}
+\leanok
+\uses{def:kernel-whnf-core, def:kernel-reduce-nat, def:kernel-delta-unfold}
+Iterates \texttt{whnfCore'}, then \texttt{reduceNative} (which only ever throws or declines), then
+\texttt{reduceNat}, then a single $\delta$-unfolding step, stopping when no rule applies. The loop
+is bounded by \texttt{FuelConfig.whnf}, or \texttt{whnfEager} in an \texttt{eagerReduce} context,
+and throws \texttt{.deterministicTimeout} on exhaustion. Easy syntactic cases are returned without
+caching; everything else is memoized.
+\thesisref{axioms.tex \S2.3, $e \rightsquigarrow^* k$; unique.tex \S4 (sec:kappa), $\rightsquigarrow_\kappa$ over $\beta\delta\zeta\iota$}
+\end{definition}
+
+\begin{definition}[Normalization to a sort or a pi type]
+\label{def:kernel-ensure-sort-forall}
+\lean{Lean4Lean.TypeChecker.Inner.ensureSortCore, Lean4Lean.TypeChecker.Inner.ensureForallCore}
+\leanok
+\uses{def:kernel-whnf}
+\texttt{ensureSortCore e s} returns an $e' = \mathsf{Sort}\;\ell$ definitionally equal to $e$,
+by weak-head normalization, and otherwise throws \texttt{typeExpected} blaming $s$;
+\texttt{ensureForallCore} does the same for $\forall x:\alpha.\,\beta$, blaming the application
+that required a function type.
+\thesisref{axioms.tex \S2.1, the premises $\Gamma \vdash \alpha : \mathcal{U}_\ell$ of the $\forall$ and application rules}
+\end{definition}
+
+\section{Type inference}
+
+\begin{definition}[Typing of constants and free variables]
+\label{def:kernel-infer-constant}
+\lean{Lean4Lean.TypeChecker.Inner.inferConstant, Lean4Lean.TypeChecker.Inner.checkLevel, Lean4Lean.TypeChecker.Inner.inferFVar}
+\leanok
+\uses{def:kernel-level-getundefparam, family:kernel-env-checks}
+The type of $c_{\bar\ell}$ is the declaration's type instantiated at $\bar\ell$, after checking
+that the number of levels matches \texttt{levelParams}. When \texttt{inferOnly} is false it
+additionally rejects an unsafe constant used from non-unsafe code, a \texttt{partial} definition
+used from safe code, and any $\ell_i$ mentioning a universe parameter outside $\bar u$.
+\texttt{inferFVar} reads the type of a free variable out of $\Gamma$.
+\thesisref{axioms.tex \S2.1 and \S2.5, $\vdash c_{\bar\ell} : \tau_{\bar\ell}(c)$ and $(x{:}\alpha) \in \Gamma$ implies $\Gamma \vdash x : \alpha$}
+\reviewnote{The safety discipline \texttt{.safe}/\texttt{.partial}/\texttt{.unsafe} is outside the
+thesis's system; it is the extra structure that the safety-indexed abstract environments of the
+verification layer exist to model.}
+\end{definition}
+
+\begin{definition}[Typing of binders and applications]
+\label{def:kernel-infer-binders}
+\lean{Lean4Lean.TypeChecker.Inner.inferLambda, Lean4Lean.TypeChecker.Inner.inferForall, Lean4Lean.TypeChecker.Inner.inferLet, Lean4Lean.TypeChecker.Inner.inferApp}
+\leanok
+\uses{def:kernel-ensure-sort-forall, def:kernel-monad-localnamegen, def:kernel-cheap-beta}
+Telescope-at-a-time typing. A lambda's type is the pi over its collected binders of the body's
+type after \texttt{cheapBetaReduce}; a pi's type is $\mathcal{U}_{\mathrm{imax}(\ell_1,\dots,\ell_n,\ell)}$
+folded with \texttt{mkLevelIMax'} over the binder levels; a \texttt{let} checks the value against
+the ascribed type (when \texttt{inferOnly} is false) and binds a let-declaration;
+\texttt{inferApp} walks an application spine in one pass, instantiating the pi bodies lazily with
+\texttt{instantiateRevRange}.
+\thesisref{axioms.tex \S2.1, the $\lambda$, $\forall$ and application rules; \S2.4 for \texttt{let}}
+\reviewnote{\texttt{inferApp} is the \texttt{inferOnly := true} fast path and is correct only on
+already well-typed terms; the precondition is recorded in the \texttt{isDefEqCore} docstring at
+\srcloc{Lean4Lean/TypeChecker.lean}{172} rather than on \texttt{inferApp} itself.}
+\end{definition}
+
+\begin{definition}[Typing of structure projections, \texttt{inferProj}]
+\label{def:kernel-infer-proj}
+\lean{Lean4Lean.TypeChecker.Inner.inferProj}
+\leanok
+\uses{def:kernel-whnf}
+The type of \texttt{.proj S i e}: normalize the type of $e$ to an application $I\;\bar a$, require
+$I$ to be \texttt{S} and a single-constructor inductive with
+$|\bar a| = \texttt{numParams} + \texttt{numIndices}$, instantiate the constructor's type at the
+structure's levels and then at the parameters, walk $i$ binders instantiating each dependent field
+with \texttt{.proj S j e}, and return the domain of the next binder. If the structure's universe
+is not \texttt{isNeverZero}, every dependent field's domain and the result must additionally be a
+proposition, checked with \texttt{isProp} (\ref{def:kernel-proof-irrel}). No thesis counterpart:
+the thesis's type theory has no \texttt{proj}. This definition and \ref{def:kernel-proof-irrel}
+are mutually recursive (through \ref{def:kernel-infer-type}); only the back-edges into this node
+are recorded via \texttt{\textbackslash uses} to keep the dependency graph acyclic.
+\reviewnote{A documented divergence: lean4lean tests \texttt{isNeverZero} where the C++ kernel
+tests \texttt{!isAlwaysZero}, deliberately keeping \texttt{proj} no stronger than the recursor the
+kernel generates for the same type. This directly bounds the scope of the \texttt{trproj}
+\texttt{inferProj.WF} and \texttt{TrProj} results.}
+\end{definition}
+
+\begin{definition}[The algorithmic typing judgment, \texttt{inferType'}]
+\label{def:kernel-infer-type}
+\lean{Lean4Lean.TypeChecker.Inner.inferType', Lean4Lean.TypeChecker.Inner.inferType}
+\leanok
+\uses{def:kernel-infer-constant, def:kernel-infer-binders, def:kernel-infer-proj}
+The main recursion. Loose bound variables are rejected outright and results are memoized in one of
+two caches according to \texttt{inferOnly}. With \texttt{inferOnly := false} it implements Lean's
+algorithmic typing judgment in full, checking level scopes, the existence of the literal types
+\texttt{Nat}, \texttt{Char.ofNat} and \texttt{String.ofList}, and, at every application, that the
+argument's type is definitionally equal to the domain (\ref{def:kernel-isdefeq-core}); with
+\texttt{inferOnly := true} it assumes well-typedness and takes the \texttt{inferApp} fast path.
+This definition and \ref{def:kernel-isdefeq-core} are mutually recursive; only the back-edge from
+\ref{def:kernel-isdefeq-core} is recorded via \texttt{\textbackslash uses} to keep the dependency graph acyclic.
+\thesisref{typesys.tex \S3, the algorithmic judgment $\Gamma \Vdash e : \alpha$ and the failure of subject reduction}
+\reviewnote{The \texttt{eagerReduce} escape hatch at \srcloc{Lean4Lean/TypeChecker.lean}{299}
+changes definitional-equality behaviour on a \emph{syntactic} test for core Lean's
+\texttt{eagerReduce} marker in an argument, and is consulted again at lines 541, 782 and 845. It
+mirrors upstream Lean, so it is rightly not a divergence, but it has no thesis counterpart and no
+local documentation of what the four sites jointly guarantee.}
+\end{definition}
+
+\section{Definitional equality}
+
+\begin{definition}[Reduction-free cases, \texttt{quickIsDefEq}]
+\label{def:kernel-quick-isdefeq}
+\lean{Lean4Lean.TypeChecker.Inner.quickIsDefEq, Lean4Lean.TypeChecker.Inner.isDefEqLambda, Lean4Lean.TypeChecker.Inner.isDefEqForall}
+\leanok
+\uses{def:kernel-equiv-manager, def:kernel-level-isequiv}
+Decides the cases of $\Gamma \vdash t \Leftrightarrow s$ that need no reduction: $\alpha$-equivalence
+or a previously recorded success through the \texttt{EquivManager}, two sorts by level
+equivalence, two literals by equality, two \texttt{mdata} wrappers by their payloads, and two
+lambdas or two pis by \texttt{isDefEqLambda}/\texttt{isDefEqForall}, which compare domains and
+recurse under a delayed substitution. Everything else returns \texttt{.undef} and is deferred.
+This definition and \texttt{isDefEqCore} (\ref{def:kernel-isdefeq-core}) are mutually recursive;
+only the back-edge from \ref{def:kernel-isdefeq-core} is recorded via \texttt{\textbackslash uses} to keep the
+dependency graph acyclic.
+\thesisref{axioms.tex \S2.3, the congruence rules of $\Leftrightarrow$ and $\ell \equiv \ell'$ implies $\mathcal{U}_\ell \equiv \mathcal{U}_{\ell'}$}
+\reviewnote{The \texttt{modifyGet} at \srcloc{Lean4Lean/TypeChecker.lean}{593} destructures
+\texttt{TypeChecker.State} positionally as \texttt{.mk a1 \dots a7 (eqvManager := m)}; adding or
+reordering a field silently changes what this matches. A named \texttt{modifyGet} would be
+equivalent and robust.}
+\end{definition}
+
+\begin{definition}[Auxiliary definitional-equality rules]
+\label{family:kernel-isdefeq-aux}
+\lean{Lean4Lean.TypeChecker.Inner.isDefEqArgs, Lean4Lean.TypeChecker.Inner.isDefEqApp, Lean4Lean.TypeChecker.Inner.isDefEqOffset, Lean4Lean.TypeChecker.Inner.isDefEqUnitLike, Lean4Lean.TypeChecker.Inner.tryStringLitExpansionCore, Lean4Lean.TypeChecker.Inner.tryStringLitExpansion, Lean4Lean.TypeChecker.Inner.isNatZero, Lean4Lean.TypeChecker.Inner.isNatSuccOf?}
+\leanok
+\uses{def:kernel-lit-to-ctor}
+The remaining special cases: congruence on application spines, with
+\texttt{isDefEqApp} comparing argument counts before heads and \texttt{isDefEqArgs} assuming the
+heads already agree and recursing through \texttt{isDefEqCore} (\ref{def:kernel-isdefeq-core});
+the \texttt{Nat} offset rule reducing $n{+}1 \Leftrightarrow m{+}1$ to $n \Leftrightarrow m$
+whether written as literals or \texttt{Nat.succ} applications; string-literal expansion against a
+\texttt{String.ofList} application; and \texttt{isDefEqUnitLike}, which equates any two elements
+of a non-recursive one-constructor type with no fields and no indices. This family and
+\ref{def:kernel-isdefeq-core} are mutually recursive; only the back-edge from
+\ref{def:kernel-isdefeq-core} is recorded via \texttt{\textbackslash uses} to keep the dependency graph acyclic.
+\reviewnote{\texttt{isDefEqUnitLike} is not derivable from the thesis's rules; it is an extra
+definitional equality the C++ kernel has, and the model has to account for it. Two entries of
+\texttt{divergences.md} cover this family (argument-count-before-head, and the \texttt{whnf}
+removed from \texttt{tryStringLitExpansionCore}).}
+\end{definition}
+
+\begin{definition}[Eta and structure-eta]
+\label{def:kernel-eta-rules}
+\lean{Lean4Lean.TypeChecker.Inner.tryEtaExpansionCore, Lean4Lean.TypeChecker.Inner.tryEtaExpansion, Lean4Lean.TypeChecker.Inner.tryEtaStructCore, Lean4Lean.TypeChecker.Inner.tryEtaStruct}
+\leanok
+\uses{def:kernel-infer-type, def:kernel-is-nonrec-structure}
+Function $\eta$: when exactly one side is a lambda, compare it with
+$\lambda x{:}A.\,s\;x$, where $(x:A) \to B$ is the inferred type of the other side. Structure
+$\eta$: when one side is a saturated constructor application of a non-recursive structure and the
+two sides have definitionally equal types, compare each constructor argument beyond the parameters
+with the corresponding projection of the other side. Both are tried in each direction, recursing
+into \texttt{isDefEqCore} (\ref{def:kernel-isdefeq-core}) on the compared subterms; this
+definition and \ref{def:kernel-isdefeq-core} are mutually recursive, and only the back-edge from
+\ref{def:kernel-isdefeq-core} is recorded via \texttt{\textbackslash uses} to keep the dependency graph acyclic.
+\thesisref{axioms.tex \S2.2, the $\eta$ rule; structure $\eta$ has no thesis counterpart}
+\reviewnote{The comment at \srcloc{Lean4Lean/TypeChecker.lean}{654} documents that both symmetric
+calls in \texttt{tryEtaStruct} redo work \texttt{isDefEqApp} already did, and that the C++ kernel
+has the same redundancy. Matching the kernel rather than optimizing is the right call here.}
+\end{definition}
+
+\begin{definition}[Proof irrelevance, \texttt{isDefEqProofIrrel}]
+\label{def:kernel-proof-irrel}
+\lean{Lean4Lean.TypeChecker.Inner.isDefEqProofIrrel, Lean4Lean.TypeChecker.Inner.isProp, Lean4Lean.TypeChecker.Inner.getSortLevel}
+\leanok
+\uses{def:kernel-infer-type, def:kernel-ensure-sort-forall}
+Two terms are definitionally equal if the inferred type of the first is a proposition and the two
+inferred types are definitionally equal (\ref{def:kernel-isdefeq-core}); otherwise the test
+returns \texttt{.undef}. \texttt{getSortLevel} (\srcloc{Lean4Lean/TypeChecker.lean}{224}) infers a
+type and normalizes it to a sort, and \texttt{isProp} asks whether that level
+\texttt{isAlwaysZero}. This definition and \ref{def:kernel-isdefeq-core} are mutually recursive;
+only the back-edge from \ref{def:kernel-isdefeq-core} is recorded via \texttt{\textbackslash uses} to keep the
+dependency graph acyclic.
+\thesisref{axioms.tex \S2.2, proof irrelevance; typesys.tex \S3 (sec:undecidable), why this makes $\equiv$ undecidable}
+\reviewnote{\texttt{isProp} tests \texttt{isAlwaysZero} while \texttt{inferProj} and
+\texttt{toCtorWhenStruct} test \texttt{isNeverZero} for the opposite question. The asymmetry is
+deliberate and explained in \texttt{divergences.md}, but the two spellings sitting in one file
+invite confusion.}
+\end{definition}
+
+\begin{definition}[Lazy delta reduction, \texttt{lazyDeltaReduction}]
+\label{def:kernel-lazy-delta}
+\lean{Lean4Lean.TypeChecker.Inner.lazyDeltaReductionStep, Lean4Lean.TypeChecker.Inner.lazyDeltaReduction, Lean4Lean.TypeChecker.Inner.lazyDeltaProjReduction, Lean4Lean.TypeChecker.Inner.tryUnfoldProjApp, Lean4Lean.TypeChecker.Inner.failedBefore, Lean4Lean.TypeChecker.Inner.cacheFailure, Lean4Lean.TypeChecker.ReductionStatus, Lean4Lean.TypeChecker.ReductionStatus.bool}
+\leanok
+\uses{def:kernel-delta-unfold, def:kernel-quick-isdefeq, family:kernel-isdefeq-aux, axiom:kernel-ptr-eq, def:kernel-reducibility-lt, def:kernel-reduce-nat}
+The heuristic heart of definitional equality. Given two \texttt{cheapProj} weak-head normal forms,
+each step tries the \texttt{Nat} offset rule, then literal and native reduction, then one
+\texttt{lazyDeltaReductionStep}: unfold whichever side has the strictly more reducible head by
+\texttt{ReducibilityHints.lt'}, retrying an unreduced projection head with \texttt{tryUnfoldProjApp}
+when only one side is $\delta$-reducible; and when both heads are the same regular definition (a
+test that uses \texttt{ptrEqConstantInfo}), first compare level arguments and then arguments
+congruentially, caching the failure before unfolding both. The loop is bounded by
+\texttt{FuelConfig.lazyDelta}. \texttt{lazyDeltaProjReduction} is the analogue for two projections
+at the same index, falling back to comparing the projected fields.
+\thesisref{axioms.tex \S2.5, $\delta$ inside $\Leftrightarrow$; typesys.tex \S3, algorithmic equality is not transitive}
+\reviewnote{\texttt{ptrEqConstantInfo} is used here as a \emph{semantic} test, not an
+optimization: two different addresses for the same \texttt{ConstantInfo} select a different
+branch. That is precisely what the \texttt{PtrEq} docstring warns about and why
+\texttt{ptrEqConstantInfo\_eq} must be an axiom.}
+\end{definition}
+
+\begin{definition}[Algorithmic definitional equality, \texttt{isDefEqCore'}]
+\label{def:kernel-isdefeq-core}
+\lean{Lean4Lean.TypeChecker.Inner.isDefEqCore', Lean4Lean.TypeChecker.Inner.isDefEqCore, Lean4Lean.TypeChecker.Inner.isDefEq, Lean4Lean.TypeChecker.isDefEq}
+\leanok
+\uses{def:kernel-quick-isdefeq, def:kernel-whnf-core, def:kernel-proof-irrel, def:kernel-lazy-delta, family:kernel-isdefeq-aux, def:kernel-eta-rules, axiom:kernel-ptr-eq}
+The decision procedure for $\Gamma \vdash t \Leftrightarrow s$, in order: the quick cases with
+hashing; the asymmetric shortcut normalizing $t$ when $s$ is the constant \texttt{true};
+\texttt{cheapProj} weak-head normalization of both sides followed by the quick cases again (skipped
+when \texttt{ptrEqExpr} says neither side moved); proof irrelevance; lazy delta reduction;
+syntactic equality of constants with equivalent levels, of free variables, and of projections at
+the same index (which hands over to \texttt{lazyDeltaProjReduction}); a full \texttt{whnfCore} of
+both sides with a restart if a projection reduced; and finally congruence on applications,
+$\eta$, structure $\eta$, string-literal expansion and the unit-like rule.
+\thesisref{axioms.tex \S2.3, $\Gamma \vdash e \Leftrightarrow e'$; typesys.tex \S3, item:alg\_defn}
+\reviewnote{This is the function whose correctness is the entire point of the verification. The
+\texttt{s.isConstOf ``true} shortcut at \srcloc{Lean4Lean/TypeChecker.lean}{845} is an asymmetric
+special case for \texttt{Decidable} instances with neither a thesis counterpart nor a
+\texttt{divergences.md} entry.}
+\end{definition}
+
+\section{Type checker entry points}
+
+\begin{definition}[Type checker entry points]
+\label{family:kernel-tc-entrypoints}
+\lean{Lean4Lean.TypeChecker.whnfCore, Lean4Lean.TypeChecker.unfoldDefinition, Lean4Lean.TypeChecker.inferType, Lean4Lean.TypeChecker.checkType, Lean4Lean.TypeChecker.isProp, Lean4Lean.TypeChecker.ensureSort, Lean4Lean.TypeChecker.ensureForall, Lean4Lean.TypeChecker.ensureType, Lean4Lean.TypeChecker.M.runTermElab, Lean4Lean.TypeChecker.RecM.runTermElab}
+\leanok
+\uses{structure:kernel-methods-fuel}
+The \texttt{M}-level wrappers that run the fuel-bounded \texttt{RecM} operations at the configured
+recursion depth, together with \texttt{checkType} (inference with \texttt{inferOnly := false}),
+\texttt{ensureType}, and the \texttt{TermElabM} lifts used to call the kernel from inside Lean
+elaboration for testing.
+\reviewnote{A commented-out \texttt{example}/\texttt{run\_tac} block at
+\srcloc{Lean4Lean/TypeChecker.lean}{968} is leftover scratch code that should be either a real
+test or deleted.}
+\end{definition}
+
+\begin{definition}[Eta expansion to full arity, \texttt{etaExpand}]
+\label{def:kernel-eta-expand}
+\lean{Lean4Lean.TypeChecker.etaExpand}
+\leanok
+\uses{def:kernel-whnf, family:kernel-tc-entrypoints, def:kernel-monad-localnamegen}
+Walks under a term's existing binders, then repeatedly normalizes its type and adds one binder per
+pi, bounded by \texttt{FuelConfig.etaExpand}, finally rebuilding the lambda over all collected
+variables applied to the accumulated arguments. If the type is not a pi after the first
+normalization the original term is returned.
+\thesisref{unique.tex \S4 (sec:kappa), the $\eta$-expansion map $\bar e$ and $\mathrm{rec}$-normal form}
+\reviewnote{This function has no call site anywhere under \texttt{Lean4Lean/}. If it is meant to
+realize the thesis's $\mathrm{rec}$-normal-form preprocessing, which saturates every
+$\mathrm{rec}$ and $\mathrm{lift}$ before $\kappa$-reduction is even defined, that intent is
+undocumented, and the executable kernel never enforces $\mathrm{rec}$-normal form. This matters:
+the saturation hypothesis of \texttt{inductiveReduceRecCore.WF} is the executable counterpart of
+exactly that preprocessing.}
+\end{definition}
+
+\section{Inductive declarations}
+
+\begin{definition}[State of the inductive-block adder]
+\label{structure:kernel-addinductive-ctx}
+\lean{Lean4Lean.AddInductive.RecInfo, Lean4Lean.AddInductive.InductiveStats, Lean4Lean.AddInductive.Context, Lean4Lean.AddInductive.M}
+\leanok
+\uses{structure:kernel-tc-monad, def:kernel-monad-localnamegen}
+\texttt{InductiveStats} records what the block-wide checks share: the local context, the universe
+arguments and the result level $\ell$, the per-type index counts, the constants standing for the
+block's types, the free variables for the parameters $a{::}\alpha$, and whether $\ell$ is
+provably nonzero. \texttt{RecInfo} records one recursor's motive, minor premises, indices and
+major premise. \texttt{M} is \texttt{ReaderT Context (Except Exception)} with a \texttt{MonadLift}
+from \texttt{TypeChecker.M}, so a type checker action runs in the block's context.
+\thesisref{axioms.tex \S2.6 (sec:inductive), the labelling $F = \forall a{::}\alpha.\ \mathcal{U}_\ell$ and $K = \sum_c (c : \forall b{::}\beta.\ t\;p[b])$}
+\end{definition}
+
+\begin{definition}[Checking and declaring the block's type constants]
+\label{def:kernel-check-inductive-types}
+\lean{Lean4Lean.AddInductive.checkInductiveTypes, Lean4Lean.AddInductive.declareInductiveTypes, Lean4Lean.AddInductive.isRec, Lean4Lean.AddInductive.isReflexive, Lean4Lean.AddInductive.hasIndOcc}
+\leanok
+\uses{family:kernel-tc-entrypoints, structure:kernel-addinductive-ctx}
+Type-checks each declared family, walks its telescope requiring the first \texttt{nparams} binders
+to be definitionally equal to the parameters fixed by the first type, counts the remaining binders
+as indices, and requires the result to be a sort whose level is equivalent across the whole block.
+It then declares the block's type constants in the environment so that the constructors can be
+checked against them. \texttt{isRec} and \texttt{isReflexive} compute the flags stored in the
+\texttt{inductInfo}, both built on \texttt{hasIndOcc}.
+\thesisref{axioms.tex \S2.6.1 (sec:inductive), the $\mathsf{spec}$ judgment}
+\end{definition}
+
+\begin{definition}[Strict positivity check, \texttt{checkPositivity}]
+\label{def:kernel-check-positivity}
+\lean{Lean4Lean.AddInductive.checkPositivity, Lean4Lean.AddInductive.isRecArg, Lean4Lean.AddInductive.isValidIndApp?, Lean4Lean.AddInductive.isValidIndAppIdx}
+\leanok
+\uses{def:kernel-check-inductive-types}
+Walks a constructor argument type: if it does not mention the block at all it is accepted; if it
+is a pi whose domain mentions the block it is rejected as a non-positive occurrence; otherwise the
+argument must end in a valid application $t\;\bar e$ of one of the block's types to exactly the
+block's parameters, with no further occurrence of the block among the indices
+(\texttt{isValidIndAppIdx}). The loop is bounded by \texttt{FuelConfig.inductiveFuel}.
+\thesisref{axioms.tex \S2.6.1 (sec:inductive), the two $\mathsf{ctor}$ rules}
+\reviewnote{The model-side counterpart on the \texttt{iota} branch is the positivity
+specification in \texttt{Theory/Inductive.lean} (Chapter \ref{chap:inductive}); the two should be
+cross-checked on nested and reflexive cases, which the kernel handles in
+\texttt{ElimNestedInductive} rather than in this judgment.}
+\end{definition}
+
+\begin{definition}[Checking and declaring constructors]
+\label{def:kernel-check-constructors}
+\lean{Lean4Lean.AddInductive.checkConstructors, Lean4Lean.AddInductive.declareConstructors}
+\leanok
+\uses{def:kernel-check-positivity, family:kernel-tc-entrypoints}
+For each constructor: reject a duplicate name, type-check its type, require its first binders to
+match the block's parameters, require every later argument's universe $\ell'$ to satisfy
+$\ell' \le \ell$ unless $\ell$ is always zero (using the complete \texttt{geq'}), run the
+positivity check on it unless the block is unsafe, and require the result to be a valid
+application of the constructor's own type. \texttt{declareConstructors} then adds each
+\texttt{ctorInfo} with its parameter count and field count $= \text{arity} - \texttt{numParams}$.
+\thesisref{axioms.tex \S2.6.1 (sec:inductive), the $\mathsf{ctor}$ judgment and its universe side condition}
+\end{definition}
+
+\begin{definition}[Large elimination and K-likeness]
+\label{def:kernel-large-elim}
+\lean{Lean4Lean.AddInductive.isLargeEliminator, Lean4Lean.AddInductive.getElimLevel, Lean4Lean.AddInductive.isKTarget}
+\leanok
+\uses{family:kernel-tc-entrypoints}
+\texttt{isLargeEliminator} is true when the result universe is provably nonzero, or when the block
+is a single type with no constructors, or with one constructor all of whose non-parameter
+arguments are either propositions or appear among the arguments of the output type (the thesis's
+$y \in e$ side condition). \texttt{getElimLevel} then returns a fresh universe variable, and
+$0$ otherwise. \texttt{isKTarget} is true for a single type in an always-zero universe with one
+constructor that has no fields beyond the parameters.
+\thesisref{axioms.tex \S2.6.2 (sec:large\_elim), the $\mathsf{LE}$ and $\mathsf{LE}$-$\mathsf{ctor}$ judgments}
+\end{definition}
+
+\begin{definition}[Motives and minor premises, \texttt{mkRecInfos}]
+\label{def:kernel-mk-rec-infos}
+\lean{Lean4Lean.AddInductive.mkRecInfos, Lean4Lean.AddInductive.mkRecInfos.loopArgs1, Lean4Lean.AddInductive.mkRecInfos.loopInd1, Lean4Lean.AddInductive.mkRecInfos.loopCtorArgs, Lean4Lean.AddInductive.mkRecInfos.loopUArgs, Lean4Lean.AddInductive.mkRecInfos.loopU, Lean4Lean.AddInductive.mkRecInfos.loopCtors, Lean4Lean.AddInductive.mkRecInfos.loopInd2}
+\leanok
+\uses{def:kernel-large-elim, def:kernel-monad-localnamegen}
+Builds, per type of the block, the indices, the major premise $t : I\;\bar a\;\bar i$ and the
+motive $C : \forall \bar i,\ I\;\bar a\;\bar i \to \mathcal{U}_u$ at the elimination level, and
+then, per constructor, the minor premise
+$\varepsilon_c = \forall b{::}\beta,\ \forall v{::}\delta,\ C\;p[b]\;(c\;b)$ with
+$\delta_i = \forall x{::}\xi_i,\ C\;\pi_i[b,x]\;(u_i\;x)$ for each recursive argument, where the
+recursive arguments are those \texttt{isRecArg} accepts.
+\thesisref{axioms.tex \S2.6.3, the definitions of $\kappa$, $\varepsilon$ and $\delta$}
+\reviewnote{A tower of continuation-passing loops with hand-written \texttt{termination\_by}, split
+into standalone functions because they would not compile together as \texttt{let rec}s. It is
+readable only against the thesis's notation, and there is no docstring pointing at \S2.6.3.}
+\end{definition}
+
+\begin{definition}[Generation of the $\iota$ rules, \texttt{mkRecRules}]
+\label{def:kernel-mk-rec-rules}
+\lean{Lean4Lean.AddInductive.mkRecRules, Lean4Lean.AddInductive.getRecLevels, Lean4Lean.AddInductive.getRecLevelParams}
+\leanok
+\uses{def:kernel-mk-rec-infos}
+For each constructor, builds the \texttt{RecursorRule} with \texttt{nfields} the number of
+non-parameter constructor arguments and right-hand side
+$\lambda \bar a\,\bar C\,\bar e\,b{::}\beta.\ e_c\;b\;v$ where
+$v_i = \lambda x{::}\xi_i.\ \mathrm{rec}_{P_j}\;\bar a\;\bar C\;\bar e\;\pi_i[b,x]\;(u_i\;x)$, at
+the recursor's levels (the elimination level prepended when it is a parameter). These rules are
+exactly what \texttt{inductiveReduceRecCore} later consumes.
+\thesisref{axioms.tex \S2.6.4 (sec:iota), $\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b) \equiv e_c\;b\;v$}
+\reviewnote{This is the producer side of the contract whose consumer side
+\texttt{inductiveReduceRecCore.WF} verifies, and the \texttt{iota} branch's model of the $\iota$
+rule is a model of exactly these rules; it is the right place to look when judging whether that
+specification is faithful.}
+\end{definition}
+
+\begin{definition}[Adding a non-nested inductive block, \texttt{AddInductive.run}]
+\label{def:kernel-addinductive-run}
+\lean{Lean4Lean.AddInductive.run}
+\leanok
+\uses{def:kernel-check-inductive-types, def:kernel-check-constructors, def:kernel-large-elim, def:kernel-mk-rec-infos, def:kernel-mk-rec-rules}
+The whole pipeline for one block: reject duplicate universe parameters, check and declare the
+types, check and declare the constructors, compute the elimination level and the K-like flag,
+build the motives and minor premises, and add one \texttt{recInfo} per type whose type is
+$\forall \bar a,\ \bar C,\ \bar e,\ \bar i,\ (z : I\;\bar a\;\bar i),\ C\;\bar i\;z$ and whose
+rules come from \texttt{mkRecRules}.
+\thesisref{axioms.tex \S2.6 (sec:inductive) in its entirety}
+\reviewnote{The binding \texttt{isUnsafe}, read from the context safety, is computed twice, at
+\srcloc{Lean4Lean/Inductive/Add.lean}{453} and again at
+\srcloc{Lean4Lean/Inductive/Add.lean}{470}, the second shadowing the first. The recursor type is
+built with \texttt{type.inferImplicit 1000 false}, a magic constant whose accompanying comment
+notes that the flag's polarity is inverted relative to C++.}
+\end{definition}
+
+\begin{definition}[Nested inductive elimination, \texttt{ElimNestedInductive.run}]
+\label{def:kernel-elim-nested}
+\lean{Lean4Lean.ElimNestedInductive.run, Lean4Lean.ElimNestedInductive.Result, Lean4Lean.ElimNestedInductive.Result.restoreNested, Lean4Lean.ElimNestedInductive.Result.restoreCtorName, Lean4Lean.ElimNestedInductive.replaceIfNested, Lean4Lean.ElimNestedInductive.replaceAllNested, Lean4Lean.ElimNestedInductive.isNestedInductiveApp?, Lean4Lean.ElimNestedInductive.mkUniqueName}
+\leanok
+Rewrites a nested inductive block into a mutual one: each nested occurrence inside a constructor
+type is replaced by a fresh auxiliary inductive declared in the same block, with the correspondence
+recorded in \texttt{aux2nested}; \texttt{restoreNested} and \texttt{restoreCtorName} invert the
+rewrite afterwards on the generated constructor types, recursor types and rule right-hand sides.
+No thesis counterpart: the thesis's $\mu\,t{:}F.\,K$ has no nested inductives.
+\reviewnote{Fully unverified and the largest source of \texttt{unreachable!}/\texttt{assert!} in
+the kernel. Three \texttt{divergences.md} entries concern it, one of which admits an actual hole:
+\texttt{restoreCtorName}'s \texttt{unreachable!} would continue with a default value, and a
+restored rule constructor \emph{name} is covered by no later re-check, since lean4lean also skips
+lean4\#14621's recheck of restored declarations.}
+\end{definition}
+
+\begin{definition}[The inductive declaration entry point, \texttt{addInductive}]
+\label{def:kernel-add-inductive}
+\lean{Lean4Lean.Environment.addInductive, Lean4Lean.mkAuxRecNameMap, Lean4Lean.checkNoNestedAux}
+\leanok
+\uses{def:kernel-elim-nested, def:kernel-addinductive-run, family:kernel-tc-entrypoints}
+Checks the block's types and constructor types for metavariables and free variables and its
+constructor types for the reserved \texttt{\_nested} prefix, runs nested-inductive elimination,
+adds the resulting block with \texttt{AddInductive.run}, and, when nesting occurred, restores the
+nested occurrences in the constructor and recursor declarations, renames the auxiliary recursors
+through \texttt{mkAuxRecNameMap}, and finally type-checks the recorded nested applications.
+\thesisref{axioms.tex \S2.6 (sec:inductive)}
+\reviewnote{This is the function for which \texttt{addDecl.WF}'s \texttt{inductDecl} case is
+\texttt{sorry} at \srcloc{Lean4Lean/Verify/Environment.lean}{208}: the \texttt{AddInduct} witness
+the model needs has to be constructed from here, and nobody has. Everything the \texttt{iota}
+branch proves about inductive blocks sits on the model side of that gap.}
+\end{definition}
+
+\section{Primitive declarations}
+
+\begin{definition}[The primitive recognizer's vocabulary]
+\label{family:kernel-primitive-dsl}
+\lean{Lean4Lean.Primitive.Reflection, Lean4Lean.Primitive.Condition, Lean4Lean.Primitive.ConditionImpl, Lean4Lean.Primitive.Probe, Lean4Lean.Primitive.unfoldWellFounded, Lean4Lean.Primitive.unfoldNatWellFounded, Lean4Lean.Primitive.checkNatFuelRec, Lean4Lean.Primitive.checkNatBoolCases, Lean4Lean.Primitive.microQq, Lean4Lean.lambdaTelescope}
+\leanok
+\uses{def:kernel-isdefeq-core, def:kernel-whnf}
+The small language the primitive checks are written in: \texttt{Reflection} describes the two
+shapes of \texttt{Decidable}-style reflection the prelude may use, \texttt{Condition} packages a
+decidable \texttt{Nat} predicate with its \texttt{ite}/\texttt{dite}/\texttt{decide} forms,
+\texttt{Probe} and \texttt{unfoldWellFounded} certify that a definition is the compiled form of a
+well-founded recursion and expose its equation body, and the \texttt{q(\dots)} elaborator (a
+hand-rolled mini-Qq built on \texttt{deriving ToExpr for Expr}) writes the expected expressions.
+\reviewnote{\texttt{deriving instance ToExpr} for \texttt{Syntax}, \texttt{KVMap} and \texttt{Expr}
+ties this file to the exact shape of core's \texttt{Expr} and \texttt{Syntax}. Acceptable for a
+recognizer, but it is compile-time-only machinery living inside the trusted kernel library.}
+\end{definition}
+
+\begin{definition}[Primitive definition recognizer, \texttt{Primitive.checkDef}]
+\label{def:kernel-primitive-checkdef}
+\lean{Lean4Lean.Primitive.checkDef}
+\leanok
+\uses{family:kernel-primitive-dsl, def:kernel-isdefeq-core}
+Dispatches on the declaration's name: for each of \texttt{Nat.add}, \texttt{pred}, \texttt{sub},
+\texttt{mul}, \texttt{pow}, \texttt{mod}, \texttt{div}, \texttt{gcd}, \texttt{beq}, \texttt{ble},
+\texttt{bitwise}, \texttt{land}, \texttt{lor}, \texttt{xor}, \texttt{shiftLeft},
+\texttt{shiftRight}, and for \texttt{Char.ofNat} and \texttt{String.ofList}, it checks that the
+definition actually supplied has the type and the definitional behaviour the GMP fast paths
+assume. It returns \texttt{true} when the name is primitive (which is what permits the reserved
+name) and \texttt{false} otherwise, and throws when the shape is wrong. No thesis counterpart:
+the thesis's system has no primitive arithmetic.
+\reviewnote{A genuine soundness gap in the C++ kernel that lean4lean closes, and the
+\texttt{run\_meta} self-test at the end of the file gives real assurance that it accepts the
+actual prelude. But the property it establishes is stated nowhere here; the connection to
+\texttt{reduceNat} is made only in \texttt{Verify/Environment/Primitive/}
+(Chapters \ref{chap:primitives-core} and \ref{chap:primitives-arith}), and a build-time test is
+not a proof.}
+\end{definition}
+
+\begin{definition}[Primitive inductive recognizer, \texttt{Primitive.checkInductive}]
+\label{def:kernel-primitive-checkinductive}
+\lean{Lean4Lean.Primitive.checkInductive}
+\leanok
+Returns \texttt{true} only for a safe, parameterless, non-universe-polymorphic single inductive in
+\texttt{Type} named \texttt{Bool} with constructors \texttt{false} then \texttt{true}, or
+\texttt{Nat} with \texttt{zero} then \texttt{succ : Nat} $\to$ \texttt{Nat}; anything else with
+those names throws. Constructor \emph{order} is checked, which matters because the literal
+representation and the constructor-order-sensitive fast paths depend on it, and because
+\texttt{Bool}'s constructor order is a known cross-system trap.
+\end{definition}
+
+\section{Declaration admission}
+
+\begin{definition}[Per-kind declaration checkers]
+\label{family:kernel-add-decls}
+\lean{Lean4Lean.checkConstantValBody, Lean4Lean.checkConstantVal, Lean4Lean.checkDefinitionBody, Lean4Lean.addAxiom, Lean4Lean.addDefinition, Lean4Lean.addTheorem, Lean4Lean.addOpaque, Lean4Lean.addMutual}
+\leanok
+\uses{family:kernel-tc-entrypoints, def:kernel-isdefeq-core, def:kernel-primitive-checkdef, family:kernel-env-checks}
+Each kind is checked before being committed. An axiom needs its type to be a well-formed type; a
+definition additionally needs its body's type to be definitionally equal to the ascribed one, and
+an \texttt{unsafe} definition is checked in an environment where the constant has been added as an
+axiom of the same type (so its body may refer to it but not unfold it); a theorem additionally
+needs its type to be a proposition; an opaque is like a definition; a mutual block, which must be
+unsafe or partial, is checked with all its headers present as axioms, after requiring matching
+safety, matching universe parameters and distinct names.
+\thesisref{axioms.tex \S2.5, $\mathsf{constant}\;c_{\bar u}:\alpha$ and $\mathsf{def}\;c_{\bar u}:\alpha := e$}
+\reviewnote{Three \texttt{divergences.md} entries live here. The comment at
+\srcloc{Lean4Lean/Environment.lean}{53} explains why \texttt{Primitive.checkDef} runs after the
+body check (so that its \texttt{isDefEq} calls see terms already known well-typed); that is an
+ordering invariant the proofs depend on and it is easy to break.}
+\end{definition}
+
+\begin{definition}[The kernel's entry point, \texttt{addDecl}]
+\label{def:kernel-add-decl}
+\lean{Lean4Lean.addDecl}
+\leanok
+\uses{family:kernel-add-decls, def:kernel-add-quot, def:kernel-add-inductive, def:kernel-primitive-checkinductive}
+Dispatches a \texttt{Declaration} to the checker for its kind, returning the extended environment
+or a \texttt{Kernel.Exception}. For an inductive declaration it first consults
+\texttt{Primitive.checkInductive} to decide whether reserved names are permitted. This is the
+single function the whole verification effort is about: \texttt{addDecl.WF} states that a
+successful call preserves well-formedness and extends every safety-indexed abstract environment.
+\thesisref{soundness.tex \S6 (thm:sound) is the thesis's corresponding statement, and it has no counterpart in this repository}
+\reviewnote{\texttt{addDecl.WF} is proved for every case except \texttt{inductDecl}, which is
+\texttt{sorry} at \srcloc{Lean4Lean/Verify/Environment.lean}{208}. The \texttt{quotDecl} case is
+unconditional thanks to the \texttt{iota} change to \texttt{checkEqType}.}
+\end{definition}
+
+\section{Replay and the command line driver}
+
+\begin{definition}[Constant-by-constant replay]
+\label{family:kernel-replay-core}
+\lean{Lean4Lean.Replay.Context, Lean4Lean.Replay.State, Lean4Lean.Replay.M, Lean4Lean.Replay.isTodo, Lean4Lean.Replay.addDecl, Lean4Lean.Replay.replayConstant, Lean4Lean.Replay.replayConstants, Lean4Lean.Replay.throwKernelException}
+\leanok
+\uses{def:kernel-add-decl}
+The driver that re-adds a module's constants to a kernel environment in dependency order:
+\texttt{replayConstant} first replays the constants a declaration mentions, reconstructs a
+\texttt{Declaration} from the stored \texttt{ConstantInfo}, and sends it to
+\texttt{Lean4Lean.addDecl}; constructors and recursors are postponed rather than re-added, since
+\texttt{addInductive} regenerates them. Unverified glue by design.
+\reviewnote{The \texttt{--compare} path times lean4lean against Lean's own kernel, which is useful
+but makes the driver depend on core's \texttt{Environment.addDecl} as well.}
+\end{definition}
+
+\begin{definition}[Post-replay consistency checks]
+\label{family:kernel-replay-postponed}
+\lean{Lean4Lean.Replay.checkPostponedConstructors, Lean4Lean.Replay.checkPostponedRecursors, Lean4Lean.Replay.checkQuotInit}
+\leanok
+\uses{family:kernel-replay-core}
+After all constants are replayed, every postponed constructor and recursor that
+\texttt{addInductive} regenerated is compared for \texttt{BEq} equality with the one stored in the
+\texttt{.olean}, and (unless disabled) the environment is required to have \texttt{quotInit} set by
+the end of the module, which is the assumption \texttt{finalizeImport} builds in. A mismatch is
+reported as a plain \texttt{IO.userError}.
+\reviewnote{This is the real value of replay as a test: a differential check of
+\texttt{AddInductive.mkRecRules} against Lean's own elaborator across whole libraries, and in
+practice the only end-to-end evidence that the kernel's rule generation agrees with Lean's. It is
+worth pointing at when judging the \texttt{iota} branch's $\iota$-rule specification.}
+\end{definition}
+
+\begin{definition}[Replay entry points]
+\label{def:kernel-replay-entrypoints}
+\lean{Lean4Lean.Replay.replay, Lean4Lean.Replay.replayFromImports, Lean4Lean.Replay.replayFromFresh}
+\leanok
+\uses{family:kernel-replay-core, family:kernel-replay-postponed, def:kernel-env-empty-import}
+\texttt{replay} runs the driver over a set of new constants, skipping unsafe and partial ones;
+\texttt{replayFromImports} reconstructs the environment as it stood at the start of a module (via
+\texttt{finalizeImport}) and replays only that module's own constants, freeing the compacted
+regions afterwards under a careful use-after-free argument;
+\texttt{replayFromFresh} replays a module and everything it imports into a completely empty
+environment.
+\reviewnote{\texttt{replayFromFresh} passes \texttt{checkQuot := false}
+(\srcloc{Lean4Lean/Replay.lean}{319}), so the quotient-initialization check is skipped exactly in
+the mode that builds an environment from scratch. In that mode \texttt{Init.Prelude} is replayed
+and so \texttt{addQuot} does run, but the ordering is the opposite of what one would want.}
+\end{definition}
+
+\begin{definition}[Fuel configuration from the command line]
+\label{family:kernel-fuelconfig-cli}
+\lean{Lean4Lean.FuelConfig.ofJson?, Lean4Lean.FuelConfig.ofFile, Lean4Lean.FuelConfig.applyFlag, Lean4Lean.FuelConfig.toObj, Lean4Lean.FuelConfig.fieldNames}
+\leanok
+\uses{structure:kernel-fuel-config}
+Layering of a JSON object, read from a file or built from a single \texttt{--config:field=value}
+override, over an existing \texttt{FuelConfig}: unknown fields are rejected up front, known ones
+are overlaid on the base config's own serialization, and the merged object goes back through the
+derived \texttt{fromJson?} so that value validation stays in one place. The accepted field names
+(\texttt{fieldNames}) are derived from the record's own encoding, so the two cannot drift apart.
+\reviewnote{\texttt{toObj} calls \texttt{panic!} if the derived encoding is not a JSON object.
+Unreachable, but a panic inside a command line argument parser. The node map named these two
+helpers \texttt{toJsonObj} and \texttt{fields}; the declarations are actually called
+\texttt{toObj} and \texttt{fieldNames}, and both are \texttt{private} to \texttt{Main}.}
+\end{definition}
+
+\begin{definition}[The lean4lean executable, \texttt{main}]
+\label{def:kernel-main}
+\lean{main, getCurrentModule}
+\leanok
+\uses{def:kernel-replay-entrypoints, family:kernel-fuelconfig-cli}
+Parses the flags \texttt{-v}, \texttt{--fresh}, \texttt{--compare}, \texttt{--config=FILE} and
+\texttt{--config:field=value}, resolves the target module names against the search path (defaulting
+to the current Lake project's main module, read from the manifest by \texttt{getCurrentModule}),
+and replays each target, in parallel \texttt{IO.asTask}s except under \texttt{--fresh}, reporting
+the number of declarations checked. Unverified glue.
+\end{definition}
+
+\section{Contribution summary}
+
+The two branches together changed 22 of the 4040 lines in this chapter's scope, and both changes
+were made to unblock a specific proof obligation rather than to improve the kernel for its own
+sake.
+
+On \texttt{trproj}, the $\iota$ step of \texttt{inductiveReduceRec} was extracted verbatim into the
+pure function \texttt{inductiveReduceRecCore} (Definition \ref{def:kernel-iota-core}), and
+\texttt{inductiveReduceRec} (Definition \ref{def:kernel-inductive-reduce-rec}) now ends by calling
+it. The reason is that \texttt{inductiveReduceRec} is monadic only because of its K-like
+(Definition \ref{def:kernel-to-ctor-when-k}) and structure-$\eta$
+(Definition \ref{def:kernel-to-ctor-when-struct}) preludes, whereas the $\iota$ step itself is
+pure and total; after the split, \texttt{inductiveReduceRecCore.WF} can be stated about a function
+with no monad, no environment lookup and no well-typedness side conditions beyond its hypotheses.
+The commit is explicit that \texttt{reduceRecursor.WF}
+(Definition \ref{def:kernel-reduce-recursor}) stays open, because the two preludes still have no
+\texttt{IsDefEq} counterpart in the model. The split is behaviour-preserving; the extracted body
+was diffed against master line by line and differs only in recomputing \texttt{rval.getMajorIdx}
+where the caller had bound it.
+
+On \texttt{iota}, \texttt{checkEqType} (Definition \ref{def:kernel-check-eq-type}) gained one line
+rejecting an \texttt{unsafe} \texttt{Eq}. This is a reject-more divergence from \texttt{quot.cpp},
+recorded in \texttt{divergences.md}, and it discharges rather than adds an assumption: both
+\texttt{addQuot.WF} and \texttt{addDecl.WF} (Definition \ref{def:kernel-add-decl}) lost their
+\texttt{Environment.EqSafe} hypothesis, and the assumption itself was deleted.
+
+What remains open on the kernel side is unchanged by either branch and bounds what they can claim:
+\texttt{addDecl.WF}'s \texttt{inductDecl} case is still \texttt{sorry} because the model witness
+must be built from \texttt{Environment.addInductive}
+(Definition \ref{def:kernel-add-inductive}); \texttt{reduceRecursor.WF} is open; the projection
+rules (Definitions \ref{def:kernel-infer-proj} and \ref{def:kernel-reduce-proj}) carry a documented
+\texttt{isNeverZero} divergence that narrows every \texttt{TrProj} statement; and
+\texttt{etaExpand} (Definition \ref{def:kernel-eta-expand}), the only plausible executable
+counterpart of the thesis's $\mathrm{rec}$-normal-form preprocessing, is never called, so the
+saturation hypothesis of \texttt{inductiveReduceRecCore.WF} is not enforced anywhere in the kernel.
+
+\section{Review notes}
+
+\begin{itemize}
+\item \textbf{Medium.} \srcloc{Lean4Lean/Quot.lean}{24}: the \texttt{iota} safety check is well
+justified and net positive, but the guarantee is narrower than the commit message suggests.
+\texttt{Environment.addQuot} returns early when \texttt{env.quotInit} is already true, and
+\texttt{Kernel.Environment.finalizeImport} (\srcloc{Lean4Lean/Environment/Basic.lean}{124}) sets
+\texttt{quotInit := !imports.isEmpty} unconditionally, so on any imported environment neither the
+shape check nor the new safety check ever runs. The model-side claim holds only for environments
+replayed from scratch.
+\item \textbf{Low.} \srcloc{Lean4Lean/Inductive/Reduce.lean}{71}:
+\texttt{inductiveReduceRecCore} is declared inside the \texttt{section} opened at line 9 with
+variables \texttt{[Monad m]}, \texttt{env}, \texttt{whnf}, \texttt{inferType},
+\texttt{isDefEq}, none of which it uses. Lean binds only used section variables, so the signature
+is the intended four-argument one, but a reader (or a later edit that adds a use of \texttt{env})
+can be misled about its arity. Placing it outside the section would be clearer.
+\item \textbf{Low.} \srcloc{Lean4Lean/Inductive/Reduce.lean}{91}: after the split, the unchanged
+master docstring of \texttt{inductiveReduceRec} still describes the $\iota$ slicing in full, which
+is now \texttt{inductiveReduceRecCore}'s job and is documented there too. The file states the same
+algorithm twice; the caller's docstring should have been trimmed to the K-like, structure-$\eta$
+and literal preprocessing it still performs.
+\item \textbf{Low.} \srcloc{Lean4Lean/Inductive/Reduce.lean}{75}:
+\texttt{inductiveReduceRecCore} collapses ``no rule for this constructor'', ``major has too few
+arguments'' and ``wrong number of universe arguments'' into a single \texttt{none}. This is
+faithful to master, but it is why \texttt{inductiveReduceRecCore.WF} must take saturation as an
+external hypothesis instead of deriving it.
+\item \textbf{Low.} \srcloc{Lean4Lean/TypeChecker.lean}{946}: \texttt{TypeChecker.etaExpand} has
+no call site anywhere under \texttt{Lean4Lean/}. If it is meant to realize the thesis's
+$\mathrm{rec}$-normal-form preprocessing (unique.tex \S4, sec:kappa), that intent is undocumented,
+and the executable kernel never enforces $\mathrm{rec}$-normal form.
+\item \textbf{Low.} \srcloc{Lean4Lean/ForEachExprV.lean}{25}: \texttt{Expr.forEachV} and
+\texttt{forEachV'} appear to be dead code; the module is imported by \texttt{TypeChecker.lean} but
+neither function has a call site in the kernel files.
+\item \textbf{Low.} \srcloc{Lean4Lean/TypeChecker.lean}{593}: \texttt{quickIsDefEq} destructures
+\texttt{TypeChecker.State} positionally as \texttt{.mk a1 a2 a3 a4 a5 a6 a7 (eqvManager := m)}.
+Adding or reordering a field silently changes what this matches, or fails to compile confusingly;
+a \texttt{modifyGet} on the named field would be equivalent and robust.
+\item \textbf{Low.} \srcloc{Lean4Lean/TypeChecker.lean}{299}: the \texttt{eagerReduce} marker (a
+syntactic \texttt{isAppOfArity} test that switches the definitional-equality strategy, consulted
+again at lines 541, 782 and 845) mirrors core Lean's own gadget, so it is correctly absent from
+\texttt{divergences.md}. It is nevertheless the one reduction knob in the file with no thesis
+counterpart and no local docstring stating what the four sites jointly guarantee.
+\item \textbf{Low.} \srcloc{Lean4Lean/Inductive/Add.lean}{470}: \texttt{AddInductive.run} computes
+its \texttt{isUnsafe} binding twice (lines 453 and 470), the second shadowing
+the first; dead duplication.
+\item \textbf{Low.} \srcloc{Lean4Lean/TypeChecker.lean}{493}: \texttt{reducePowMaxExp} silently
+declines to reduce \texttt{Nat.pow} at exponents above $2^{24}$. The C++ kernel has the same cap,
+but the incompleteness is not listed in \texttt{divergences.md}.
+\item \textbf{Low.} \srcloc{Lean4Lean/TypeChecker.lean}{845}: the \texttt{s.isConstOf ``true}
+shortcut in \texttt{isDefEqCore'} is an asymmetric special case with neither a thesis counterpart
+nor a \texttt{divergences.md} entry.
+\item \textbf{Low.} \srcloc{Lean4Lean/TypeChecker.lean}{355} and
+\srcloc{Lean4Lean/TypeChecker.lean}{968}: \texttt{reduceProj} is written in an awkward explicit
+bind style for the benefit of its proof, and a commented-out \texttt{example}/\texttt{run\_tac}
+scratch block is left at the end of the file.
+\item \textbf{Low.} \srcloc{Main.lean}{29}: \texttt{FuelConfig.toObj} uses \texttt{panic!} when the
+derived JSON encoding is not an object, inside a command line argument parser.
+\item \textbf{Informational.} \srcloc{Lean4Lean/PtrEq.lean}{17}: the two pointer-equality
+soundness axioms are genuine trusted assumptions of the project. They are honestly documented and
+used in only two places, but at \srcloc{Lean4Lean/TypeChecker.lean}{739}
+\texttt{ptrEqConstantInfo} gates a different algorithm rather than a shortcut.
+\item \textbf{Informational.} \srcloc{Lean4Lean/Verify/Environment.lean}{208}:
+\texttt{addDecl.WF}'s \texttt{inductDecl} case is \texttt{sorry}, so everything the \texttt{iota}
+branch proves about inductive blocks lives on the model side of that gap. This is master's hole,
+not a contributed one, but it bounds what the branch can claim.
+\end{itemize}

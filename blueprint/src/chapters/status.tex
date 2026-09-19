@@ -1,0 +1,1199 @@
+\chapter{Status, trust boundary and issue registry}
+\label{chap:status}
+
+This chapter is prose: it introduces no new graph nodes. Every technical object named here is a
+node defined in Chapters \ref{chap:syntax}--\ref{chap:experimental-reduction} and is referenced
+by \texttt{\textbackslash ref\{\}} to its label in the registry, or by \texttt{\textbackslash srcloc\{\}\{\}} to a source location that carries no
+node. Every number below is either read directly from a file under
+\texttt{.blueprint-work/understand/} (named at first use) or produced by a command run during
+this pass and quoted verbatim; nothing is estimated. Source data: \texttt{census.md},
+\texttt{sorry-grep.md}, \texttt{decls.tsv}, \texttt{decls-attrib.tsv}, \texttt{hygiene-review.md},
+\texttt{unused-contrib.md}, the fourteen module chapters' own \emph{Review notes} sections, and
+\texttt{reviews/*.md}. All of it is computed against the compiled \texttt{trproj} tree, HEAD
+\texttt{20ec229}, Lean \texttt{v4.33.0-rc2}, built 2026-09-10; nothing was rebuilt for this
+chapter.
+
+\section{Census}
+\label{status:sec:census}
+
+\texttt{decls.tsv} tabulates every user-level declaration in the compiled environment (name,
+module, kind, declaration line, axiom set, whether that axiom set contains \texttt{sorryAx},
+and public/private), produced by \texttt{census/Census.lean} run once over the whole project and
+once per \texttt{Experimental} module (those modules cannot be imported together; see
+\texttt{census.md} \S0). Internal names (numeric components, \texttt{\_}-prefixed names,
+\texttt{match\_}/\texttt{proof\_}/\texttt{eq\_} prefixes, recursor/eliminator/\texttt{sizeOf}
+suffixes) are filtered, leaving 7833 of 20725 raw constants. Branch attribution is the majority
+blame tag (\texttt{M}/\texttt{I}/\texttt{P}, from \texttt{blame/*.txt}) over the lines from a
+declaration's range start to the next declaration's start; \texttt{mixed} means the range mixes
+tags, typically a master declaration edited on a branch. 377 further rows have no
+\texttt{declRangeExt} entry at all (auto-generated equation lemmas that survived the name
+filter) and are omitted from the branch breakdown below, so per-directory branch counts do not
+sum to the decl count (\texttt{census.md} \S1's own caption gives 377; summing decls minus the
+four branch columns in the table actually gives 535 for this run --- a minor inconsistency in
+the census document's caption, not in the underlying per-declaration data, which is what every
+other number in this chapter is computed from).
+
+Directory definitions follow \texttt{census.md} \S1: \texttt{kernel} is the executable kernel
+and its support (\texttt{Declaration}, \texttt{Environment*}, \texttt{EquivManager},
+\texttt{Expr}, \texttt{Inductive/*}, \texttt{Level}, \texttt{Primitive}, \texttt{PtrEq},
+\texttt{Quot}, \texttt{Replay}, \texttt{Std/*}, \texttt{TypeChecker}, plus \texttt{Main});
+\texttt{Theory}, \texttt{Verify}, \texttt{Tests} and \texttt{Experimental} are the corresponding
+top-level directories.
+
+\begin{center}
+\begin{tabular}{lrrrrrr}
+directory & decls & sorryAx & \% sorryAx & master & iota & trproj/mixed \\
+\hline
+Theory & 1573 & 90 & 5.7\% & 971 & 274 & 88 / 77 \\
+Verify & 2700 & 233 & 8.6\% & 2156 & 149 & 45 / 151 \\
+Experimental & 2403 & 306 & 12.7\% & 2295 & 1 & 0 / 8 \\
+Tests & 418 & 0 & 0.0\% & 64 & 113 & 173 / 3 \\
+kernel & 739 & 0 & 0.0\% & 713 & 12 & 3 / 2 \\
+\hline
+all & 7833 & 629 & 8.0\% & 6199 & 549 & 309 / 241 \\
+\end{tabular}
+\end{center}
+
+Reading the table (\texttt{census.md} \S1): the \texttt{kernel} and \texttt{Tests} directories
+carry zero \texttt{sorryAx}-tainted declarations; every live sorry with a downstream
+consequence lives in \texttt{Theory}, \texttt{Verify} or \texttt{Experimental}.
+\texttt{Experimental} has the highest taint rate (12.7\%) but is almost entirely master's own
+scratch work (2295 of 2403 declarations, 1 iota, 8 mixed) and is excluded from Lean's
+\texttt{defaultTargets} (\texttt{lakefile.toml:2}; see \S\ref{status:sec:limits}). \texttt{Tests}
+is where the branches concentrate their own declarations (113 iota + 173 trproj + 3 mixed = 289
+of 418, or 69\%): this is \texttt{Tests/IotaShape.lean}, \texttt{ShapeDecide.lean},
+\texttt{ProjShape.lean} and \texttt{ProjInhabit.lean}, the validation harnesses discussed in
+Chapters \ref{chap:inductive} and \ref{chap:proj}. \texttt{Theory} and \texttt{Verify} are where
+the specification and refinement work sits: 274 iota + 88 trproj + 77 mixed = 439 of 1573 in
+\texttt{Theory} (28\%), and 149 iota + 45 trproj + 151 mixed = 345 of 2700 in \texttt{Verify}
+(13\%).
+
+Contributed vs.\ master, project-wide: of the 7298 declarations with a resolved branch tag,
+549 are iota-attributed (7.5\%), 309 trproj-attributed (4.2\%), 241 mixed (3.3\%), and 6199
+master (85.0\%). The contributed share is small in absolute count against a 6199-declaration
+master base, but concentrated almost entirely in \texttt{Theory} and \texttt{Verify}, which is
+where the sorry census below and the issue registry (\S\ref{status:sec:issues}) also
+concentrate.
+
+\section{Live sorries outside Experimental}
+\label{status:sec:sorries}
+
+\texttt{sorry-grep.md} finds 125 lines matching \texttt{sorry} in the working tree (104 live,
+21 in comments or commented-out code), against 131 matching lines across 27 files on
+\texttt{master} (\texttt{git grep -cP '\textbackslash bsorry\textbackslash b' master -- Lean4Lean}, re-run for this pass and
+matching \texttt{sorry-grep.md} exactly). Restricting to files outside \texttt{Experimental/}
+and re-running \texttt{git grep -c '\textbackslash bsorry\textbackslash b'} on both revisions gives 14 working-tree files
+against master's 16 --- the two file lists are reproduced in
+\S\ref{status:sorries:diff} below.
+
+Every row of \texttt{sorry-grep.md} \S1 was re-verified in this pass by reading the exact line
+in the working tree and cross-checking the enclosing declaration's blame tag directly (not
+taken from the table). \textbf{One of the seventeen listed rows is a false positive}:
+\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{562} is the text \texttt{/-! \#\#\# Both witnesses are
+sorry-free -/}, a module-doc comment, not a \texttt{sorry} term; \texttt{sorry-grep.md}'s own
+\S4 already flags this row as an unreconciled mismatch (the enclosing declaration it names does
+not carry \texttt{usesSorry} in \texttt{decls.tsv}), and direct inspection resolves the mismatch:
+the row should never have been classified as live. The other two \texttt{sorry} matches in that
+file (lines 14 and 582) are also comment-only, so \textbf{the whole of
+\texttt{Tests/ProjInhabit.lean}, a wholly new \texttt{trproj} file, contains zero live sorries};
+a naive per-file grep count would wrongly suggest otherwise. The remaining sixteen rows are all
+genuine literal \texttt{sorry} terms, confirmed by direct inspection and by blame:
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334} --- \texttt{VEnv.WF.patsStrong}
+(\ref{thm:wf-patsstrong}), attribution \textbf{iota} (confirmed in blame). \textbf{The single
+sorry the iota branch is responsible for.} It is the only route from \texttt{VEnv.WF} to
+\texttt{OrderedStrong} (via \texttt{WF.orderedStrong}, \ref{thm:wf-orderedstrong}, and the
+\texttt{CoeOut} instance at line 343), so it reaches 343 declarations project-wide
+(\texttt{sorry-grep.md} \S5) --- among them all of \texttt{UniqueTyping.lean}, most of
+\texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}, and the \texttt{Verify} primitives
+layer discussed in Chapters \ref{chap:primitives-core} and \ref{chap:primitives-arith}. See
+\S\ref{status:sec:issues} for the propagation mechanism.
+\item \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{12}, \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{21},
+\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{34} --- \texttt{IsDefEqU.sort\_inv},
+\texttt{.forallE\_inv\_stratified}, \texttt{.sort\_forallE\_inv} (\ref{thm:injectivity-open}),
+attribution \textbf{master} (file has no blame entries, i.e.\ byte-identical to master). These
+three inversion principles are what a proof of \texttt{patsStrong} is said to need
+(\texttt{Typing/EnvLemmas.lean:323}), so the iota branch's open obligation currently rests on an
+already-open master foundation.
+\item \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193} and
+\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1212} --- both inside
+\texttt{NormalEq.parRed} (\ref{thm:normaleq-parred}), attribution \textbf{master}. Both cases
+are where a pattern/$\delta$ step (\texttt{ParRed.extra}) meets a normal equality; they leave
+\texttt{ParRedS.church\_rosser}, \texttt{CRDefEq.trans}, \texttt{IsDefEq.church\_rosser},
+\texttt{IsDefEq.reduce\_sort}, \texttt{IsDefEq.reduce\_forallE} and \texttt{InferType.exists}
+unproved.
+\item \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{174} --- forward direction of
+\texttt{IsDefEqU.weakN\_iff} (\ref{thm:isdefequ-weakn-iff}), attribution \textbf{master}.
+Consumed 15 times inside \texttt{NormalEq.weakN\_inv\_DFC} alone, plus
+\texttt{ParRed.weakN\_inv}, \texttt{hasType\_app\_bvar0}, \texttt{IsDefEq.skips} and the whole
+\texttt{weakN\_iff}/\texttt{weak'\_iff} family (\ref{fam:weakening-iff}), hence most of
+\texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}.
+\item \srcloc{Lean4Lean/Verify/Environment.lean}{208} --- the \texttt{inductDecl} case of
+\texttt{addDecl.WF} (\ref{thm:add-decl-wf}), attribution \textbf{master}. Nothing anywhere
+constructs an \ref{struct:add-induct} witness from \texttt{Environment.addInductive} (confirmed
+by grepping every \texttt{AddInduct} occurrence: all are eliminations, none an introduction), so
+the entire inductive-block refinement apparatus contributed by both branches (roughly 1000
+lines across \texttt{Verify/Environment/\{Basic,Lemmas\}.lean} and
+\texttt{Theory/Typing/InductiveLemmas.lean}) is conditional on a hypothesis that is never
+discharged. This is master's oldest hole in the group and the single largest blast radius of
+any sorry in this list, even though it is not one the branches introduced.
+\item \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{227} --- \texttt{tryEtaStructCore.WF}
+(\ref{thm:vtc-tryetastruct}), attribution \textbf{master}.
+\item \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{488} --- \texttt{isDefEqUnitLike.WF}
+(\ref{thm:vtc-isdefequnitlike}), attribution \textbf{master}.
+\item \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{145} --- \texttt{reduceProjCore.WF}
+(\ref{thm:vtc-reduceprojcore}), attribution \textbf{master}.
+\item \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{149} --- \texttt{reduceRecursor.WF}
+(\ref{thm:vtc-reducerecursor}), attribution \textbf{master}. These four are the structure-side
+and recursor-side obligations of the type-checker correctness proof; together with the two
+\texttt{trproj} sorries below they are why \ref{thm:vtc-toplevel} (the public soundness
+interface: \texttt{inferType.WF'}, \texttt{checkType.WF}, \texttt{isDefEq.WF}, \ldots) is
+partial as stated (Chapter \ref{chap:typechecker}, Context note).
+\item \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{398} --- \texttt{inferProj.WF\_struct}
+(\ref{thm:vtc-inferproj-struct}), attribution \textbf{trproj}, a wholly new declaration (master
+has no counterpart). Reaches \textbf{0} constants (\texttt{sorry-grep.md} \S5): declared,
+documented, sorried, and consumed by nothing.
+\item \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{410} --- \texttt{inferProj.WF}
+(\ref{thm:vtc-inferproj}), attribution \textbf{trproj/mixed}: this restates a sorry master
+already carried at the old \texttt{InferType.lean:391}, but with a corrected statement (the
+existential is now over \texttt{e''} as well as \texttt{ty'}, fixing a latent scoping bug in
+master's version --- \texttt{claims-trproj.md} \#36; the fix is real but is not disclosed as a
+fix anywhere in the branch's own PR text). The lemma's own docstring states it is not provable
+as stated for projections outside \texttt{TrProjCtor}'s scope. Reaches 61 constants
+(\texttt{sorry-grep.md} \S5).
+\item \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{747} --- \texttt{TrProj.weak'\_inv}
+(\ref{thm:trproj-weak-inv}), attribution \textbf{trproj}. Blocked on the master admission
+\texttt{IsDefEqU.weakN\_iff} above. Reaches 92 constants (\texttt{sorry-grep.md} \S5), including
+\texttt{TrExprS.weakFV\_inv} and all three \texttt{Conditionally*.weakN\_inv} lemmas.
+\item \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{995} --- \texttt{TrProj.uniq}
+(\ref{thm:trproj-uniq}), attribution \textbf{trproj}. Reaches 138 constants
+(\texttt{sorry-grep.md} \S5), including \texttt{TrExprS.uniq}, \texttt{TrExprS.defeqDFC} and the
+\texttt{proj} builder of the \texttt{TrExpr} family.
+\end{itemize}
+
+Sixteen genuine sorries: 11 master, 4 trproj, 1 iota. Two further open theorems the trproj
+branch leaves unattempted despite building the richer \texttt{TrProj}/\texttt{TrProjCtor}
+metatheory to support them are \ref{thm:vtc-reduceprojcore} and \ref{thm:vtc-tryetastruct}
+(already listed above as master's).
+
+\subsection{Comparison with master}
+\label{status:sorries:diff}
+
+\texttt{git grep -c '\textbackslash bsorry\textbackslash b' master -- Lean4Lean} lists 27 files; the same command on the
+working tree lists 25. Diffing the two lists by file (not by declaration, since lines move):
+
+\begin{itemize}
+\item \textbf{Closed entirely} (present on master, absent from the working tree, i.e.\
+zero \texttt{sorry} occurrences of any kind remain): \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{1}
+(master's \texttt{def TrProj := sorry}, replaced by trproj with a 6-fold existential over
+\ref{struct:trprojctor}), \srcloc{Lean4Lean/Theory/Inductive.lean}{1} (master's
+\texttt{VInductDecl.WF := sorry} and \texttt{VEnv.addInduct := sorry}, replaced by iota with a
+20-field record and a real constant-map traversal), \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{1}
+(master's one-line \texttt{addInduct\_WF := sorry}, now a full proof), and
+\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{1}. The last is a comment-only case: master's
+two matches there are the prose ``this definition is essentially a \texttt{sorry}\ldots (which is
+itself a \texttt{sorry})'' documenting the uninhabited \texttt{inductive AddInduct \ldots{} --
+TODO}, not a literal \texttt{sorry} token; both the code and the comment are gone on the working
+tree, where \texttt{AddInduct} (\ref{struct:add-induct}) is a real, populated structure.
+\item \textbf{Reduced}: \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1}, from 7 sorries on
+master (all associated with the old \texttt{TrProj} stub: lines 642, 723, 727, 893, 938, 1240,
+1509) to 2 (weak'\_inv, uniq, above). \texttt{claims-trproj.md} \#1/\#3 independently confirm
+this baseline of 7, correcting an earlier PR claim of ``9'' that double-counted a lemma
+(\texttt{TrProj.weakN}) which was in fact already proved on master.
+\item \textbf{Increased}: \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{1}, from 1 sorry
+on master to 2 (\texttt{inferProj.WF\_struct} new, \texttt{inferProj.WF} retained/corrected,
+above).
+\item \textbf{New file, net zero}: \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{1}, a wholly new
+trproj file whose three \texttt{sorry} matches are all comment-only (above).
+\item \textbf{New sorry, no prior match}: \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{1},
+from 0 \texttt{sorry} matches on master to 1 (\texttt{patsStrong}, iota, above); the file exists
+on master but carries no \texttt{sorry} token there, so it is absent from master's 16-file list
+and present only in the working tree's 14.
+\item \textbf{Unchanged} (same count, same declarations, on both revisions):
+\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1} (2),
+\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{1} (3),
+\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{1} (1),
+\srcloc{Lean4Lean/Verify/Environment.lean}{1} (1),
+\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{1} (2),
+\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{1} (1),
+\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{1} (1),
+\srcloc{Lean4Lean/Verify/Level.lean}{1} (1, a dead commented-out block, not live),
+\srcloc{Lean4Lean/TypeChecker.lean}{1} (1, a commented-out example),
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{1} (1, a docstring's use of the word).
+\end{itemize}
+
+Net effect outside \texttt{Experimental}: \textbf{4 sorry-carrying files fully closed} (3 of
+them literal, the 4th a comment describing an uninhabited placeholder), \textbf{1 new sorry
+introduced} (\texttt{patsStrong}, iota), \textbf{a 7-to-2 reduction} in the old \texttt{TrProj}
+family (trproj), and \textbf{a 1-to-2 increase} in \texttt{InferType.lean} where trproj both
+kept and fixed a pre-existing master sorry and added a second, unreferenced one. This is
+consistent with \texttt{hygiene-review.md}'s top-line count (``\texttt{sorry}: 5 added, 12
+removed'' over \texttt{master..trproj}), read together with the correction above that one of the
+four closed \emph{definitions} it credits (\texttt{TrProj}, \texttt{VInductDecl.WF},
+\texttt{VEnv.addInduct}, \texttt{AddInduct}) is not a literal-\texttt{sorry} closure: master's
+\texttt{AddInduct} was an uninhabited zero-constructor \texttt{inductive}, which never
+contributed a \texttt{sorryAx} and was never counted among the 638/629 \texttt{sorryAx}-tainted
+declarations of \S\ref{status:sec:census}, even though its practical effect (nothing can ever
+construct a witness) was the same as a \texttt{sorry}.
+
+Inside \texttt{Experimental/} the count is master-owned throughout: all remaining live sorries
+there (Chapters \ref{chap:experimental-logrel}, \ref{chap:experimental-reduction}) predate both
+branches, and \texttt{Experimental} is outside \texttt{lake}'s \texttt{defaultTargets}
+(\S\ref{status:sec:limits}).
+
+\section{Trust boundary}
+\label{status:sec:trust}
+
+Beyond \texttt{sorryAx} and the three standard axioms (\texttt{propext},
+\texttt{Classical.choice}, \texttt{Quot.sound}), the project declares 110 \texttt{axiom}
+constants and 12 \texttt{opaque} constants project-wide (\texttt{census.md} \S3--\S4). Grouped by
+what they assert:
+
+\begin{itemize}
+\item \textbf{The core-implementation bridge, \srcloc{Lean4Lean/Verify/Axioms.lean}{1} (32
+axioms).} These relate the \texttt{VEnv}/\texttt{VExpr} model to the actual, unverified
+implementation of Lean's own \texttt{Expr}, \texttt{Level}, \texttt{PersistentHashMap},
+\texttt{PersistentArray} and \texttt{Syntax} types (e.g.\ \texttt{Lean.Expr.instantiate\_eq},
+\texttt{Lean.Level.normalize\_eq}, \texttt{Lean.PersistentHashMap.WF.find?\_eq}). They are
+master's, pre-date both branches, and are by far the most heavily relied-on axioms in the
+project: \texttt{PersistentHashMap.WF.find?\_eq} and \texttt{.WF.toList'\_insert} each reach 229
+declarations, \texttt{PersistentArray.toList'\_push} reaches 154, and
+\texttt{Level.instLawfulBEqLevel} reaches 152 (\texttt{census.md} \S5). Two upstream-linked
+\texttt{Std.TreeMap} axioms (\texttt{all\_eq\_all\_toList}, \texttt{any\_eq\_any\_toList},
+\texttt{Verify/Axioms.lean:10,14}) additionally gate the soundness of the level comparison
+(Chapter \ref{chap:levels}).
+\item \textbf{Native \texttt{bv\_decide} certificates (7 axioms,
+\srcloc{Lean4Lean/Verify/Expr.lean}{1}, \srcloc{Lean4Lean/Verify/Level.lean}{1}).}
+Auto-generated LRAT certificate axioms, narrow reach, pre-existing master infrastructure.
+\item \textbf{\texttt{PtrEq} soundness (2 axioms, \srcloc{Lean4Lean/PtrEq.lean}{1}):}
+\texttt{ptrEqExpr\_eq} and \texttt{ptrEqConstantInfo\_eq}, reaching 65 and 63 declarations
+respectively. Genuine, honestly documented trusted assumptions (pointer equality implies
+structural equality) used in two places; one of those two, at
+\srcloc{Lean4Lean/TypeChecker.lean}{739}, gates a different algorithm rather than a mere
+shortcut (Chapter \ref{chap:kernel}, Review notes).
+\item \textbf{\texttt{Experimental} axioms}, confined to modules outside
+\texttt{defaultTargets}: \texttt{axiom Params.extra\_pat}
+(\srcloc{Lean4Lean/Experimental/SExpr.lean}{614}, reaching 14 declarations) asserts that every
+environment defeq is an instance of a registered pattern rule, the hard content of $\iota$,
+outside the \texttt{Params} class it should logically be a field of; \texttt{axiom mySorry :
+$\alpha$} (\srcloc{Lean4Lean/Experimental/Thierry.lean}{9},
+\srcloc{Lean4Lean/Experimental/Thierry2.lean}{9}, reaching 25 declarations) is an inhabitant of
+every type, i.e.\ a proof of \texttt{False}, making both files inconsistent by construction;
+\texttt{Thierry2.lean} additionally axiomatizes the judgment it interprets
+(\texttt{DefEq}/\texttt{DefEq.U}/\texttt{DefEq.left}, reaching up to 20 declarations); a further
+eleven small axioms in \texttt{MoreStepIndexed.lean} and \texttt{StepIndexed.lean}
+(\texttt{InferTypeN}, \texttt{NormalEqN}, \texttt{IsTy}, \ldots) posit the existence and
+unfolding equations of fixpoints those files exist to construct.
+\end{itemize}
+
+\textbf{What the top-level theorems assume.} The kernel's public soundness interface
+\ref{thm:vtc-toplevel} (\texttt{inferType.WF'}, \texttt{checkType.WF}, \texttt{isDefEq.WF},
+\ldots) depends, beyond the standard axioms and the \texttt{Verify/Axioms.lean} bridge it
+inherits throughout, on \texttt{sorryAx} via the four master structure/recursor obligations of
+\S\ref{status:sec:sorries} and via \texttt{patsStrong} wherever \texttt{OrderedStrong} is
+discharged from \texttt{VEnv.WF}; every statement in \ref{thm:vtc-toplevel} is therefore partial
+as of this HEAD (Chapter \ref{chap:typechecker}). \ref{thm:tr-env-proj-defeq}
+(\texttt{TrEnv.proj\_defeq}), the strongest trproj result connecting the projection model to a
+translated environment, has the pinned axiom profile \texttt{[propext, Classical.choice,
+Quot.sound, sorryAx, Lean.PersistentHashMap.WF.find?\_eq, .WF.toList'\_insert,
+.findAux\_isSome]} (\texttt{Tests/ProjInhabit.lean:586--595}, a \texttt{\#guard\_msgs} pin), with
+the \texttt{sorryAx} traced through unique typing, $\Pi$-injectivity (both master) and
+\texttt{VEnv.WF.patsStrong} (iota). The \ref{struct:add-induct} family of theorems is currently
+vacuous end-to-end: its only producer, \texttt{addDecl.WF}'s \texttt{inductDecl} case, is
+master's sorry, so no theorem in that family is known true of any environment actually produced
+by \texttt{Environment.addInductive}. CakeML-style ``verified modulo an axiom'' framing does not
+apply to any part of this project's own trust story --- there is no single labelled ``trust
+axiom''; the trust boundary is the union of the bridge axioms above and the sorry set of
+\S\ref{status:sec:sorries}, and it should be quoted per top-level theorem rather than as one
+number.
+
+\section{Issue registry}
+\label{status:sec:issues}
+
+Every issue below is sourced from at least one of: the \emph{Review notes} section of one of the
+fourteen module chapters (Chapters \ref{chap:syntax}--\ref{chap:experimental-reduction}),
+\texttt{reviews/*.md} (the adversarial per-chapter reviews), \texttt{hygiene-review.md},
+\texttt{unused-contrib.md}, or a FALSE/PARTIAL verdict in \texttt{claims-iota.md}/
+\texttt{claims-trproj.md}. Entries confirmed by more than one source are merged into one entry
+citing the fullest description; the parenthetical after each entry names the chapter(s) and/or
+report the entry is drawn from. No fixes are proposed. Severity and attribution follow the
+source material's own judgement.
+
+\subsection{High severity}
+
+\subsubsection*{iota}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}: \texttt{VEnv.WF.patsStrong} is
+\texttt{sorry}, and the paired \texttt{CoeOut (VEnv.WF E) E.OrderedStrong} instance (line 343)
+makes every \texttt{VEnv.WF} hypothesis silently yield the strong-system hypotheses, so the
+entire strong system and the whole \texttt{Verify/} typechecker-correctness layer become
+conditional on it; \texttt{Verify/Primitive.lean} alone gained 30 mentions of
+\texttt{OrderedStrong}/\texttt{orderedStrong} where it had none on master. Master's
+corresponding entry point, \texttt{Ordered.strong}, was a proved theorem in a sorry-free file;
+it no longer exists. See \S\ref{status:sec:sorries} for the full 343-declaration reach. (typing,
+metatheory, primitives-core, primitives-arith Review notes; hygiene-review.md \S(a); claims-iota
+\#17, \#28)
+\item \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{60}: \texttt{IsDefEq.pat} asserts the reduct
+at the redex's type with no typing premise on the reduct, i.e.\ it builds subject reduction for
+$\iota$ into the judgment itself. The author's own counterexample
+(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{327}, \texttt{List Nat $\equiv$ List Bool})
+shows the assumption is false over a merely \texttt{Ordered} environment, so every lemma of
+\texttt{Lemmas.lean} proved under \texttt{Ordered} may characterise a relation strictly larger
+than the thesis's; \texttt{IsDefEqStrong.pat} (\ref{inductive:isdefeqstrong-pat},
+\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{89}) has the correct shape. Any claim of the form
+``lean4lean proves $X$ about \texttt{IsDefEq}'' must be qualified by \texttt{patsStrong}.
+(typing Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{583}: nothing derives
+\texttt{VInductDecl.WF} from the kernel's own inductive checker
+(\texttt{Lean4Lean/Inductive/Add.lean}). \texttt{TrEnv'.induct} takes \texttt{decl.WF env} as a
+bare hypothesis; \texttt{Tests/IotaShape.lean} validates the record by \texttt{decide} on
+concrete kernel data, which is evidence, not a proof. This is better than master (where the
+predicate itself was \texttt{sorry}), but the contribution should be described as specified and
+validated, not verified. (inductive Review notes)
+\end{itemize}
+
+\subsubsection*{trproj}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{400}: \texttt{inferProj.WF}'s own
+docstring states it is not provable as stated, because kernel-accepted projections of
+reflexive, indexed and nested single-constructor structures have no \ref{def:trproj} derivation
+at all. Since \texttt{inferType'.WF} consumes it and \texttt{checkType.WF} has no hypothesis
+that its input is translatable, the top-level statements \texttt{inferType.WF'} and
+\texttt{checkType.WF} (part of \ref{thm:vtc-toplevel}) are, as of this HEAD, known to be
+unprovable without extending the model; neither weakening the conclusion nor adding a scope
+hypothesis is discussed. (typechecker Review notes; trexpr Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}: \texttt{TrEnv.proj\_defeq}
+(\ref{thm:tr-env-proj-defeq}), trproj's strongest result connecting the projection model to a
+translated environment, is orphaned: its only consumer anywhere in the repository is the
+\texttt{\#print axioms} check at \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{595}. Its would-be
+consumers (\texttt{reduceProjCore.WF}, \texttt{inferProj.WF\_struct}, \texttt{inferProj.WF}) are
+all \texttt{sorry}, and its premise \texttt{TrProjCtor} is itself only ever inhabited by hand in
+tests. (trenv Review notes; claims-trproj \#25)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1236}: the \texttt{iota}
+retype of this chapter's hypotheses does not only enter at the attributed lines.
+\texttt{Reflection.WF.genTele} is master-attributed on every line of its statement and proof, yet
+is newly \texttt{sorryAx}-tainted on this branch: its one call \texttt{hXY'.subst E.wf} used to
+coerce \texttt{VEnv.WF} to \texttt{VEnv.Ordered} (what \texttt{IsDefEqU.subst} took on master),
+and that lemma now takes \texttt{VEnv.OrderedStrong}, so the identical text coerces the other
+way. Any line-count of ``what the branch touched'' understates its blast radius. (primitives-arith
+Review notes)
+\end{itemize}
+
+\subsubsection*{master (pre-existing)}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{11}: the whole file is three
+\texttt{sorry}'d inversion principles (\ref{thm:injectivity-open}) and nothing else. They are
+what a proof of \texttt{patsStrong} is said to need, so the iota branch's open obligation rests
+on an already-open master foundation, and \ref{thm:foralle-inv-derived} carries two independent
+gaps. (typing Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{679}: \ref{struct:orderedstrong} makes the
+environment hypothesis of the strong system non-derivable in the way master's
+\texttt{Ordered.strong} was; theorems in \texttt{Strong.lean} are themselves \texttt{sorryAx}-free
+because they take \texttt{OrderedStrong} as a hypothesis, but every call site that discharges it
+from \texttt{VEnv.WF} --- all of \texttt{UniqueTyping.lean} and through it
+\texttt{ChurchRosser.lean}, \texttt{HeadReduction.lean} and the \texttt{Verify} layer --- is
+newly tainted. (metatheory Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193}: \texttt{NormalEq.parRed}
+contains two sorries (1193, 1212), both in the case where a rule step meets a normal equality
+(the thesis's Lemma \texttt{gg\_compat}); this is the load-bearing step of Church--Rosser, so
+\texttt{ParRedS.church\_rosser}, \texttt{CRDefEq.trans}, \texttt{IsDefEq.church\_rosser},
+\texttt{IsDefEq.reduce\_sort}, \texttt{IsDefEq.reduce\_forallE} and \texttt{InferType.exists}
+are all unproved. (metatheory Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{174}: the forward direction of
+\texttt{IsDefEqU.weakN\_iff} is \texttt{sorry}, consumed by \texttt{NormalEq.weakN\_inv\_DFC},
+\texttt{ParRed.weakN\_inv}, \texttt{hasType\_app\_bvar0}, \texttt{IsDefEq.skips},
+\texttt{OnCtx.weakN\_inv} and the whole \texttt{weakN\_iff}/\texttt{weak'\_iff} family, hence
+most of \texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}. (metatheory Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment.lean}{208}: the \texttt{inductDecl} case of
+\texttt{addDecl.WF} is \texttt{sorry}, and nothing anywhere constructs an \ref{struct:add-induct}
+witness from \texttt{Environment.addInductive}; the whole inductive-block apparatus of both
+branches (\ref{struct:add-induct}, \ref{struct:tr-ind-type}, \ref{thm:tr-env-proj-defeq}, and the
+$\sim$1000 lines of lemmas built on them) is correct but, end to end, currently vacuous.
+(trenv Review notes; hygiene-review.md \S(g), ``HIGH (value, not hygiene)'')
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{154}: a live \texttt{sorry} in the
+\texttt{const} case of \texttt{LR.adequacy}, the fundamental theorem of the shape logical
+relation. \ref{thm:expa-forallE-inv}, \ref{thm:expa-sort-forallE-inv},
+\ref{thm:expa-sort-inv} and everything \texttt{UniqueTyping.lean} (Experimental) derives from
+them are unproved; the hole predates the commit that landed the injectivity theorems and
+\texttt{UniqueTyping.lean} on top of it, and no comment in the source warns of it.
+(experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/SExpr.lean}{679}: \texttt{IsDefEq.strong} is \texttt{sorry};
+both \texttt{LE\_Interp.strongSound} and \texttt{LR.adequacy} open with \texttt{replace H :=
+H.strong}, so the entire logical-relation layer from \texttt{ShapeLogRel.lean:5054} onward is
+conditional on it, on top of 29 further sorry-bearing lines in the same file (30 in all).
+(experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/SExpr.lean}{614}: \texttt{axiom Params.extra\_pat} is a
+genuine global axiom, not a class field (the corresponding field is commented out of
+\texttt{class Params} at line 42); it asserts that every environment defeq is an instance of a
+registered pattern rule, the hard content of $\iota$-reduction, invisible from the files that
+use it. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/Thierry.lean}{9} and
+\srcloc{Lean4Lean/Experimental/Thierry2.lean}{9}: \texttt{axiom mySorry : $\alpha$} is an
+inhabitant of every type, i.e.\ a proof of \texttt{False}, used in \texttt{DF.comp},
+\texttt{DF.bot} and elsewhere; both files are scratch formalizations imported by nothing, but the
+axiom must be on record so nothing downstream is ever allowed to depend on them.
+\texttt{Thierry2.lean} additionally axiomatizes the judgment it interprets. (experimental-reduction
+Review notes)
+\end{itemize}
+
+\subsection{Medium severity}
+
+\subsubsection*{iota}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{130}: \texttt{VEnv.PatsStrong} is a
+six-hypothesis statement with both environments explicit, so every call site reads \texttt{hp \_
+\_ hpre₀ .rfl \ldots{} rfl rfl hord} (eight sites), forcing the \texttt{*\_strong} lemmas to
+repeat the same composition three or four times; since the statement is discharged only by
+\texttt{sorry}, it is also unverified that it is provable in this generality. (typing Review
+notes; hygiene-review.md \S(a))
+\item \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{92}: \texttt{VEnv.PatTyped} is existential in
+$U,\Gamma,e,m_2,B$ and \texttt{Pattern.RHS.Generic} constrains only the holes the reduct uses, so
+\texttt{PatWF}/\texttt{Ordered.pat} admits a rule that typechecks only at one convenient
+instantiation; documented at \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{181}, but the name
+promises more than the predicate delivers. (typing Review notes; hygiene-review.md \S(a))
+\item \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{62}: the \texttt{Pattern.Check}/\texttt{Realizes}
+side-condition machinery threaded through \texttt{IsDefEq.pat} and nine induction cases is
+exercised only at the trivial check: the one registration point,
+\texttt{VEnv.addRecRule}, hard-codes \texttt{Check.true}, and K-like reduction (the rule that
+would need a real side condition) is not modelled. Seven supporting lemmas and one premise per
+induction case support a condition no registered rule yet uses. (typing Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{188}: \texttt{addQuot\_strong} hand-unrolls
+\texttt{addQuot}'s five steps into $\sim$25 lines of explicit \texttt{.trans} chains, brittle to
+any change to the quotient block, because \texttt{addQuot} is an \texttt{Option} bind chain
+rather than a fold and so cannot reuse \texttt{foldlM\_addConst\_strong}. (typing Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{30}: the docstring of
+\texttt{Params.pat\_env} justifies the field by \texttt{extra\_pat}, but the two fields are
+logically independent (one is about \texttt{env.defeqs}, the other about \texttt{env.pats});
+the comment reads as if \texttt{pat\_env} were derivable. (metatheory Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{12}: the \texttt{Params} class has
+exactly one construction, requiring \texttt{DefEqsAsPats}, which fails as soon as an environment
+contains a \texttt{def} or the quotient rule; the Church--Rosser/standardization/inference
+development of Chapter \ref{chap:metatheory} therefore applies today to no realistic
+environment. Documented in the \texttt{DefEqsAsPats} docstring but not stated in the chapters
+that build on it. (metatheory Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{684}: the pair of \texttt{CoeOut} instances
+(\texttt{OrderedStrong}$\to$\texttt{Ordered} and \texttt{VEnv.WF}$\to$\texttt{OrderedStrong})
+makes the new sorry-backed hypothesis invisible at use sites: \texttt{UniqueTyping.lean} is
+byte-identical to master yet silently acquired the \texttt{patsStrong} dependency. (metatheory
+Review notes)
+\item \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{672}: the deferred obligation is heavier than
+``the $\iota$ rules of the final environment preserve types'': \texttt{PatsStrongOn} is stated
+for one environment, while \texttt{VEnv.PatsStrong} quantifies over every well-formed prefix and
+every constant-only extension of it traversed by the strengthening induction. (metatheory Review
+notes)
+\item \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}: \texttt{toParams} is a
+\texttt{Params} instance only for environments satisfying \texttt{DefEqsAsPats} (no
+\texttt{def}, \texttt{mutualDef} or \texttt{quot} at all); every realistic Lean environment fails
+it, so the model's own well-formed environments are still not connected to the Church--Rosser
+development. (inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{174}: \texttt{VExpr.RuleShape} pins only the
+number of arguments the reduct passes to the minor premise, not their shape (the thesis requires
+$v_i = \lambda x{::}\xi_i.\,\mathrm{rec}_P\,C\,e\,\pi_i[b,x]\,(u_i\,x)$); together with
+\texttt{rules\_wf}, which only forces well-typedness, \texttt{VInductDecl.WF} accepts $\iota$
+rules the kernel would never generate. (inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{257}: K-like reduction is not modelled;
+\texttt{addRecRule} registers only the constructor rule and \texttt{VRecursor.k} is recorded but
+never used, while the kernel's \texttt{toCtorWhenK} does perform it. For K-like recursors the
+model's reduction relation is strictly weaker than the kernel's. (inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{93}: \texttt{FieldPositive}, \texttt{CtorPositive}
+and \texttt{WF.universes} read the manifest $\Pi$-binders of a field type, whereas the kernel's
+\texttt{checkPositivity} reduces to whnf at each step; the model is strictly stricter than the
+kernel, which obstructs ever discharging the previous item. (inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{335}: \texttt{recs\_over\_block}/\texttt{rules\_ctor}
+require every recursor to eliminate one of the block's own type formers, excluding nested
+inductives, which the kernel's \texttt{Environment.addInductive} does add; \texttt{TrEnv'} can
+never be constructed for such a block. Documented as future work. (inductive Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{272}: \texttt{AddInduct} carries no
+\texttt{: Prop} ascription, so it is \texttt{Type}-valued and the \texttt{induct} constructor of
+\texttt{TrEnv'} quantifies over data; necessary for the derived field projections, harmless for
+present (all-\texttt{Prop}-eliminating) consumers, but an undocumented departure from master's
+\texttt{inductive AddInduct \ldots{} : Prop}. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240}: \texttt{TrRecursor.all} and
+\texttt{TrRecursor.k} (line 245) are never used anywhere; extra proof obligations on
+\ref{struct:add-induct}'s producer that buy nothing, \texttt{k} in particular recording a K-like
+flag the model has no corresponding rule for. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{165}: \texttt{insertConsts\_find?\_none}
+is dead code, its only occurrence besides its own statement being its own recursive call.
+(trenv Review notes; unused-contrib.md)
+\item \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{903}: \texttt{TrEnv.pats\_iota\_inv\_shape}
+is redundant with \texttt{TrEnv'.pats\_iota\_inv\_shape} (the proof is literally that lemma
+applied), and unlike its sibling \texttt{pats\_iota'} it does not convert \texttt{SMap.find?}
+into \texttt{Environment.find?} despite its docstring's claim; \texttt{proj\_defeq} still does
+the conversion by hand. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{959} and
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1166}: misfiled material --- the
+$\beta$-telescope family and \texttt{TrExpr.mkAppList} are pure \texttt{VExpr}/\texttt{TrExpr}
+metatheory with no environment-translation content, living in
+\texttt{Verify/Environment/Lemmas.lean} only because \texttt{proj\_defeq} needs them there.
+(trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{917}: \texttt{TrEnv.iota\_defeq} is a
+three-line wrapper over \texttt{VEnv.IsDefEq.pat} with no \texttt{TrEnv} hypothesis at all, yet
+is named as if it had one. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{27}: \texttt{AddQuotAux} hand-replays the
+binder names, binder infos and \texttt{withLocalDecl} order of \texttt{Lean4Lean/Quot.lean} with
+nothing linking the two beyond the proofs breaking if they diverge; the
+\texttt{T\ldots\_tr} derivations (line 331) are 60 lines of hand-built \ref{ind:trexprs} trees.
+Correct, expensive to maintain. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{421}: all 67 iota-attributed
+lines of Chapter \ref{chap:primitives-arith} are the same \texttt{Ordered}$\to$\texttt{OrderedStrong}
+re-threading; every theorem there now depends on \texttt{patsStrong} where on master it depended
+only on \texttt{Ordered}. The declaration site documents this in a comment; none of the
+consuming files does, and \texttt{DivMod.lean}/\texttt{Gcd.lean}/\texttt{Bitwise.lean} have no
+module docstring at all, so a reviewer reading any one of them in isolation would conclude the
+arithmetic primitives are fully verified. (primitives-arith Review notes)
+\item \srcloc{Lean4Lean/Verify/Primitive.lean}{29}: the same retype (\texttt{Ordered}$\to$
+\texttt{OrderedStrong}) was applied uniformly across Chapter \ref{chap:primitives-core} rather
+than minimally; 19 declarations there gained \texttt{sorryAx} on master's route alone, when only
+4 lemmas actually need the stronger hypothesis (through \texttt{HasType.const\_inv}) and the
+rest could have kept \texttt{Ordered}. Reads as a global search-and-replace rather than a
+considered minimisation. (primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{6}: the module docstring's claim that
+``the checker, extension, and declaration modules introduce no additional sorry-backed
+assumptions'' is still literally true but now understates the layer's real hypotheses
+(\texttt{OrderedStrong}, produced only by the admitted \texttt{patsStrong}); not revisited when
+the hypotheses were strengthened. (primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{856}: the syntactic guard
+\texttt{Expr.natBinderTypes} is a hypothesis of the well-founded-recursion theorems, not a check
+the recogniser performs; true by \texttt{rfl} at today's call sites, but the verified statement
+is conditional on a caller property the kernel never tests. (primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17}: \texttt{inductiveReduceRecCore.WF}
+(\ref{thm:vtc-iota-reduce-core}) has no consumer; \texttt{reduceRecursor.WF} two declarations
+below is still \texttt{sorry} and a repo-wide grep finds no other reference. The contribution
+proves the hard arithmetic of the $\iota$ step but connects it to no statement about the kernel.
+(typechecker Review notes; hygiene-review.md \S(g))
+\item \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{24}: \texttt{hmaj} requires the major
+premise, as it occurs in the recursor spine, to already be a constructor application, whereas
+\texttt{inductiveReduceRec} passes a major obtained by \texttt{toCtorWhenK}, \texttt{whnf},
+literal conversion and \texttt{toCtorWhenStruct}; the bridging step rebuilding the spine and
+transporting the translation is neither provided nor mentioned. (typechecker Review notes)
+\item \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{23}: \texttt{hsat} (exact saturation of
+the constructor application) is assumed and the docstring calls it a consequence of well-typing
+``left to the caller'', but that consequence is proved nowhere in the repository; it also
+excludes over-applied constructor applications, exactly where the kernel's and the pattern's
+argument-slicing conventions could genuinely disagree. (typechecker Review notes)
+\item \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{392}: \texttt{inferProj.WF\_struct}
+is sorry and unreferenced (0 dependants, \texttt{sorry-grep.md} \S5); its docstring advertises
+coverage of \texttt{TrProjCtor}, which does not occur in its actual hypotheses (kernel-side
+metadata facts), and even proved it would not discharge \ref{thm:vtc-inferproj} since its listed
+conditions are not the ones \texttt{inferProj} checks. (typechecker Review notes; proj Review
+notes; hygiene-review.md \S(c))
+\item \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{398}: the whole projection story
+rests on \texttt{inferProj.WF\_struct}, which is sorry, with its 15-line informal proof sketch
+living only in a docstring and mechanised only on two hand-built \texttt{Tests/ProjInhabit.lean}
+instances; nothing shows a kernel-accepted projection yields a \texttt{TrProjCtor}, so
+\ref{def:trproj}'s \texttt{proj} case is never inhabited from a real term. (proj Review notes)
+\item \srcloc{Lean4Lean/Theory/Proj.lean}{127}: \texttt{VExpr.projTy} has no library consumer
+(only an \texttt{example}), and the identity its docstring asserts,
+$\mathrm{projTy}=(\mathrm{projMotiveBody}\,i).\mathrm{inst}\,e$, is never proved; the model types
+a projection through \ref{def:proj-motive-body} instead, so the two readings of ``the
+projection's type'' coexist unreconciled, visibly so in \texttt{Tests/ProjShape.lean}'s own
+error message, which names \texttt{projTy} while the type actually checked is built from
+\texttt{projMotiveBody}. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{49}: \texttt{VEnv.addInduct} checks only name
+clashes and closedness, never well-formedness, and neither \texttt{VInductDecl.WF} nor
+\texttt{env.WF} is ever proved for the two hand-built environments; the witnesses show the
+premises of \ref{struct:trprojctor} are jointly satisfiable, not satisfiable in a well-formed
+environment, so \ref{thm:tr-env-proj-defeq} (which needs a \texttt{TrEnv}) is not exercised end
+to end on them. (proj Review notes)
+\item \srcloc{Lean4Lean/Experimental/LogRel.lean}{353}: \texttt{fundamental} is unproved and
+\texttt{LREqTy.defeq\_r}, all three branches of \texttt{LREqTy.symm}, \texttt{LVIsType.sort} and
+\texttt{LVIsType.lift} are \texttt{sorry} or \texttt{stop} (which macro-expands to
+\texttt{repeat sorry} and so is invisible to \texttt{grep}); the module is imported by nothing
+and superseded by \texttt{ShapeLogRel.lean}. (experimental-logrel Review notes; master)
+\item \srcloc{Lean4Lean/Experimental/LogRel.lean}{70}: \texttt{Lean4Lean.SExpr.LogRel} is
+declared three times in this directory with incompatible definitions (inductive here, structure
+in \texttt{ShapeLogRel.lean} and in \texttt{MoreStepIndexed.lean}); likewise
+\texttt{Classifier'} and \texttt{NormalType} twice each. Compiles only because no module imports
+two of them. (experimental-logrel Review notes; master)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1665}: lines 1665--1732 are a block
+comment holding an abandoned 58-line proof of a declaration (\texttt{Shape.WF.plift}) absent
+from the compiled environment, containing seven \texttt{sorry}s and a \texttt{stop}; this is
+why a naive \texttt{grep -c sorry} reports 8 for a file with no live sorry. (experimental-logrel
+Review notes; master)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{10}: \texttt{set\_option
+backward.do.legacy true} at file scope, on a 6100-line file, works around
+leanprover/lean4\#13305 for one proof family; large blast radius for a localised problem.
+(experimental-logrel Review notes; master)
+\item \srcloc{Lean4Lean/Experimental/CoinductiveLogRel.lean}{1}: almost entirely a block comment
+sketching a \texttt{coinductive} command that does not exist in Lean 4; its only live content is
+unused, yet the file still imports \texttt{HeadReduction.lean} and produces an olean under the
+\texttt{Lean4Lean.Experimental} glob. (experimental-logrel Review notes; master)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3430}: the pattern-matching lemmas rest on
+the \texttt{Params} field \texttt{pat\_wf}/\texttt{pat\_uniq}, and there is no \texttt{Params}
+instance anywhere in the repository, so nothing exhibits an environment satisfying either.
+(experimental-logrel Review notes; master)
+\item \srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{909}: the $\iota$ case added here,
+plus the \texttt{Typing.pat\_env} field in \texttt{NormalEq.lean}, duplicates exactly what the
+branch added to \texttt{ChurchRosser.lean}; both files carry an upstream \texttt{TODO: remove,
+this is now part of ChurchRosser.lean}, so the $\iota$ rule is maintained in two places with no
+cross-reference. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/SExpr.lean}{981}: the chapter narrative calls \texttt{WHRed}
+deterministic, but \texttt{WHRed.determ}'s proof is sorry in all five case splits where an
+\texttt{extra} step meets anything, including another \texttt{extra} step; only the
+$\beta$/application fragment is actually proved deterministic. (experimental-reduction Review
+notes)
+\item \srcloc{Lean4Lean/Experimental/Stratified.lean}{79} and
+\srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{59}: the hypothesis of an exported
+theorem was silently strengthened from \texttt{Ordered env} to \texttt{OrderedStrong env}; forced
+and loses no realistic instance, but neither site explains it. (experimental-reduction Review
+notes)
+\item \srcloc{Lean4Lean/Experimental/SExpr.lean}{609}: the \texttt{SExpr} line of work still has
+no $\iota$ rule in its declarative equality; the pattern-based rule is commented out and
+reduction enters only through \texttt{env.defeqs} plus the global \texttt{Params.extra\_pat}
+axiom, while \texttt{WHRed}/\texttt{ParRed} in the same file do carry a \texttt{Pat}-based rule.
+(experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/UniqueTyping.lean}{138}: no textual \texttt{sorry}, but
+\texttt{IsDefEq.toHasTypeS} opens with \texttt{h.strong} and \texttt{SExpr.IsDefEq.strong} is
+\texttt{:= sorry}; \texttt{uniq\_sort}, \texttt{toIsDefEq'} and \texttt{iff\_isDefEq'} are all
+conditional, so a grep-based status label would mislead. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/DomainTheory.lean}{223}: \texttt{Dom.out} is
+\texttt{sorryAx}-backed through the \texttt{stop} tactic despite no literal \texttt{sorry} in the
+file; the same pitfall recurs at \srcloc{Lean4Lean/Experimental/LogRel.lean}{320} and
+\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1703}. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{420}: a \texttt{\#exit} truncates
+elaboration, so \texttt{TypeEqS}/\texttt{TypeEq}, the two declarations the file exists to build,
+are never compiled and do not appear in the environment; the file still builds green.
+(experimental-reduction Review notes)
+\end{itemize}
+
+\subsubsection*{Documentation and process (iota/trproj, hygiene)}
+
+\begin{itemize}
+\item \texttt{Theory/} comment density: contributed code is 25.3\% comment lines against
+master's 1.7\% in the same directory (\texttt{hygiene-review.md} \S(c)); extremes are a 56-line
+module header on the 449-line \srcloc{Lean4Lean/Theory/Proj.lean}{3} and a 27-line docstring on
+the 5-line \texttt{DefEqsAsPats}
+(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{351}, the longest docstring in
+\texttt{Theory/}; master's own \texttt{Theory/} maximum outside \texttt{LevelSat.lean} is 11
+lines). The single loudest AI-authored-looking signal in the diff, though the content itself is
+substantive (derivations, thesis section numbers, explicit non-coverage statements) rather than
+restatement. (hygiene-review.md \S(c))
+\item History hygiene: two pairs of commits are duplicated re-merges of a rebased \texttt{iota}
+(\texttt{655dd3f}/\texttt{75ffde9} share a patch-id; \texttt{7a68882}/\texttt{6fd8a1d} share a
+subject and are, per \texttt{typechecker.tex}'s own review note, literally the same patch under
+two branch labels, so blame over-attributes 141 lines of \texttt{WHNF.lean} to trproj that are
+really iota's); a whole file, \texttt{Theory/Pattern.lean}, was created over 4 commits and then
+deleted again 2 commits later without ever reaching the branch tip. Roughly 27\% of the branch's
+own written lines (net +7762/-363, gross +11439/-3399) were written and then removed inside the
+branch, the two largest offenders being \texttt{Verify/Environment/Lemmas.lean} (22 commits) and
+\texttt{Theory/Typing/InductiveParams.lean} (14 commits, over half rewritten). (hygiene-review.md
+\S(e); typechecker Review notes)
+\end{itemize}
+
+\subsection{Low severity}
+
+\subsubsection*{iota}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{196}, \srcloc{Lean4Lean/Theory/Inductive.lean}{202},
+\srcloc{Lean4Lean/Theory/Inductive.lean}{242}: dead code. \texttt{RecShape.one\_le\_numMotives},
+\texttt{RecShape.majorFormer?\_eq} and \texttt{LargeElim.shape} have no reference anywhere in the
+repository. (inductive Review notes; unused-contrib.md \#45,\#46,\#47)
+\item \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{509}: the \texttt{RHS.spine}/\texttt{iotaCounts}
+cluster (8 declarations, $\sim$70 lines, lines 509--678) is used only by itself, ending in
+\texttt{iotaRHS\_iotaCounts}, which exists only to substantiate a section docstring's claim.
+(inductive Review notes; hygiene-review.md \S(g); unused-contrib.md \#60)
+\item \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{451}: placement/naming.
+\texttt{nodup\_map\_inj\_on} is a pure \texttt{List} lemma declared as
+\texttt{Lean4Lean.VEnv.nodup\_map\_inj\_on}; the generic \texttt{foldlM} toolkit and the
+\texttt{addQuot}/\texttt{addDefEqs} lemmas live in a file named \texttt{InductiveLemmas};
+\texttt{Pattern.inter\_app\_const} and two siblings are \texttt{\_root\_} \texttt{Pattern} lemmas
+declared inside \texttt{namespace VEnv}. (inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{259}: \texttt{addRecRule} spells the major index
+out by hand (\texttt{numParams + numMotives + numMinors + numIndices}) instead of using
+\texttt{r.getMajorIdx}, which every lemma about it does use, and its own docstring claims
+``major at \texttt{getMajorIdx}''. (inductive/syntax Review notes; hygiene-review.md \S(c))
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{75}, \srcloc{Lean4Lean/Theory/Inductive.lean}{107},
+\srcloc{Lean4Lean/Theory/Inductive.lean}{226}: fidelity gaps against the kernel.
+\texttt{ValidIndApp} drops the kernel's exact-arity check although its docstring claims to
+mirror \texttt{isValidIndApp?}; \texttt{FieldInIndices} searches only arguments past
+\texttt{nparams} where the kernel searches all of them; \texttt{LargeElim} tests a typing at
+\texttt{sort 0} where the kernel tests \texttt{isAlwaysZero} on the inferred level. The three
+agree only up to unrecorded side arguments. (inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{351}: \texttt{WF.universes} hides the purely
+syntactic bound \texttt{decl.nparams} $\le$ \texttt{t.type.piArity} inside a clause guarded by
+\texttt{addTypes} succeeding, so it is unavailable if stage 0 fails; and no clause of
+\texttt{VInductDecl.WF} mentions \texttt{VRecursor.all}. Neither is recorded in the source.
+(inductive Review notes)
+\item \srcloc{Lean4Lean/Theory/Inductive.lean}{134}: \texttt{MinorFor} makes the
+constructor-to-minor map injective but no lemma derives that and nothing uses it; the proofs
+that need injectivity appeal to \texttt{rules\_nodup} instead. (reviews/inductive.md)
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{919}: dead upstream code created by a refactor.
+Master's one-line proof of \texttt{lift'\_inst\_hi} was replaced by a re-derivation from a new
+\texttt{lift'\_instN\_hi}, leaving \texttt{lift\_r\_one} (and the chain that fed only it ---
+\texttt{Subst.lift\_r\_comm}, \texttt{Subst.trunc}, \texttt{Subst.Depth.one},
+\texttt{Subst.Depth}, 6 declarations) with no remaining consumer. (syntax Review notes;
+hygiene-review.md \S(g))
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{1232}: \texttt{CtorHeaded.forallE} is unused, proved
+by \texttt{:= h} because definitionally trivial, and its docstring states a different
+proposition than the lemma. (syntax Review notes; hygiene-review.md \S(a),\S(c))
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{1046}: stale section docstring, still promising
+readers decidability instances that were relocated to \texttt{Tests/ShapeDecide.lean}.
+(syntax Review notes; hygiene-review.md \S(c))
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{753}: \texttt{Lift.liftVar\_consN\_lt} and
+\texttt{liftVar\_consN\_succ} have no consumer, making \texttt{Lift.consN\_fixes} dead in effect
+too; of the four-lemma block only \texttt{consN\_cons} is used. (syntax Review notes;
+unused-contrib.md \#63,\#64)
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{1009}: redundancy left unresolved and inconsistently.
+\texttt{subst\_instN} subsumes master's \texttt{subst\_inst} at $n=0$ and
+\texttt{liftN\_subst\_liftN} subsumes master's \texttt{lift\_subst\_lift} at $i=0$ (the latter's
+own docstring says so), yet both master lemmas keep independent hand proofs while
+\texttt{lift'\_inst\_hi} in the same block \emph{was} re-derived; also, \texttt{subst\_instN}'s
+docstring says ``under \texttt{m} binders'' while the statement binds \texttt{n}. (syntax Review
+notes; hygiene-review.md \S(c))
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{1133}: the $\lambda$-telescope block
+(\texttt{lamBinders}, \texttt{lamBinders\_length}, \texttt{foldr\_lam\_lamBinders}) has exactly
+one consumer, and \texttt{lamBinders\_length} is reached only through \texttt{simp}, not by
+name; thin, but not dead. (syntax Review notes)
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{1295}: \texttt{const\_mkApps\_spine} bundles two
+independent facts into one conjunction consumed only as \texttt{.1}/\texttt{.2}, and together
+with \texttt{eq\_const\_mkApps\_of\_spine} has no consumer outside the file. (syntax Review
+notes; unused-contrib.md \#67)
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{1200}: a docstring attached to \texttt{isSort} alone
+describes all six declarations of the block, which exists only to serve the decidability
+instances of the test file. (syntax Review notes)
+\item \srcloc{Lean4Lean/Theory/VExpr.lean}{108}: \texttt{decClosedN} stayed in the theory file
+while sibling head-shape instances moved to \texttt{Tests/ShapeDecide.lean}; it is the one such
+instance a \emph{definition} (\texttt{VEnv.addRecRule}) depends on, which the module docstring
+does not flag as the exception. (syntax Review notes)
+\item \srcloc{Lean4Lean/Theory/VDecl.lean}{51}: \texttt{VRecursor.getFirstIndexIdx} is defined
+and documented but has no consumer anywhere; every other use of the concept calls Lean's own
+\texttt{RecursorVal} field. (syntax Review notes; hygiene-review.md \S(a))
+\item \srcloc{Lean4Lean/Theory/VDecl.lean}{41}: \texttt{VRecursor.k} records the K-like flag but
+is, by its own docstring, unused by the theory; the structure advertises coverage the
+development does not have. (syntax Review notes)
+\item \srcloc{Lean4Lean/Theory/VEnv.lean}{44}: \texttt{VEnv.addPat} cannot fail --- unlike
+\texttt{addConst} it performs no freshness or consistency check, so an \texttt{Ordered}
+environment may carry two conflicting reducts for one pattern until \texttt{VEnv.WF} recovers
+functionality downstream. (syntax Review notes; hygiene-review.md \S(a))
+\item \srcloc{Lean4Lean/Theory/Quot.lean}{11}: after the iota work the model has two mechanisms
+for computation rules (\texttt{quotDefEq} is still a \texttt{VDefEq}, not a \texttt{pats}
+entry); the duplication is acknowledged nowhere in the code. (syntax Review notes)
+\item \srcloc{Lean4Lean/Theory/Proj.lean}{111}: \ref{def:proj-fns} mentions itself twice in its
+own defining equation, so the unfolded expansion of field $i$ is exponential in $i$ and every
+substitution lemma applies its induction hypothesis twice. (proj Review notes)
+\item \srcloc{Lean4Lean/Theory/Proj.lean}{195}: \ref{def:proj-inst-fields} is a second
+telescope-substitution convention beside master's \texttt{VExpr.insts}; no lemma relates them, so
+the two only ever meet through raw \texttt{inst}. (proj Review notes)
+\item \srcloc{Lean4Lean/Theory/Proj.lean}{136}: \ref{def:proj-binder-arity} pins only the number
+of the minor premise's binders, not their types, yet its docstring and
+\texttt{TrProjCtor.minor\_arity} read it as pinning the fields exactly. (proj Review notes)
+\item \srcloc{Lean4Lean/Theory/Proj.lean}{140}: \ref{def:proj-ty} has no library consumer, and
+\texttt{projMotiveBody\_zero}/\texttt{instFields\_nil} are \texttt{@[simp]} but never invoked
+explicitly. (proj Review notes; hygiene-review.md \S(c))
+\item \srcloc{Lean4Lean/Theory/Proj.lean}{1}: the thesis citations attached to the projection
+work (\texttt{inv\_x}, typesys.tex; $\pi_2$, Wtypes.tex) are individually accurate but are
+borrowed idioms from results that prove different things, not inherited theorems.
+(proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ShapeDecide.lean}{20}: 22 global \texttt{Decidable} instances
+declared from a \texttt{Tests} module (21 in \texttt{Lean4Lean.VExpr}); safe only because
+nothing in the library imports the module, and the widest of them
+(\srcloc{Lean4Lean/Tests/ShapeDecide.lean}{27}) decides an existential over any
+\texttt{Option}/\texttt{DecidablePred} pair, not a library predicate at all. (proj Review notes;
+hygiene-review.md \S(d))
+\item \srcloc{Lean4Lean/Tests/IotaShape.lean}{151}: the $\iota$ oracle is lean4lean's own
+\texttt{inductiveReduceRec}, whose $\iota$ step is the 21 trproj lines of
+\texttt{Inductive/Reduce.lean}, so both sides of the comparison live in this repository; a
+shared misreading would not be caught. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/IotaShape.lean}{86}: the \texttt{recs\_elim} check assumes the
+recursor's extra universe parameter sits at index 0 of \texttt{levelParams}, which is how Lean
+generates recursors but is nowhere checked. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/IotaShape.lean}{295}: \texttt{checkBlockRejected} only asks that
+\emph{some} block clause fail; which clause a nested block is expected to fail is pinned for one
+fixture (\texttt{Tree}) and discarded for the other eight. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/IotaShape.lean}{336}: the fixture docstring mislabels
+\texttt{Wrap} as small-eliminating; it is in fact subsingleton-eliminating and carries the extra
+universe parameter (only the wording is wrong; the fixture is exercised correctly).
+(proj Review notes)
+\item \srcloc{Lean4Lean/Tests/IotaShape.lean}{454}: the whole battery is one $\sim$150-line
+\texttt{run\_meta} block, so a failure reports only the first mismatch and every later
+assertion, including the remaining negative controls, is never reached. (proj Review notes)
+\end{itemize}
+
+\subsubsection*{trproj}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{643}: \ref{def:trproj} existentially
+quantifies six pieces of data, two of which are pinned by other fields (parameter count by
+\texttt{params\_length}, field telescope by \texttt{ctor}); replacing them by definitions would
+remove an obligation from each of the three proofs that rebuild the record. (trexpr Review
+notes)
+\item \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{97}: \texttt{TrProjCtor.pat} asserts only that
+\emph{some} reduct is registered under the $\iota$ key; the reduct itself is not pinned and the
+key, a sum, does not exclude a different motive/minor/index split adding to the same total. Is
+the stated obstacle to \ref{thm:trproj-uniq}. (trexpr Review notes)
+\item \srcloc{Lean4Lean/Verify/LocalContext.lean}{183}: a global \texttt{DecidableEq FVarId}
+instance is installed inside \texttt{namespace Lean.LocalContext}, under a section heading about
+the empty local context, though it has nothing to do with \texttt{LocalContext} and could have
+reused \texttt{instDecidableEqOfLawfulBEq} as \texttt{DefinitionSafety} does nearby.
+(trexpr Review notes; hygiene-review.md \S(d))
+\item \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{2349}: \texttt{TrExprS.mkAppList\_inv}
+overlaps with the pre-existing \texttt{AppStack.build}, leaving two spine-inversion idioms in
+one file. (trexpr Review notes)
+\item \srcloc{Lean4Lean/Verify/Expr.lean}{745}: of the three spine lemmas added here, only
+\texttt{getAppArgsList\_mkAppList} has an explicit consumer;
+\texttt{getAppArgsRevList\_mkAppList} has no consumer outside its own file. (trexpr Review notes)
+\item \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{84}: the scope paragraph of
+\texttt{TrProjCtor} makes precise prose claims about the kernel's \texttt{inferProj} that nothing
+in the repository formalizes; the completeness boundary is asserted, not verified. (trexpr
+Review notes)
+\item \srcloc{Lean4Lean/Verify/LocalContext.lean}{181}: within the iota block,
+\texttt{toList\_empty} and \texttt{WF.empty} exist only to serve \texttt{find?\_empty} three
+lines later. (trexpr Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{521}: mechanical repetition ---
+\texttt{addQuot.WF} extracts four \texttt{checkName} results with four near-identical
+seven-line blocks and rebuilds \texttt{safePrimitives} with a 22-line hand-nested chain that a
+single auxiliary lemma would remove. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{20}: \texttt{withLocalDecl\_run} lands in
+the root namespace under a very general name; \texttt{AddQuotAux.Environment.get\_ok} is a
+generally useful lemma buried in a private auxiliary namespace. (trenv Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{34}: some lines the per-line blame marks
+as contributed are master code relocated by refactor commits
+(\texttt{TrConstant.sf\_mono}/\texttt{mono}, \texttt{TrConstVal.mono}, \texttt{TrDefVal.mono},
+\texttt{insertDefs\_wf}); 16 of the 398 iota lines in \texttt{Basic.lean} are of this kind, so
+raw line counts overstate the branch slightly. (trenv Review notes, ``reviewer caveat, not a
+defect'')
+\item \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143}: \texttt{reduceProjCore.WF} and
+\texttt{tryEtaStructCore.WF} are the two structure-side obligations the richer
+\texttt{TrProj}/\texttt{TrProjCtor} metatheory was built to support, and neither was attempted;
+since the branch closed 5 of master's 7 \texttt{TrProj} sorries elsewhere, leaving these
+untouched makes the visible contribution narrower than its supporting infrastructure.
+(typechecker Review notes)
+\item \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{1}: the precomputed blame tags all 141
+lines of this file as trproj, but \texttt{git diff iota trproj} on the file is empty and the
+iota/trproj commits are the same patch with the same author date; any line count of ``trproj
+lines'' over-attributes this file. (typechecker Review notes; see Documentation/process above)
+\item \srcloc{Lean4Lean/Verify/TypeChecker.lean}{21}: \texttt{VEnvs.axiom\_of\_choice} is a
+deliberately misleading name for a finite case split; documented as such, but will still
+surprise a grep-based audit for appeals to choice. (typechecker Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjShape.lean}{136}: the \texttt{Sigma.snd} level-list negative
+control wraps \texttt{checkProj} in \texttt{try \ldots{} catch \_ => pure false}, so any
+unrelated failure makes the control pass vacuously. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjShape.lean}{78}: \texttt{(VLevel.ofLevel lps
+(lvls j)).getD .zero} and \texttt{toLevel}'s \texttt{ls.getD i .anonymous} silently default a
+mistyped level argument instead of failing. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjShape.lean}{113}: the agreement between
+\ref{def:proj-motive-body} and the kernel's \texttt{inferProj} is checked with \texttt{isDefEq},
+which on the kernel side may use structure eta and projection reduction the model deliberately
+lacks; establishes agreement up to kernel conversion, strictly weaker than anything the model
+reproduces. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{586}: the \texttt{\#guard\_msgs in \#print axioms}
+block hardcodes a seven-element axiom list, brittle under any unrelated upstream proof change,
+and the prose attribution of \texttt{sorryAx} to unique typing and $\Pi$-injectivity is a claim
+the guard cannot itself verify. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{179}: the \texttt{Plain} and \texttt{Dependent}
+namespaces duplicate about 20 near-identical declarations, \texttt{Dependent} subsuming
+\texttt{Plain} except for one case; untracked near-copies also sit in
+\texttt{review-artifacts/inhabitation/}. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{172}: asymmetric packaging --- \texttt{Plain}
+exposes \texttt{trProj0} but no \texttt{trProj1}; \texttt{Dependent} exposes
+\texttt{trProjDep1} but no \texttt{trProjDep0}. (proj Review notes)
+\item \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{353}: 22 declarations for a six-step $\beta$
+reduction, because \texttt{IsDefEqU.betaN} needs \texttt{VEnv.WF}, which these hand-built
+environments lack; separately, $\sim$50 namespace-level one-use theorems
+(\texttt{hbeta5}, \texttt{hc5}, \ldots) are declared where upstream style would use local
+\texttt{have}s. (proj Review notes; hygiene-review.md \S(d))
+\item \srcloc{Lean4Lean/Tests/ProjShape.lean}{155}: several top-level definitions
+(\texttt{usS}, \texttt{ps}, \texttt{Fs}, \texttt{structTy}, \texttt{P₀}) use maximally generic
+names inside an unscoped section. (hygiene-review.md \S(d))
+\item \texttt{.github/workflows/ci.yml:25}: the comment states \texttt{Lean4Lean.Tests} is among
+\texttt{defaultTargets}, but \texttt{lakefile.toml:2} lists only \texttt{Lean4Lean},
+\texttt{lean4lean}, \texttt{Lean4Lean.Theory} and \texttt{Lean4Lean.Verify}; the test modules
+are in fact built by a separate CI step, so nothing is unchecked, but the comment is wrong.
+(proj Review notes)
+\item \srcloc{Lean4Lean/Experimental/StratifiedUntyped.lean}{51}: the added
+\texttt{IsDefEqU1.pat} constructor is never eliminated; its only would-be consumer is inside a
+commented-out block. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/Stronger.lean}{28}: \texttt{pats \_ \_ := False} silently
+restricts every theorem about erased environments in the file to $\iota$-free ones; pragmatic,
+since the file dead-ends in four sorries regardless. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Inductive/Reduce.lean}{71}: \texttt{inductiveReduceRecCore}, the
+21-line ι-step extraction trproj carved out of \texttt{inductiveReduceRec}, sits inside a
+\texttt{section} whose \texttt{variable}s (\texttt{[Monad m], env, whnf, inferType, isDefEq}) it
+does not use; correct today only because Lean binds \texttt{variable}s on use, so a future
+reference to \texttt{env} would silently change its signature. (kernel Review notes;
+hygiene-review.md \S(f))
+\end{itemize}
+
+\subsubsection*{master (pre-existing)}
+
+\begin{itemize}
+\item \srcloc{Lean4Lean/Inductive/Reduce.lean}{91}: after the trproj split, the unchanged master
+docstring of \texttt{inductiveReduceRec} still describes the $\iota$ slicing in full, now
+\texttt{inductiveReduceRecCore}'s job and documented there too, so the algorithm is stated
+twice. (kernel Review notes)
+\item \srcloc{Lean4Lean/TypeChecker.lean}{946}: \texttt{TypeChecker.etaExpand} has no call site
+anywhere under \texttt{Lean4Lean/}; if it realizes the thesis's $\mathrm{rec}$-normal-form
+preprocessing, that intent is undocumented and unenforced. (kernel Review notes)
+\item \srcloc{Lean4Lean/ForEachExprV.lean}{25}: \texttt{Expr.forEachV}/\texttt{forEachV'} appear
+dead; the module is imported by \texttt{TypeChecker.lean} but neither function has a call site.
+(kernel Review notes)
+\item \srcloc{Lean4Lean/TypeChecker.lean}{593}: \texttt{quickIsDefEq} destructures
+\texttt{TypeChecker.State} positionally as \texttt{.mk a1 \ldots{} a7 (eqvManager := m)};
+reordering or adding a field would silently or confusingly change what this matches.
+(kernel Review notes)
+\item \srcloc{Lean4Lean/TypeChecker.lean}{299}: the \texttt{eagerReduce} marker (consulted at
+four sites) has no thesis counterpart and no local docstring stating what the sites jointly
+guarantee, though it mirrors core Lean's own gadget and is correctly absent from
+\texttt{divergences.md}. (kernel Review notes)
+\item \srcloc{Lean4Lean/Inductive/Add.lean}{453}: \texttt{AddInductive.run} computes its
+\texttt{isUnsafe} binding twice (lines 453 and 470), the second silently shadowing the first.
+(kernel Review notes; hygiene-review.md \S(f))
+\item \srcloc{Lean4Lean/TypeChecker.lean}{493}: \texttt{reducePowMaxExp} silently declines to
+reduce \texttt{Nat.pow} above exponent $2^{24}$ (matching the C++ kernel's own cap), but the
+incompleteness is not listed in \texttt{divergences.md}. (kernel Review notes)
+\item \srcloc{Lean4Lean/TypeChecker.lean}{845}: the \texttt{s.isConstOf ``true} shortcut in
+\texttt{isDefEqCore'} is an asymmetric special case with neither a thesis counterpart nor a
+\texttt{divergences.md} entry. (kernel Review notes)
+\item \srcloc{Lean4Lean/TypeChecker.lean}{355}: \texttt{reduceProj} is written in an awkward
+explicit-bind style for the benefit of its own proof, and a commented-out scratch block is left
+at the end of the file (line 968). (kernel Review notes)
+\item \srcloc{Main.lean}{29}: \texttt{FuelConfig.toObj} uses \texttt{panic!} when the derived
+JSON encoding is not an object, inside a command-line argument parser. (kernel Review notes)
+\item \srcloc{Lean4Lean/FuelConfig.lean}{12}: the docstring's claim ``Defaults are set so
+mathlib passes'' has zero supporting evidence anywhere in the repository (no CI job, test or
+benchmark mentions mathlib). (reviews/kernel.md)
+\item \texttt{divergences.md:17} vs.\ \texttt{divergences.md:19}: internal inconsistency in the
+project's own divergence log. Entry 17 correctly states lean4lean does \emph{not} recheck the
+constructor/recursor declarations restored after nested-inductive elimination; entry 19 asserts
+the opposite. Reading \texttt{Environment.addInductive}
+(\srcloc{Lean4Lean/Inductive/Add.lean}{733}) confirms entry 17: the restored declarations are
+inserted with a bare \texttt{.add}, no further \texttt{checkType}/\texttt{isDefEq} call. Not a
+blueprint issue, but confusing for the next reader of that file. (reviews/kernel.md)
+\item \srcloc{Lean4Lean/PtrEq.lean}{17}: the two pointer-equality soundness axioms are genuine
+trusted assumptions, honestly documented and used in only two places, but at
+\srcloc{Lean4Lean/TypeChecker.lean}{739} \texttt{ptrEqConstantInfo} gates a different algorithm
+rather than a shortcut. (kernel Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment.lean}{208}: \texttt{addDecl.WF}'s \texttt{inductDecl}
+case is sorry, so everything either branch proves about inductive blocks lives on the model side
+of that gap; master's hole, not a contributed one, but it bounds every claim built on it.
+(kernel Review notes; see High severity above for the fuller framing)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{73}: a documented-but-dead cluster
+(\texttt{AddsConsts}, \texttt{constants\_stable}, \texttt{constants\_of\_mem},
+\texttt{PrimitiveInductiveResult}, \texttt{checkInductive.WF}, \ldots, 123 of the file's 195
+lines) waits on the same \texttt{addDecl.WF} case above; \texttt{AddsConsts} itself is
+constructed nowhere. (primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{121}: \texttt{AddsConsts.hasPrimitives\_bool}
+and \texttt{.hasPrimitives\_nat} are byte-for-byte the same proof script with the constant list
+swapped. (primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{318}: namespace inconsistency
+for \texttt{List} helpers --- some declared with \texttt{\_root\_.}, others declared bare inside
+\texttt{namespace Lean4Lean} and so landing in the shadow \texttt{Lean4Lean.List}.
+(primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{587}:
+\texttt{unfoldNatWellFounded.WF'} is a single 1135-line tactic proof requiring
+\texttt{maxHeartbeats 1000000}, not practically reviewable at that size; its \texttt{BlockQ}
+docstring is also stale (says two checks are recorded, the definition records four).
+(primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{376}: three adjacent lines
+spell the same environment coercion three different ways after the iota merge.
+(primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Primitive.lean}{458}: small pre-existing interface asymmetries ---
+\texttt{ReflectsNatNat'.of\_pred\_equations} hard-codes \texttt{Nat.pred} instead of taking it as
+a parameter, unlike its six siblings; \texttt{VExpr.liftN\_lams} returns only an existential
+where \texttt{liftN\_lams'} computes the lifted domains. (primitives-core Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{26}: stale module docstring
+--- says \texttt{Nat.bitwise}/\texttt{unfoldNatWellFounded}'s \texttt{Condition.check} calls
+``currently sit under binders'' when the hoisting it describes as future work
+(\srcloc{Lean4Lean/Primitive.lean}{409}, \texttt{372}) has already happened, which is why
+\texttt{Bitwise.lean}/\texttt{Gcd.lean} can pass \texttt{rfl} for \texttt{hnil}.
+(primitives-arith Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1448}: inconsistent
+spelling of the same coercion within one proof (\texttt{c.Ewf.orderedStrong} vs.\ bare
+\texttt{c.Ewf} relying on \texttt{CoeOut}, at 1448--1451 and 1850--1851). (primitives-arith
+Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{41}: the local abbreviation
+\texttt{hE := ctx.Ewf.orderedStrong} carries the wrong strength for 7 of its 12 uses, which
+immediately downgrade it with \texttt{hE.ordered}; \texttt{Gcd.lean} made the same edit without
+needing any downgrades. (primitives-arith Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{31}: \texttt{checkNatBitwise.WF}
+has no docstring, unlike every other clause-level \texttt{WF} theorem in the group, and is the
+longest (375 lines) and most intricate declaration in the chapter. (primitives-arith Review
+notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{225}: \texttt{checkNatLAnd.WF},
+\texttt{checkNatLOr.WF} and \texttt{checkNatXor.WF} are near-identical 25--30-line proofs;
+\texttt{checkNatBoolCases.WF} nearby shows the parametrised alternative. (primitives-arith
+Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{2438}:
+\texttt{Condition.fvarsIn\_ite} is dead code; its sibling \texttt{fvarsIn\_dite} is used once.
+(primitives-arith Review notes)
+\item \srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{713}: \texttt{TrExprS.bvar0}
+through \texttt{bvar3} are the only declarations in the file escaped with \texttt{\_root\_} to
+\texttt{Lean4Lean.TrExprS}, easily confused with the generic \texttt{TrExprS} API.
+(primitives-arith Review notes)
+\item \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{211}: a commented-out \texttt{have} is
+left inside \texttt{tryEtaExpansionCore.WF}'s proof. (typechecker Review notes)
+\item \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{21}: \texttt{reduceBinNatOpG}, an
+executable definition, is introduced inside a verification file as a generalisation of the
+kernel's own \texttt{reduceBinNatOp}, duplicating kernel code in a proof file.
+(typechecker Review notes)
+\item \srcloc{Lean4Lean/Tests/Level.lean}{8}: states that canonicity of \texttt{normalize'} and
+completeness of \texttt{isEquiv'}/\texttt{geq'} are \emph{not} proved; all three now are
+(\srcloc{Lean4Lean/Verify/Level.lean}{3849}, \texttt{3861}, \texttt{3870}). Stale doc/code
+mismatch. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/Level.lean}{41}: \texttt{mkData\_depth},
+\texttt{mkData\_hasParam} and \texttt{mkData\_hasMVar} are referenced nowhere in the project and
+are the only consumers of the \texttt{Lean.Level.mkData\_eq} axiom, needing
+\texttt{allowUnsafeReducibility} to elaborate. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/EquivManager.lean}{81}: \texttt{RelevantEq.uniq} and two dependent
+theorems reach \texttt{sorryAx} through \texttt{TrProj.uniq}, because \texttt{RelevantEq}'s
+\texttt{proj} case compares two projections by index alone, ignoring the structure name; this
+sits on the main path of the verified type checker's memo cache
+(\srcloc{Lean4Lean/Verify/EquivManager.lean}{325}), not in a corner. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/LevelStd.lean}{155}: stale doc comment naming two lemmas
+(\texttt{qsort\_perm\_toList}, \texttt{pairwise\_qsort\_normLt}) as unproved and nonexistent;
+both facts are now proved under different names. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/Level.lean}{3822}: \texttt{normalize'\_eval},
+\texttt{normalize'\_complete}, \texttt{isEquiv'\_complete}, \texttt{geq'\_wf} and
+\texttt{geq'\_complete} are used nowhere; the reconstruction layer supporting
+\texttt{normalize'} (roughly lines 1290--2250) supports a function the kernel never calls.
+(levels Review notes)
+\item \srcloc{Lean4Lean/Verify/Level.lean}{16}: a commented-out \texttt{VLevel.toLevel}
+definition and a \texttt{toLevel\_inj := sorry} are left in the file; the only occurrence of the
+token \texttt{sorry} in this master-only group. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/Level.lean}{1}: no module docstring on a 3880-line file; a reader
+reaches line 166 before learning the file formalizes G\'eran's canonical form.
+(levels Review notes)
+\item \srcloc{Lean4Lean/Verify/EquivManager.lean}{41}: \texttt{RelevantEq.symm},
+\texttt{.trans} and \texttt{M.WF.bind\_le} are never used anywhere. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/NormLt.lean}{6}: the header overstates what is proved
+(``a strict weak order'') against what is exported (asymmetry and negation-transitivity, exactly
+what \texttt{Array.qsort\_sorted} needs). (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/QSort.lean}{34}: vendored code still carrying upstream TODOs
+(``these attributes still need to be moved to the standard library''), commented-out attribute
+experiments, and global \texttt{grind}-lemma registrations that every importer inherits.
+(levels Review notes)
+\item \srcloc{Lean4Lean/Verify/QSort.lean}{27}: no public theorem gives
+\texttt{(qsort as lt lo hi)[i] = as[i]} outside \texttt{[lo,hi]}; the private lemmas exist but
+are not exported. Latent limitation, not a defect for the current consumer. (levels Review
+notes)
+\item \srcloc{Lean4Lean/Verify/Level.lean}{1222}: end-to-end theorems each thread five to seven
+separate side conditions about \texttt{normalize u} by hand rather than through one bundled
+predicate. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/Level.lean}{3177}: \texttt{Std.TreeMap} as the representation
+costs a whole \texttt{toList}-factoring layer ($\sim$150 lines); a sorted-association-list
+representation would have avoided it. (levels Review notes)
+\item \srcloc{Lean4Lean/Verify/NormLt.lean}{97}: \texttt{baseCmp\_swap} and
+\texttt{normLtAux\_eq} close several goals with bare \texttt{grind}/\texttt{simp\_all}, not
+independently checkable by reading; \texttt{QSort.lean} is \texttt{grind}-first throughout.
+(levels Review notes)
+\item \srcloc{Lean4Lean/Verify/NormLt.lean}{47}: \texttt{baseCmp} duplicates its \texttt{max}
+and \texttt{imax} arms verbatim; \texttt{getUndefParam\_none}
+(\srcloc{Lean4Lean/Verify/Level.lean}{101}) is dense and hard to follow.
+(levels Review notes)
+\item \srcloc{Lean4Lean/Verify/EquivManager.lean}{313}: \texttt{addEquiv.WF} and
+\texttt{isDefEq.WF} live in \texttt{Lean4Lean.TypeChecker.Inner} rather than
+\texttt{EquivManager}; defensible but surprising. (levels Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{53}: \texttt{Shape} is a \texttt{def} by
+recursion on \texttt{Nat} rather than an inductive family, so essentially every order/lift/join/
+typing lemma is stated three times (for \texttt{Shape}, \texttt{WShape}, \texttt{TShape}); the
+first $\sim$2500 lines are this boilerplate. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3333}: 13 docstrings in 6100 lines, none
+on the pivotal definitions (\texttt{Shape.WF}, \texttt{LE\_Interp}, \texttt{LR}, \ldots); two sit
+on self-evident lemmas instead. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3936}: proof-size hygiene --- several
+single-tactic-block proofs of 100--330 lines with no internal comments, essentially unreviewable
+by anyone but the author. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{820}: \texttt{Shape.trim} is defined and
+never used. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2716}: \texttt{find\_cycle}, a reusable
+pigeonhole lemma, is declared \texttt{private} in the middle of a shape file; belongs in
+\texttt{Lean4Lean/Std} or upstream. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{6100}: the file ends after
+\texttt{LR.SubstWF.symm} without closing either open namespace and with no pointer to
+\texttt{ShapeLogRelAdequacy.lean}, where the development continues. (experimental-logrel Review
+notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1887}: \texttt{TShape.type} has no
+\texttt{TShape.prop} counterpart, and the head-discrimination grid omits two of its fourteen
+pairs with no comment distinguishing omission from oversight. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4623}: \texttt{StrongSoundCore.const}
+takes a bundle for every classification of a constant, though a constant has exactly one;
+whether the generality is ever exercised is unchecked. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1392}: a \texttt{variable}/\texttt{include}
+idiom threads induction hypotheses invisibly through a 165-line namespace, making several lemmas
+look like standalone results with undocumented hypotheses. (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/LogRel.lean}{157}: \texttt{LRIsType.irrel'} closes with
+\texttt{grind}, brittle across toolchain bumps (in dead code, but the same reliance appears in
+live modules). (experimental-logrel Review notes)
+\item \srcloc{Lean4Lean/Experimental/NormalEq.lean}{97}: \texttt{Typing.pat\_env} has no
+docstring, unlike the field it mirrors in \texttt{ChurchRosser.lean}; the \texttt{Typing}
+structure it belongs to is never instantiated anywhere. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{63}: the \texttt{Shape}/\texttt{ShapeFun}
+approximation lattice exists in three near-identical copies (here, \texttt{Thierry2.lean},
+\texttt{ShapeLogRel.lean}), each with its own partly admitted order laws. (experimental-reduction
+Review notes)
+\item \srcloc{Lean4Lean/Experimental/StepIndexed.lean}{59}: \texttt{IsTy}, \texttt{IsTyN} and
+\texttt{IsTy.def} are axioms positing the fixpoint the file sets out to construct;
+\texttt{IsTyN} is unused and $\sim$40\% of the file is commented out. (experimental-reduction
+Review notes)
+\item \srcloc{Lean4Lean/Experimental/NormalEq.lean}{145}: several declarations here carry fully
+qualified names that already exist in \texttt{ChurchRosser.lean}
+(\texttt{Pattern.Matches.hasType}, \texttt{Check.OK.weakN}); any name-indexed tool will conflate
+the sorry-free copy here with the tainted one there. (experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/Stratified.lean}{160}: two thirds of this file and
+\texttt{StratifiedUntyped.lean} are commented-out abandoned attempts containing further sorries,
+making the last live declaration of each look admitted to any line-range-based analysis.
+(experimental-reduction Review notes)
+\item \srcloc{Lean4Lean/Experimental/ParallelReduction.lean}{699}: two pre-existing master
+sorries in \texttt{NormalEq.parRed} make the file's Church-Rosser corollaries conditional; the
+$\iota$ case the branch added extends an already-unproved theorem. (experimental-reduction
+Review notes)
+\end{itemize}
+
+\section{Blueprint limitations}
+\label{status:sec:limits}
+
+What this blueprint does not check, stated plainly so its claims are not over-read:
+
+\begin{itemize}
+\item \textbf{One build snapshot.} \texttt{decls.tsv}/\texttt{all-constants.tsv} come from a
+single compiled tree (2026-09-10, HEAD \texttt{20ec229}); nothing was rebuilt for this pass
+(\texttt{CONVENTIONS.md} forbids \texttt{lake build}). A later commit on \texttt{trproj} is not
+reflected anywhere in this blueprint until the census is regenerated.
+\item \textbf{\texttt{Experimental/} is only partially censused.} Its five mutually-exclusive
+draft modules cannot be imported together, so the census ran one pass per module and merged;
+cross-module interactions (e.g.\ the three duplicate \texttt{LogRel} declarations of
+\S\ref{status:sec:issues}) are visible only because a reviewer read the source, not because any
+one build surfaces them.
+\item \textbf{Reach counts are exact only where cited to a source.} The five reach numbers in
+\S\ref{status:sec:sorries} (343/138/92/61/0) come from \texttt{sorry-grep.md}'s own dependency
+walk; reach for the eleven master sorries is described qualitatively (which named lemmas and
+families become conditional), not as an exhaustively enumerated transitive closure, because no
+committed tool computes that closure for arbitrary declarations.
+\item \textbf{Blame attribution is a line-majority heuristic, not a commit-history fact.} A
+declaration whose range mixes tags is \texttt{mixed}; a declaration whose file has no blame
+entry is assumed byte-identical to master. This mis-attributes at least one file outright
+(\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{1}, tagged entirely trproj by line count while
+being, by commit content, iota's --- \S\ref{status:sec:issues}), and 16 lines elsewhere are
+known-relocated master code counted as contributed (\S\ref{status:sec:issues}, trenv).
+\item \textbf{\texttt{sorry}-detection is textual.} \texttt{sorry-grep.md} and this chapter's own
+re-verification find literal \texttt{sorry} tokens by regex; the \texttt{stop} tactic
+(\texttt{repeat sorry}) and axioms that assert a fixpoint's existence achieve the same effect
+without the token, and are caught in this chapter only where a chapter's own review notes
+happened to name them (\S\ref{status:sec:issues}, experimental-logrel/-reduction). An
+exhaustive audit for every such disguised gap was not performed.
+\item \textbf{No claim here was checked by building.} Every axiom profile and
+\texttt{\#print axioms} figure quoted in \S\ref{status:sec:trust}--\ref{status:sec:issues} was
+either read from a committed \texttt{\#guard\_msgs} pin or, per \texttt{claims-iota.md}/
+\texttt{claims-trproj.md}'s own methodology, obtained via \texttt{lake env lean} on individual
+files, never a full \texttt{lake build}; PARTIAL verdicts in those two files exist specifically
+because the full build was out of scope.
+\item \textbf{The claims audit is not exhaustively reproduced here.} \texttt{claims-iota.md} and
+\texttt{claims-trproj.md} between them adjudicate 110 claims (60 iota, 50 trproj) from the
+branches' own PR descriptions; \S\ref{status:sec:issues} reproduces only the handful whose
+FALSE/PARTIAL verdict
+corresponds to a concrete code- or documentation-level issue distinct from what the module
+chapters already record, not the full claim-by-claim ledger.
+\item \textbf{Severity and branch labels are inherited, not re-derived.} Where a chapter's Review
+notes or a \texttt{reviews/*.md} file calls something High/Medium/Low or attributes it to a
+branch, this chapter keeps that judgement; it does not independently re-score severity.
+\item \textbf{This chapter is not a duplicate of Chapters \ref{chap:contrib-iota}/
+\ref{chap:contrib-trproj}.} Those chapters argue the overall quality case for each branch in
+narrative form; this chapter is the flat, deduplicated ledger behind both of them plus every
+master-only and \texttt{Experimental} issue neither branch chapter is scoped to cover.
+\end{itemize}

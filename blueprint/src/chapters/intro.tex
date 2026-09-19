@@ -1,0 +1,348 @@
+\chapter{Introduction}
+\label{chap:intro}
+
+This blueprint is a self-review of two contributed branches, \texttt{iota} and \texttt{trproj},
+against the lean4lean codebase they extend. It is organised as a dependency graph of roughly 950
+nodes drawn from the whole repository (Chapters~\ref{chap:syntax}--\ref{chap:experimental-reduction}),
+followed by three synthesis chapters that step back and answer the question directly: are the two
+branches valuable, and are they carried out to a good standard, or not
+(Chapters~\ref{chap:contrib-iota}, \ref{chap:contrib-trproj}, \ref{chap:status}). This chapter gives
+the map: what the codebase is, what it formalises of its stated reference, what the two branches
+add, and how to read the rest of the document.
+
+\section{What lean4lean is}
+
+lean4lean is an executable re-implementation of Lean 4's trusted kernel, written in Lean 4 itself,
+paired with a Rocq-style formal development that states and partially proves that the
+re-implementation is correct. Three things live side by side in one library. First, an executable
+kernel over \texttt{Lean.Expr} and \texttt{Lean.Kernel.Environment} (the same data structures the
+real compiler uses) that can typecheck a real Lean environment and is exercised against it
+(\texttt{Replay.lean} replays declarations from an imported environment through this checker).
+Second, \texttt{Theory/}, an abstract model (\texttt{VExpr}, \texttt{VEnv}, a single relation
+\texttt{VEnv.IsDefEq}) that formalises the type theory described in Mario Carneiro's thesis,
+\emph{The Type Theory of Lean}. Third, \texttt{Verify/}, which relates the two: it defines a
+translation \texttt{TrExprS}/\texttt{TrEnv} from the executable syntax to the abstract model and
+proves, for the parts that are finished, that the checker accepts a term only if the model derives
+its typing, i.e.\ kernel soundness with respect to the model, not a metamathematical soundness or
+consistency result (Chapter~\ref{chap:kernel} and the thesis mapping below explain the difference).
+\texttt{Experimental/} is a fourth area of exploratory metatheory (a logical-relations line and a
+parallel-reduction line, Chapters~\ref{chap:experimental-logrel}
+and~\ref{chap:experimental-reduction}) that is not consumed by \texttt{Verify/} and does not ship
+as part of the correctness argument.
+
+Line counts below are from \texttt{wc -l} over \texttt{*.lean} files under
+\texttt{/home/barabba/Documents/Research/Projects/Peregrine/lean4lean} at branch \texttt{trproj},
+HEAD \texttt{20ec229}, Lean toolchain \texttt{leanprover/lean4:v4.33.0-rc2} (\texttt{lean-toolchain}).
+
+\begin{description}
+\item[Executable kernel: 4693 lines.] The root \texttt{Lean4Lean/*.lean} files (2876 lines:
+\texttt{Expr.lean}, \texttt{Environment.lean}, \texttt{TypeChecker.lean}, \texttt{Quot.lean},
+\texttt{Level.lean}, \texttt{Declaration.lean}, \texttt{Instantiate.lean},
+\texttt{LocalContext.lean}, \texttt{Primitive.lean}, \texttt{Replay.lean},
+\texttt{EquivManager.lean}, \texttt{ForEachExprV.lean}, \texttt{FuelConfig.lean},
+\texttt{List.lean}, \texttt{PtrEq.lean}, plus three ten-line import aggregators
+\texttt{Theory.lean}/\texttt{Verify.lean}/\texttt{Tests.lean}), together with
+\texttt{Environment/Basic.lean} (138 lines, helpers on \texttt{Lean.Kernel.Environment}),
+\texttt{Inductive/\{Add,Reduce\}.lean} (893 lines, the kernel's inductive-declaration and
+recursor-reduction checker), and \texttt{Std/} (786 lines, small standard-library shims:
+\texttt{HashMap}, \texttt{SMap}, \texttt{PersistentHashMap}, \dots). This is the code being
+verified; it is Lean source but not itself a formal development.
+\item[\texttt{Theory/}: 10455 lines.] The abstract model: \texttt{VExpr.lean},
+\texttt{VDecl.lean}, \texttt{VLevel.lean}, \texttt{Inductive.lean}, \texttt{Proj.lean},
+\texttt{Quot.lean}, \texttt{LevelSat.lean}, \dots at the top
+level, and \texttt{Theory/Typing/} (7333 of the 10455 lines: \texttt{Basic.lean},
+\texttt{Lemmas.lean}, \texttt{Strong.lean}, \texttt{ChurchRosser.lean},
+\texttt{UniqueTyping.lean}, \texttt{Injectivity.lean}, \texttt{HeadReduction.lean},
+\texttt{Pattern.lean}, \texttt{InductiveLemmas.lean}, \texttt{InductiveParams.lean}, \dots).
+\item[\texttt{Verify/}: 25976 lines.] The kernel-to-model translation and its correctness
+lemmas: \texttt{Verify/Environment/} (11153 lines, including \texttt{Environment/Primitive/}),
+\texttt{Verify/TypeChecker/} (2631 lines), \texttt{Verify/Typing/} (3294 lines), plus
+\texttt{Verify/Expr.lean}, \texttt{Verify/Level.lean}, \texttt{Verify/Primitive.lean},
+\texttt{Verify/Environment.lean}, \dots at the top level.
+\item[\texttt{Tests/}: 2131 lines.] Executable validation of the model against the real kernel
+and of the branches' own specifications against hand-built examples
+(\texttt{IotaShape.lean}, \texttt{ProjShape.lean}, \texttt{ProjInhabit.lean},
+\texttt{ShapeDecide.lean}). Not in \texttt{defaultTargets}, so it does not run on a plain
+\texttt{lake build}.
+\item[\texttt{Experimental/}: 13334 lines.] The exploratory metatheory of
+Chapters~\ref{chap:experimental-logrel}--\ref{chap:experimental-reduction}, unconsumed by
+\texttt{Verify/}.
+\end{description}
+
+The grand total is 56589 lines under \texttt{Lean4Lean/} (\texttt{find Lean4Lean -name '*.lean' |
+xargs wc -l}), plus two small entry points outside that tree: \texttt{Lean4Lean.lean} (48 lines,
+the library's own import root) and \texttt{Main.lean} (148 lines, the standalone
+\texttt{lean4lean} checker executable).
+
+\section{The thesis and how the chapters map to it}
+
+Mario Carneiro's \emph{The Type Theory of Lean} is an eight-section article
+(\texttt{lean-type-theory/\{intro,axioms,typesys,unique,Wtypes,soundness,normalization,
+compilation\}.tex}, 1287 lines read in full for this review, \texttt{understand/thesis-map.md}).
+Section~1 is a non-technical introduction and is not mapped below. The remaining seven sections
+map onto lean4lean as follows.
+
+\textbf{\S2, axioms.} This is the only section that \emph{defines} Lean: syntax and seven typing
+rules (2.1), the ideal definitional equality $\equiv$ with a syntactic level-inequality system
+(2.2), the algorithmic equality $\Leftrightarrow$ and a head reduction $\rightsquigarrow$ (2.3),
+\texttt{let}/$\zeta$ (2.4), constants/$\delta$ (2.5), inductive types (2.6), and quotients,
+\texttt{propext} and \texttt{choice} (2.7). lean4lean formalises 2.1 as \texttt{Theory/VExpr.lean}
+(de Bruijn syntax, no \texttt{let}, no \texttt{proj}, no literals) and 2.1--2.2 as the single
+relation \texttt{VEnv.IsDefEq} rather than as separate typing and equality judgments. Levels (2.2)
+are defined \emph{by} their semantics rather than by the thesis's syntactic system
+(\texttt{Theory/VLevel.lean}), and \texttt{Theory/LevelSat.lean} additionally proves the resulting
+decision problem NP-hard, a fact the thesis does not state. The algorithmic relation $\Leftrightarrow$
+of 2.3 itself is never formalised: its role is played instead by the executable
+\texttt{TypeChecker.lean} together with its correctness development in
+Chapter~\ref{chap:typechecker}, though the head reduction $\rightsquigarrow$ has a direct
+counterpart in \texttt{Theory/Typing/HeadReduction.lean}. There is no $\zeta$ rule (2.4):
+\texttt{let} is substituted away at translation time. $\delta$ (2.5) is \texttt{VEnv.defeqs} plus
+\texttt{IsDefEq.extra}. Inductive types (2.6) are \texttt{Theory/VDecl.lean},
+\texttt{Theory/Inductive.lean} and the pattern-rule machinery of
+\texttt{Theory/Typing/Pattern.lean}, the \texttt{iota} branch's subject, Chapter~\ref{chap:inductive}.
+Quotients (2.7) are \texttt{Theory/Quot.lean} on the model side and the 615-line
+\texttt{Verify/Environment/Quot.lean} (\texttt{iota}) on the translation side.
+
+\textbf{\S3, typesys.} Proves $\equiv$ undecidable, that $\Leftrightarrow$ is therefore not
+transitive, that the algorithmic typing judgment consequently fails subject reduction, and
+records Regularity, Weakening and Substitution.
+lean4lean realises and generalises the last three in \texttt{Theory/Typing/Lemmas.lean}
+(\texttt{Ctx.LiftN}, \texttt{Ctx.InstN}, \texttt{Ctx.SubstEq}). The undecidability and
+non-transitivity results are about $\Leftrightarrow$, which is not formalised, so they have no
+direct counterpart; their practical stand-in is the \texttt{Verify/TypeChecker} correctness chain.
+Regularity specialised to the \texttt{iota} rule is exactly the branch's one open obligation,
+\texttt{VEnv.WF.patsStrong} (\ref{thm:wf-patsstrong}, \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}).
+
+\textbf{\S4, unique.} Proves unique typing by stratifying the judgment as $\vdash_n$, splits
+$\equiv$ into a $\beta\delta\zeta\iota$-reduction and a proof-irrelevance relation to get
+Church--Rosser modulo proof irrelevance by Tait--Martin-L\"of, and closes the induction with
+``definitional inversion''. lean4lean proves unique typing
+(\texttt{Theory/Typing/UniqueTyping.lean}) but by a different route
+(\texttt{HasTypeStratified}, not the thesis's $\vdash_n$); formalises Church--Rosser
+(\texttt{Theory/Typing/ChurchRosser.lean}: \texttt{NormalEq}, \texttt{ParRed}, \texttt{CParRed},
+\texttt{CRDefEq}) but with two \texttt{sorry}s remaining in master, unrelated to either branch;
+and states definitional inversion in \texttt{Theory/Typing/Injectivity.lean}, three of whose
+four declarations are literal \texttt{sorry}s (the fourth merely derives from one of them): that
+file is entirely open, on master, untouched by both branches. Rec-normal forms and the
+$\eta$-expansion argument of 4.1 have no counterpart.
+
+\textbf{\S5, Wtypes.} Replaces general inductive types by eight primitives ($\bot$, $\Sigma$,
+$+$, \texttt{ulift}, $\lVert\cdot\rVert$, W, $=$, \texttt{Acc}) as a soundness device, and admits
+two $\eta$ rules it states Lean itself does not have, one for \texttt{ulift} and one for
+$\Sigma$. lean4lean formalises none
+of this system directly (``nothing'', per \texttt{understand/thesis-map.md}). It is nonetheless
+the source of a design precedent the \texttt{trproj} branch borrows: the dependent typing shape
+$\pi_2\,p : \beta[\pi_1\,p/x]$ for the primitive $\Sigma$-projections is reused, without the
+accompanying $\eta$ rule, as the model for Lean's \texttt{Expr.proj}
+(\ref{def:trproj}, Chapter~\ref{chap:trexpr}).
+
+\textbf{\S6, soundness.} Interprets the syntax in a ZFC hierarchy and proves soundness and
+relative consistency. lean4lean has no counterpart. This is worth stating plainly:
+lean4lean's top-level result is kernel correctness relative to the \texttt{Theory/} model, not
+consistency of the type theory, and no result in the repository entails that Lean is consistent.
+
+\textbf{\S7, normalization (stub).} Notes that \S4's $\kappa^+$ rule makes the reduction
+non-terminating, defines a weaker $\rightsquigarrow_\sigma$, and stops mid-argument at the word
+``UNFINISHED''. lean4lean does not formalise it, but the \texttt{iota} branch's actual design
+choice (registering the $\iota$ rule for every constructor of every inductive block, with no
+special case for subsingleton eliminators) diverges from \S4's $\kappa^+$/$\iota$ split on both
+sides and happens to line up instead with this stub's weaker $\rightsquigarrow_\sigma$, a
+coincidence the repository does not discuss.
+
+\textbf{\S8, compilation (stub).} 24 lines with an unfinished grammar. lean4lean has no
+counterpart; the closest the executable kernel comes is refusing \texttt{reduceNative} and
+\texttt{reduceBool} as unsupported, on the stated grounds that supporting them ``would involve
+implementing verified compilation''. Since \S8 is itself unfinished, nothing of the thesis is
+lost here, but the chapter is doubly dead.
+
+\section{The two contributed branches}
+\label{sec:intro-branches}
+
+Both branches are authored by Alessandro Sosso; \texttt{iota} (\texttt{38ea0de}) is a strict
+git ancestor of \texttt{trproj} (HEAD \texttt{20ec229}), and upstream \texttt{master}
+(\texttt{8223d22}) is a strict ancestor of \texttt{iota}. File and line counts below are from
+\texttt{git diff --stat} on the ranges shown, run in this repository without checking out either
+branch.
+
+\texttt{iota} gives lean4lean's abstract model an account of $\iota$-reduction, which master does
+not have at all: on master, \texttt{VInductDecl.WF} and \texttt{VEnv.addInduct} are literally
+\texttt{sorry}, and the corresponding refinement-side predicate is vacuous, so no inductive type
+ever enters a translated environment and no recursor ever computes in the model. The branch models
+$\iota$ as a schematic rewrite-rule registry (\texttt{VEnv.pats}, a single generic constructor
+\ref{rule:isdefeq-pat}) rather than a bespoke reduction rule, and installs one entry per recursor
+rule from a 20-field well-formedness specification \ref{structure:ind-wf} of an inductive block.
+Range \texttt{master..iota}: 45 files changed, +5628/-331, 28 commits. Headline results: master's
+three inductive-theory \texttt{sorry}s are closed and \texttt{addInduct\_WF} is a real proof; the
+previously vacuous quotient-initialisation proof \texttt{addQuot.WF} (\ref{thm:add-quot-wf}) is
+now proved for real, sorry-free, in the new 615-line \texttt{Verify/Environment/Quot.lean}; and
+\texttt{Tests/IotaShape.lean} (607 lines) checks
+the specification's shape clauses against the real kernel on 48 type formers, including 8
+adversarial ones and 9 rejected nested blocks. Headline caveats: the branch leaves exactly one
+\texttt{sorry} of its own, \texttt{VEnv.WF.patsStrong} (\ref{thm:wf-patsstrong}), but it is
+load-bearing: it converts what was on master an unconditional theorem
+(\texttt{Ordered.strong}) into a field of a new structure \texttt{OrderedStrong} obtainable only
+through that \texttt{sorry}, which taints unique typing and the whole of master's own primitives
+layer with \texttt{sorryAx}; and \texttt{VInductDecl.WF} carries recursor types and $\iota$ rules
+as kernel-shaped data pinned by 20 syntactic fields, where the thesis generates them from the
+block's specification, a divergence the code documents but does not close. Chapter~\ref{chap:contrib-iota}
+reviews the branch as a whole; the trust-boundary consequences are in Chapter~\ref{chap:status}.
+
+\texttt{trproj} replaces master's opaque \texttt{TrProj := sorry} (the relation used to translate
+Lean's \texttt{Expr.proj} into the model, which has no projection node of its own), together with
+the seven structural lemmas about it that were \texttt{sorry} as a consequence. The design reads a
+projection as an application of the recursor the kernel itself generates for the eliminated
+structure, with a chained dependent motive for later fields; \ref{def:trproj} and
+\ref{struct:trprojctor} carry this out, both in Chapter~\ref{chap:trexpr}, building on the
+projection-expansion machinery of Chapter~\ref{chap:proj}. Range \texttt{iota..trproj}: 17 files
+changed, +2273/-170, 24 commits, in two full
+design reworks (the motive was tried free, then constant, then chained-dependent, before the
+version that ships). Headline results: \texttt{TrEnv.proj\_defeq} (\ref{thm:tr-env-proj-defeq},
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}) is a fully proved, unconditional
+138-line theorem deriving the projection reduction the model needs; six of the nine
+projection-side \texttt{sorry}s are closed; and two test files exercise both sides of the
+kernel/model boundary (\texttt{Tests/ProjShape.lean}, 185 lines, against the real kernel;
+\texttt{Tests/ProjInhabit.lean}, 597 lines, inhabiting the model's own specification). Headline
+caveats: \texttt{TrProj.uniq} (\ref{thm:trproj-uniq}, \srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{992})
+is still \texttt{sorry} and gates \texttt{TrExprS.uniq}, so a large fraction of \texttt{Verify}'s
+uniqueness reasoning is conditional on it; \texttt{TrEnv.proj\_defeq} itself has no consumer
+inside lean4lean yet (\texttt{reduceProjCore.WF} is still \texttt{sorry}); and the general case
+\ref{thm:vtc-inferproj} is documented in its own statement as not provable as stated, with only
+the scoped \ref{thm:vtc-inferproj-struct} left open as a real target. The branch also inherits
+\texttt{iota}'s two open design questions wholesale, since it is built on top of it. Chapter~\ref{chap:contrib-trproj}
+reviews the branch as a whole; Chapter~\ref{chap:status} gives the combined trust boundary.
+
+\section{How to read this blueprint}
+
+\textbf{Node environments.} Each of the fourteen content chapters
+(Chapters~\ref{chap:syntax}--\ref{chap:experimental-reduction}) states a sequence of graph nodes:
+\texttt{definition} for a Lean \texttt{def}/\texttt{abbrev}/\texttt{structure}/\texttt{inductive}/
+\texttt{instance}/\texttt{axiom}, \texttt{theorem} for an importance-3 result, \texttt{lemma} for
+a lesser or \texttt{family}-tagged one, and \texttt{example} for declarations in a test file.
+Every \texttt{theorem}/\texttt{lemma} node is followed by a sibling \texttt{proof} environment.
+This chapter and the other three synthesis chapters
+(\ref{chap:contrib-iota}, \ref{chap:contrib-trproj}, \ref{chap:status}) are deliberately plain
+prose: they add no new graph nodes, and point back into the fourteen content chapters with
+\texttt{\textbackslash ref}.
+
+\textbf{What \texttt{\textbackslash leanok} means here.} Every node's \emph{statement} carries
+\texttt{\textbackslash leanok}, because every node describes a Lean declaration that actually
+exists in the checked-out source (this includes declarations that are themselves a bare
+\texttt{sorry}: the statement still exists, it is the definition or proof that is missing).
+\texttt{\textbackslash leanok} on the sibling \texttt{proof} means something narrower and more
+useful: that declaration's own body contains no literal \texttt{sorry} token. It says nothing
+about whether the lemmas it calls are themselves fully proved.
+
+\textbf{Transitive \texttt{sorry} taint.} A proof can be \texttt{\textbackslash leanok} (no
+literal \texttt{sorry} of its own) while still depending, through the lemmas it calls, on a
+\texttt{sorry} elsewhere: \texttt{\#print axioms} would show \texttt{sorryAx} for it. This
+blueprint does not encode that in the node's colour; it is recorded in prose as an
+\texttt{\textbackslash axfoot} line naming the specific source(s) (for example
+\ref{thm:wf-patsstrong}'s own \texttt{sorryAx}, or every downstream user of
+\texttt{OrderedStrong}). \texttt{\textbackslash axfoot} is mandatory on every contributed node
+whose axiom footprint includes \texttt{sorryAx} and optional on master nodes.
+
+\textbf{Attribution badges.} \texttt{\textbackslash contrib\{iota|trproj|mixed\}} marks a node
+whose Lean declaration was introduced or changed on a branch; \texttt{mixed} means a master
+declaration a branch modified. Attribution was computed by \texttt{git blame} of the merged tree
+at HEAD \texttt{20ec229}, classifying each line's introducing commit by which branch (master,
+\texttt{iota}, \texttt{trproj}) it belongs to (per-line files under
+\texttt{understand/blame/<path with / as \_>.txt}, coded M/I/P). This is a good proxy, not an
+exact one: two commits landed independently on both branches and were kept from the
+\texttt{trproj} side by the merge, so roughly 196 lines of $\iota$-consumer content across
+\texttt{Verify/TypeChecker/WHNF.lean}, \texttt{Inductive/Reduce.lean}, \texttt{Verify/Expr.lean}
+and part of \texttt{Verify/Environment/Lemmas.lean} are blamed to \texttt{trproj} (P) although
+they are \texttt{iota} work (\texttt{understand/contrib-iota.md}, part (a), the ``attribution
+caveat'' note); the reviewing agents corrected this by hand where it was noticed, but the blame
+files themselves were not re-derived.
+
+\textbf{\texttt{\textbackslash srcloc}, \texttt{\textbackslash thesisref}, \texttt{\textbackslash reviewnote}.}
+\texttt{\textbackslash srcloc\{file\}\{line\}} is a plain path:line pointer, rendered in the web
+build as a link to the GitHub blob at HEAD \texttt{20ec229}; it is not re-resolved per commit, so
+a line number is only meaningful against that exact revision. \texttt{\textbackslash thesisref}
+gives the corresponding thesis location, or states that there is none.
+\texttt{\textbackslash reviewnote} records a critical remark with no attached fix; it is used
+where a json/markdown report or an adversarial chapter review in \texttt{understand/reviews/}
+flagged an issue, and never softened or resolved on the node's behalf.
+
+\textbf{Chapter-level sections.} Every content chapter closes with a \texttt{Review notes}
+section (an itemised list of issues, each with a source pointer and a severity, no fixes); twelve
+of the fourteen (all but Chapters~\ref{chap:levels} and~\ref{chap:experimental-logrel}, which
+neither branch touches) additionally carry a \texttt{Contribution summary} section before it,
+describing what was added and how it connects to the rest of the graph.
+
+\textbf{Dependency graph colours.} The web build colours each node's border by its
+\emph{statement} and its fill by its \emph{proof}. Because every statement in this blueprint
+carries \texttt{\textbackslash leanok} by convention, every node's border renders the same
+(green, ``stated''); the border colour therefore carries no information here, and attribution and
+thesis correspondence are read from the \texttt{\textbackslash contrib}/\texttt{\textbackslash thesisref}
+lines instead. The fill colour is where the real signal is: a \texttt{definition} fills light
+green once stated; a \texttt{theorem}/\texttt{lemma} fills dark green only once its own proof is
+\texttt{\textbackslash leanok} \emph{and} every node it transitively uses is too, light blue if it
+could be proved but is not (or an ancestor is not), and is left unfilled otherwise. A single open
+\texttt{sorry} such as \ref{thm:wf-patsstrong} or \ref{thm:trproj-uniq} therefore caps every node
+that depends on it, directly or not, at light blue: the graphical counterpart of the
+\texttt{\textbackslash axfoot} lines.
+
+\textbf{Limits of this blueprint.}
+\begin{itemize}
+\item \textbf{Node granularity is uneven.} Master's code is covered coarsely (one node can stand
+for a cluster of related lemmas); the \texttt{iota} and \texttt{trproj} material is broken out
+much more finely, because that is what this review is about. Node counts by attribution
+(Section~\ref{sec:intro-node-counts} below) should be read with that asymmetry in mind, not as a
+measure of relative size.
+\item \textbf{\texttt{\textbackslash uses} edges are curated, not machine-extracted.} They were
+added by an agent reading each proof and naming the definitions and lemmas it actually invokes;
+there is no automated cross-check that a node's \texttt{\textbackslash uses} list is complete or
+that the underlying Lean proof does not call something uncredited.
+\item \textbf{Doc-generation links are not live.} \texttt{web.tex} sets
+\texttt{\textbackslash dochome} to a \texttt{leanprover-community}-style docs site for this
+repository; no such site is built or deployed, so any per-declaration doc link the web build
+emits resolves to a page that does not exist.
+\item \textbf{\texttt{checkdecls} is not wired.} The standard leanblueprint consistency check
+(\texttt{lake exe checkdecls blueprint/lean\_decls}) requires adding a Lake dependency to the
+project's own \texttt{lakefile.toml}, which this review was instructed not to touch. Instead,
+every \texttt{\textbackslash lean\{\}} name in the blueprint was checked against
+\texttt{understand/decls.tsv} and \texttt{understand/all-constants.tsv}, a name census extracted
+from a separately compiled copy of the environment, by \texttt{check\_chapter.py} and
+\texttt{check\_global.py}.
+\item \textbf{This review did not build the repository.} No \texttt{lake build} was run in the
+course of writing it; every claim above and in the following chapters is either a source-code
+citation, a \texttt{git} command against the checked-out history, or a claim carried over from
+one of the \texttt{understand/} reports and marked accordingly where those reports themselves
+flag it as unverified against a build.
+\end{itemize}
+
+\section{Node counts by chapter and attribution}
+\label{sec:intro-node-counts}
+
+Counts below are from \texttt{understand/registry.tsv} (953 nodes total across the fourteen
+content chapters; the four synthesis chapters, including this one, add none). The four
+attribution categories are \texttt{master}, \texttt{iota}, \texttt{trproj} and \texttt{mixed}
+(a master declaration modified by a branch); a chapter's own row sums to its node count.
+
+\begin{description}
+\item[Ch.\,2 \texttt{syntax} (\ref{chap:syntax})] 69 nodes: 37 master, 14 iota, 11 trproj, 7 mixed.
+\item[Ch.\,3 \texttt{typing} (\ref{chap:typing})] 50 nodes: 18 master, 19 iota, 13 mixed.
+\item[Ch.\,4 \texttt{metatheory} (\ref{chap:metatheory})] 77 nodes: 45 master, 11 iota, 21 mixed.
+\item[Ch.\,5 \texttt{inductive} (\ref{chap:inductive})] 74 nodes: 5 master, 61 iota, 6 trproj, 2 mixed.
+\item[Ch.\,6 \texttt{proj} (\ref{chap:proj})] 68 nodes: 17 iota, 51 trproj.
+\item[Ch.\,7 \texttt{kernel} (\ref{chap:kernel})] 70 nodes: 67 master, 1 trproj, 2 mixed.
+\item[Ch.\,8 \texttt{trexpr} (\ref{chap:trexpr})] 79 nodes: 56 master, 2 iota, 12 trproj, 9 mixed.
+\item[Ch.\,9 \texttt{trenv} (\ref{chap:trenv})] 86 nodes: 32 master, 32 iota, 11 trproj, 11 mixed.
+\item[Ch.\,10 \texttt{primitives-core} (\ref{chap:primitives-core})] 76 nodes: 49 master, 27 mixed.
+\item[Ch.\,11 \texttt{primitives-arith} (\ref{chap:primitives-arith})] 58 nodes: 32 master, 26 mixed.
+\item[Ch.\,12 \texttt{typechecker} (\ref{chap:typechecker})] 59 nodes: 56 master, 1 iota, 1 trproj, 1 mixed.
+\item[Ch.\,13 \texttt{levels} (\ref{chap:levels})] 77 nodes: all 77 master.
+\item[Ch.\,14 \texttt{experimental-logrel} (\ref{chap:experimental-logrel})] 63 nodes: all 63 master.
+\item[Ch.\,15 \texttt{experimental-reduction} (\ref{chap:experimental-reduction})] 47 nodes: 38 master, 9 mixed.
+\end{description}
+
+Totals across all fourteen chapters: 575 master, 157 iota, 93 trproj, 128 mixed, 953 overall. The
+two branches together touch, wholly or partly, 378 of the 953 nodes in this blueprint (157 iota +
+93 trproj + 128 mixed); \texttt{iota}'s share concentrates in Chapter~\ref{chap:inductive} (61 of
+74 nodes) and \texttt{trproj}'s in Chapter~\ref{chap:proj} (51 of 68), which is exactly the
+division of labour Section~\ref{sec:intro-branches} above describes. Chapters~\ref{chap:levels}
+and \ref{chap:experimental-logrel} are untouched by either branch; \texttt{mixed} nodes
+concentrate in the two primitives chapters (27 and 26 respectively), reflecting the retyping of
+master's substitution family from \texttt{Ordered} to \texttt{OrderedStrong} described in
+Section~\ref{sec:intro-branches} above, not new primitive-arithmetic content.

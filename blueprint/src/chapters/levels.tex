@@ -1,0 +1,1665 @@
+\chapter{Universe levels and utilities}
+\label{chap:levels}
+
+This chapter covers four verification files that sit beside the main typing development.
+\srcloc{Lean4Lean/Verify/Level.lean}{1} (3880 lines) verifies lean4lean's own universe-level
+canonical form; \srcloc{Lean4Lean/Verify/NormLt.lean}{1} (364 lines) verifies the order core Lean
+uses to sort the arguments of a \texttt{max}; \srcloc{Lean4Lean/Verify/QSort.lean}{1} (392 lines)
+is a vendored specification of \texttt{Array.qsort} that the previous file needs; and
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{1} (331 lines) proves the kernel's memo cache for
+structural equality sound. Every line of all four files is attributed to master: the
+\texttt{iota} and \texttt{trproj} branches contribute nothing here (0 lines in each of the four
+files), so this chapter has no contributed nodes and exists to cover what the contributions rest
+on. There is no active \texttt{sorry} in the group; the one occurrence of the token sits inside a
+dead comment block at \srcloc{Lean4Lean/Verify/Level.lean}{27}.
+
+\texttt{Lean4Lean/Level.lean} implements a decision procedure for level equality following Yoan
+Géran, \emph{A Canonical Form for Universe Levels in Impredicative Type Theory}, and
+\srcloc{Lean4Lean/Verify/Level.lean}{166} proves it correct. A level is represented as a
+\texttt{NormLevel}, a \texttt{Std.TreeMap} from \emph{condition sets} (lists of parameter names,
+the guards of an \texttt{imax} chain) to nodes; the node at a key $p$ bundles a constant sublevel
+$C(p,c)$ and a list of variable sublevels $V(p,x+k)$, in the notation of the paper
+(\srcloc{Lean4Lean/Level.lean}{41}). The verification runs in six phases: preliminaries about
+core \texttt{Level} (lines 1--165), accumulation and semantics (166--660), subsumption
+(660--1290), reconstruction of a \texttt{Lean.Level} from a normal form (1290--2250),
+completeness and canonicity (2250--2940, resuming at 3397--3792 after the flat-path material),
+and a flat fast path (2940--3396 and 3793--3880). Throughout, $ls$ is
+the list of universe parameter names in scope and $\rho$ a list of naturals assigning them
+values; \texttt{NormLevel.eval} $ls$ $\rho$ denotes a normal form and \texttt{VLevel.eval}
+(\ref{def:vlevel-eval}) denotes a model level, so every soundness statement of this chapter is an
+equation or an inequality between natural numbers, for all $\rho$.
+
+\thesisref{axioms.tex, the algorithmic level inequality $\ell \le \ell'$ and the equivalence
+$\ell \equiv \ell'$ it defines (rules only, no algorithm); soundness.tex, the valuation semantics
+of levels} The thesis specifies level equality by a syntactic derivation system and gives the
+semantics informally; it says nothing about deciding either. lean4lean instead \emph{defines}
+level inequality semantically (\ref{def:vlevel-eval}) and proves a decision procedure sound and
+complete against it, so the canonical form, its canonicity and the completeness results below are
+a genuine extension beyond the thesis rather than a formalisation of it. Nothing in
+\srcloc{Lean4Lean/Verify/NormLt.lean}{1}, \srcloc{Lean4Lean/Verify/QSort.lean}{1} or
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{1} corresponds to the thesis at all: those are
+implementation-fidelity obligations arising from Lean's actual kernel (sorting inside
+\texttt{Level.normalize}, and the \texttt{isDefEq} memo cache).
+
+The trust boundary is worth stating up front. \texttt{NormLevel.le}, \texttt{NormLevel.addable}
+and the \texttt{BEq} instance on \texttt{NormLevel} are all defined through
+\texttt{Std.TreeMap.all}/\texttt{any}, so every main theorem about normal forms factors through
+the two axioms \texttt{all\_eq\_all\_toList} and \texttt{any\_eq\_any\_toList}
+(\ref{family:treemap-axioms}, \srcloc{Lean4Lean/Verify/Axioms.lean}{10}). The results that reach
+core Lean's own \texttt{normalize} additionally inherit the axioms of
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{1} (\ref{family:level-axioms}), and the bit-packing
+lemmas inherit \texttt{Lean.Level.mkData\_eq} (\srcloc{Lean4Lean/Verify/Axioms.lean}{269}). The
+equivalence manager rests on \texttt{ptrEqExpr\_eq} (\ref{axiom:kernel-ptr-eq}) and, for the
+\texttt{proj} case, on the still open \texttt{TrProj.uniq} (\ref{thm:trproj-uniq}), which is the
+only route by which \texttt{sorryAx} enters this group.
+
+Overall assessment: this is upstream work of uniformly high quality, and
+\srcloc{Lean4Lean/Verify/Level.lean}{1} is the strongest single artefact in it. The statements
+are the right ones (semantic, not syntactic), the section docstrings explain design choices
+rather than restating code, and \texttt{NormLevel.separation} (\ref{thm:lvl-separation}) is a
+real mathematical theorem proved without automation black boxes. Its weaknesses are the ordinary
+ones of a large research file: a handful of dead lemmas that drag in an otherwise unused axiom,
+a stale test-file docstring, five or six invariants threaded by hand through every end-to-end
+statement, and a substantial verified component (the whole reconstruction layer supporting
+\texttt{normalize'}) that no kernel code path yet calls. The two smaller level files are clean
+but lean on \texttt{grind} in places that a reader cannot then audit, and
+\srcloc{Lean4Lean/Verify/QSort.lean}{1} is vendored third-party code that should be replaced by a
+standard-library specification when one lands.
+
+\section{Preliminaries on core \texttt{Level}}
+
+The first 165 lines of \srcloc{Lean4Lean/Verify/Level.lean}{1} are unrelated to the canonical
+form: they are facts about core Lean's \texttt{Level} API that other verification files need.
+
+\begin{definition}[Structural offset of a level]
+\label{def:lvl-getoffset}
+\lean{Lean.Level.getOffset', Lean.Level.getOffset_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{29}
+\texttt{getOffset'} counts the leading \texttt{succ} constructors of a level by structural
+recursion, and \texttt{getOffset\_eq} shows that it agrees with core Lean's accumulator-based
+\texttt{Level.getOffset}. The proof is the generalised identity
+\texttt{getOffsetAux u i = getOffset' u + i}, by induction on \texttt{u}.
+\end{definition}
+
+\begin{lemma}[Bit-packing of level metadata]
+\label{fam:lvl-mkdata}
+\lean{Lean.Level.mkData_depth, Lean.Level.mkData_hasParam, Lean.Level.mkData_hasMVar}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{41}
+For a depth $d < 2^{24}$, the packed \texttt{Level.Data} word \texttt{mkData h d hmv hp} reads
+back the depth $d$, the \texttt{hasParam} flag \texttt{hp} and the \texttt{hasMVar} flag
+\texttt{hmv} unchanged.
+\end{lemma}
+\begin{proof}
+\leanok
+Rewrite with the axiom \texttt{Lean.Level.mkData\_eq} (\srcloc{Lean4Lean/Verify/Axioms.lean}{269})
+into the model \texttt{mkData'}, discharge the depth guard, and reduce the goal to a bit-vector
+identity on \texttt{UInt64} closed by \texttt{bv\_decide}. Elaborating these three statements
+requires \texttt{set\_option allowUnsafeReducibility true} together with
+\texttt{attribute [local reducible] Data} (lines 38--39).
+\axfoot{Lean.Level.mkData\_eq; three \texttt{bv\_decide} LRAT certificate axioms (\_native.bv\_decide.ax\_1\_8/9)}
+\end{proof}
+
+\begin{theorem}[Parameter-free, metavariable-free levels always translate]
+\label{thm:lvl-oflevel-of-not-hasparam}
+\lean{Lean.Level.ofLevel_of_not_hasParam}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{88}
+\uses{def:vlevel-oflevel}
+If \texttt{l.hasParam'} and \texttt{l.hasMVar'} are both \texttt{false}, then
+\texttt{VLevel.ofLevel Us l} succeeds for every list of universe names \texttt{Us}.
+\end{theorem}
+\begin{proof}
+\leanok
+Induction on \texttt{l}, then \texttt{simp\_all} with the definitions of \texttt{hasParam'},
+\texttt{hasMVar'} and \texttt{VLevel.ofLevel}.
+\end{proof}
+
+\begin{theorem}[No undefined parameter implies translatability]
+\label{thm:lvl-getundefparam-none}
+\lean{Lean.Level.getUndefParam_none, Lean.Level.getUndefParam.F}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{101}
+\uses{def:kernel-level-getundefparam, def:vlevel-oflevel}
+If \texttt{l} has no metavariables and \texttt{l.getUndefParam Us = none}, that is, no parameter
+outside \texttt{Us} occurs in \texttt{l}, then \texttt{VLevel.ofLevel Us l} succeeds.
+\texttt{getUndefParam.F} is the model of the monadic step that core's \texttt{Level.forEach}
+runs.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-oflevel-of-not-hasparam}
+\leanok
+Strengthen the claim to a statement about the state-monad run of \texttt{Level.forEach}: for
+every starting state \texttt{s}, a final state of \texttt{none} forces \texttt{s = none} and
+translatability. Then induct on the level, handling the early-exit behaviour of the accumulator
+explicitly; the \texttt{param} case appeals to
+\texttt{ofLevel\_of\_not\_hasParam}. This is the form consumed by
+\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{31}.
+\end{proof}
+
+\begin{definition}[Model of level-parameter substitution]
+\label{def:lvl-substparams}
+\lean{Lean.Level.substParams', Lean.Level.substParams_eq, Lean.Level.substParams_eq_self, Lean.Level.substParams_id}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{138}
+\texttt{substParams' s red u} is a structurally recursive model of core Lean's
+\texttt{Level.substParams}: it replaces parameters using \texttt{s} and, when the \texttt{red}
+flag says that a parameter actually occurs below, rebuilds \texttt{max}/\texttt{imax} with the
+smart constructors. \texttt{substParams\_eq} proves the model agrees with core (opening the
+private \texttt{substParams.go} and inducting, splitting on the \texttt{hasParam} guard);
+\texttt{substParams\_eq\_self} that substitution is the identity on parameter-free levels; and
+\texttt{substParams\_id} that substituting each parameter for itself without reduction is the
+identity. Consumed by \srcloc{Lean4Lean/Verify/Expr.lean}{1128} and
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{1623}.
+\end{definition}
+
+\section{The canonical form and its semantics}
+
+\begin{definition}[Semantics of the normal form]
+\label{def:lvl-normlevel-eval}
+\lean{Lean.Level.Normalize.evalParam, Lean.Level.Normalize.VarNode.eval, Lean.Level.Normalize.Node.eval, Lean.Level.Normalize.allNZ, Lean.Level.Normalize.evalPath, Lean.Level.Normalize.NormLevel.eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{234}
+\uses{def:vlevel-eval, def:kernel-level-normalize}
+The denotation of a normal form under a valuation. \texttt{evalParam ls} $\rho$ \texttt{x} looks
+the name \texttt{x} up in \texttt{ls} and reads its value off $\rho$ (returning $0$ off the
+list); a \texttt{VarNode} $x+k$ evaluates to \texttt{evalParam}$(x) + k$; a \texttt{Node}
+evaluates to the maximum of its constant and its variable nodes; \texttt{allNZ path} says every
+name in a condition set has a nonzero value; \texttt{evalPath path n} is \texttt{n} when
+\texttt{allNZ path} holds and $0$ otherwise, which is the semantics of an \texttt{imax} guard
+chain; and a whole \texttt{NormLevel} evaluates to the maximum over its entries of
+\texttt{evalPath p (Node.eval n)}. This is the interpretation of the paper's sublevel functions
+$C(S,k)$ and $V(S,v,k)$.
+\thesisref{soundness.tex, the valuation semantics of levels; \texttt{evalPath} is exactly the
+\texttt{imax} clause generalised from one guard to a set of guards}
+\end{definition}
+
+\begin{lemma}[Boundedness characterisations of the semantics]
+\label{fam:lvl-eval-le}
+\lean{Lean.Level.Normalize.Node.eval_le, Lean.Level.Normalize.NormLevel.eval_le, Lean.Level.Normalize.evalPath_cons, Lean.Level.Normalize.evalPath_max, Lean.Level.Normalize.evalPath_mono, Lean.Level.Normalize.evalPath_le, Lean.Level.Normalize.allNZ_cons, Lean.Level.Normalize.allNZ_mono}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{247}
+The family of $x \le n$ characterisations that drives almost every later proof: a node is
+bounded by $n$ exactly when its constant and each of its variable nodes are; a normal form is
+bounded by $n$ exactly when every entry's \texttt{evalPath} contribution is; \texttt{evalPath}
+commutes with \texttt{max}, is monotone in its payload, and satisfies
+\texttt{evalPath path n} $\le m$ iff \texttt{allNZ path} implies $n \le m$; and \texttt{allNZ} is
+antitone in the condition set.
+\end{lemma}
+\begin{proof}
+\uses{def:lvl-normlevel-eval}
+\leanok
+The two \texttt{eval\_le} lemmas unfold the \texttt{foldl} into a \texttt{foldr} over the
+reversed list and induct, using \texttt{Nat.max\_le}; the \texttt{evalPath} lemmas unfold the
+definition and split on the \texttt{allNZ} guard. The whole development downstream is written in
+this $\le m$ style, with \texttt{ext\_le}/\texttt{le\_ext\_le} (lines 345--348) converting back to
+equalities, which keeps the statements first-order at the price of indirection.
+\end{proof}
+
+\begin{definition}[Inserting one element into a condition set]
+\label{def:lvl-extend}
+\lean{Lean.Level.Normalize.Extend1, Lean.Level.Normalize.Extend?, Lean.Level.Normalize.Extend1.orderedInsert, Lean.Level.Normalize.Extend?.orderedInsert}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{186}
+\texttt{Extend1 l v l'} says that \texttt{l'} is \texttt{l} with \texttt{v} inserted at some
+position; \texttt{Extend? l v l'} additionally allows \texttt{l' = l} when \texttt{v} was already
+present. The two \texttt{orderedInsert} lemmas connect them to the algorithm's
+\texttt{orderedInsert}, which returns \texttt{none} exactly when the element is already there.
+\end{definition}
+
+\begin{definition}[Strictly sorted condition sets]
+\label{def:lvl-sorted}
+\lean{Lean.Level.Normalize.Sorted, Lean.Level.Normalize.Sorted.orderedInsert, Lean.Level.Normalize.Sorted.nodup, Lean.Level.Normalize.Sorted.erase, Lean.Level.Normalize.Sorted.head, Lean.Level.Normalize.Sorted.of_cons}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{352}
+\uses{def:lvl-extend}
+\texttt{Sorted l} says the list of names \texttt{l} is pairwise strictly increasing in
+\texttt{Name.cmp}; in particular it is duplicate-free. This is the invariant that makes the
+linear merge \texttt{subset} a decision procedure for set inclusion, and it is preserved by
+\texttt{orderedInsert} and by \texttt{List.erase}.
+\end{definition}
+
+\begin{definition}[Variable lists are sorted by name]
+\label{def:lvl-varssorted}
+\lean{Lean.Level.Normalize.VarsSorted, Lean.Level.Normalize.NormLevel.SortedVars, Lean.Level.Normalize.VarNode.addVar_sorted, Lean.Level.Normalize.normalizeAux_sortedVars, Lean.Level.Normalize.NormLevel.subsumption_sortedVars, Lean.Level.Normalize.VarsSorted.eq_of_var_eq, Lean.Level.Normalize.VarsSorted.eq_of_mem_iff}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2263}
+\uses{def:lvl-sorted}
+\texttt{VarsSorted l} says a \texttt{VarNode} list is strictly increasing in the variable name,
+so each name occurs at most once, and \texttt{SortedVars s} lifts this to every entry of a map.
+The invariant is established by \texttt{VarNode.addVar}, preserved by \texttt{normalizeAux} and
+by subsumption, and makes two variable lists with the same members equal. It is needed twice
+downstream: for the exactness of \texttt{subsumeVars} (a surviving variable really has no
+dominator) and for canonicity (two nodes with the same sublevels are the same node).
+\end{definition}
+
+\begin{definition}[Well-formedness of an accumulated normal form]
+\label{def:lvl-normlevel-wf}
+\lean{Lean.Level.Normalize.NormLevel.WF, Lean.Level.Normalize.NormLevel.WF.of_mem, Lean.Level.Normalize.NormLevel.WF.sortedOf}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{390}
+\uses{def:lvl-extend, def:lvl-sorted}
+\texttt{NormLevel.WF s} says that for every entry \texttt{(p, n)}: \texttt{p} is sorted; every
+variable recorded in \texttt{n} has its name in \texttt{p}; and, when \texttt{p} is nonempty,
+\texttt{p} extends by a single variable \texttt{v} some \texttt{p'} which is either the root or
+another key, with \texttt{v} recorded at \texttt{p}. That last parent-pointer clause is what
+later guarantees the sublevels are expressible as \texttt{imax} chains, and what licenses
+\texttt{addConst} to drop $C(p,1)$ for nonempty \texttt{p}. \texttt{WF.of\_mem} climbs the parent
+chain to produce, for any member of a key, a recorded witness at a subset of that key;
+\texttt{WF.sortedOf} extracts sortedness of the root or of any key.
+\end{definition}
+
+\begin{theorem}[\texttt{normalizeAux} preserves well-formedness]
+\label{thm:lvl-normalizeaux-wf}
+\lean{Lean.Level.Normalize.normalizeAux_wf, Lean.Level.Normalize.normalizeAux_contains}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{476}
+\uses{def:lvl-normlevel-wf}
+If the current path is the root or already a key of the accumulator, and the accumulator is well
+formed, then \texttt{normalizeAux u path k acc} is well formed. \texttt{normalizeAux\_contains}
+records separately that keys are never removed.
+\end{theorem}
+\begin{proof}
+\uses{def:lvl-sorted, def:lvl-extend, def:lvl-normlevel-wf}
+\leanok
+Structural recursion following the twelve branches of \texttt{normalizeAux}, feeding
+\texttt{addConst\_wf}, \texttt{addNode\_wf} and \texttt{addVar\_wf} with the
+\texttt{Extend1}/\texttt{Sorted} facts supplied by \texttt{Sorted.orderedInsert}, and threading
+the hypothesis through the recursive calls with \texttt{normalizeAux\_contains}.
+\end{proof}
+
+\begin{theorem}[\texttt{normalizeAux} is semantics-preserving]
+\label{thm:lvl-normalizeaux-eval}
+\lean{Lean.Level.Normalize.normalizeAux_eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{575}
+\uses{def:lvl-normlevel-eval, def:vlevel-oflevel}
+If \texttt{VLevel.ofLevel ls u = some u'}, the current path is the root or a key, and the
+accumulator is well formed, then
+\texttt{(normalizeAux u path k acc).eval ls} $\rho$ is the maximum of
+\texttt{acc.eval ls} $\rho$ and \texttt{evalPath path (u'.eval} $\rho$ \texttt{+ k)}. Each step
+therefore adds exactly the sublevels of \texttt{u}, guarded by the current \texttt{imax}
+conditions and shifted by the accumulated offset.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalizeaux-wf, fam:lvl-eval-le, def:lvl-normlevel-wf}
+\leanok
+Recursion on \texttt{normalizeAux}, one case per branch, about 85 lines. The interesting cases
+are the \texttt{imax} distributions, discharged by the value-level identities \texttt{imax\_max}
+and \texttt{imax\_imax}, and the two branches where the parameter is already in the path, where
+\texttt{WF.of\_mem} produces the already-recorded witness that makes the new contribution
+redundant.
+\thesisref{axioms.tex, the \texttt{imax} rewriting rules of the inequality judgement; the same
+identities, here at the level of values}
+\end{proof}
+
+\section{Subsumption and soundness of the comparison}
+
+\begin{lemma}[The sorted-list subset test is a decision procedure]
+\label{fam:lvl-subset}
+\lean{Lean.Level.Normalize.subset_length, Lean.Level.Normalize.subset_mem, Lean.Level.Normalize.subset_eq, Lean.Level.Normalize.subset_of_sorted, Lean.Level.Normalize.subset_antisymm}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{658}
+The merge-style test \texttt{subset cmp l1 l2} implies that every element of \texttt{l1} lies in
+\texttt{l2} and that \texttt{l1.length} $\le$ \texttt{l2.length}; on sorted lists the converse
+holds as well, equal lengths force equality of the lists, and mutual inclusion is antisymmetric.
+\end{lemma}
+\begin{proof}
+\uses{def:lvl-sorted}
+\leanok
+Each by induction on the second list following the three-way branch of \texttt{subset}, using
+\texttt{LawfulBEqCmp.compare\_eq\_iff\_beq} in the \texttt{.eq} case; \texttt{subset\_of\_sorted}
+additionally uses that the head of a sorted list is strictly below every later element.
+\end{proof}
+
+\begin{lemma}[Correctness of one subsumption step]
+\label{fam:lvl-subsume-node}
+\lean{Lean.Level.Normalize.subsumeVars_subset, Lean.Level.Normalize.subsumeVars_dominated, Lean.Level.Normalize.subsumeVars_eval, Lean.Level.Normalize.Node.subsumeBy_eval_le, Lean.Level.Normalize.Node.subsumeBy_eval_iff, Lean.Level.Normalize.Node.subsume_eval_le, Lean.Level.Normalize.Node.subsume_var_cases, Lean.Level.Normalize.Node.subsumeBy_const_drop}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{718}
+The lemmas describing \texttt{subsumeVars}, \texttt{Node.subsumeBy} and \texttt{Node.subsume}:
+the result is always a sublist of the first argument; a variable that is dropped had a dominator
+with the same name and a larger offset in the second argument; and, crucially,
+\texttt{subsumeBy\_eval\_iff} says that if every variable of the dominating node has a nonzero
+value and that node is already bounded by $m$, then \texttt{n1.subsumeBy same n2} is bounded by
+$m$ exactly when \texttt{n1} is. Subsumption therefore never changes the total value.
+\end{lemma}
+\begin{proof}
+\uses{fam:lvl-eval-le, fam:lvl-subset}
+\leanok
+Simultaneous induction on the two sorted variable lists along the three-way branch of
+\texttt{subsumeVars}; the \texttt{eval\_iff} direction reads the bound off
+\texttt{Node.eval\_le} and, for the constant, splits on \texttt{subsumeBy\_const\_drop}
+(the constant is dropped only when it is below the dominating constant or below some dominating
+variable). This is the paper's domination relation implemented as a merge over sorted lists; the
+\texttt{same} flag, set when the two condition sets have equal length, is a genuine subtlety,
+since at the same key a variable must not discharge itself.
+\end{proof}
+
+\begin{theorem}[Minimising an entry does not change the total]
+\label{thm:lvl-minimize-eval}
+\lean{Lean.Level.Normalize.NormLevel.minimize_eval_le, Lean.Level.Normalize.NormLevel.minimize_eval_iff}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{933}
+\texttt{minimize\_eval\_le} says that minimising a node only shrinks its value.
+\texttt{minimize\_eval\_iff} is the converse under side conditions: if every variable of the map
+belongs to its key, every entry other than \texttt{p1} is already bounded by $m$, and the
+condition set \texttt{p1} is live under the valuation, then the minimised node is bounded by $m$
+exactly when the original node is.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-subsume-node, fam:lvl-eval-le, fam:lvl-subset}
+\leanok
+Fold induction over the entry list of the map, applying \texttt{Node.subsumeBy\_eval\_iff} at
+each step: an entry at a key below \texttt{p1} is live too, hence bounded by $m$, which is the
+side condition that lemma needs.
+\end{proof}
+
+\begin{lemma}[One subsumption step changes only one key]
+\label{thm:lvl-subsumption-step}
+\lean{Lean.Level.Normalize.NormLevel.subsumption_step_get?}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1032}
+The map obtained by replacing the entry at \texttt{p1} by its minimisation, or erasing it when
+the minimisation is empty, agrees with the original at every other key, and at \texttt{p1} holds
+the minimised node or nothing.
+\end{lemma}
+\begin{proof}
+\leanok
+Case split on emptiness and unfold \texttt{Std.TreeMap.getElem?\_erase} and
+\texttt{getElem?\_insert}.
+\end{proof}
+
+\begin{definition}[Subsumption covers the original map]
+\label{def:lvl-covers}
+\lean{Lean.Level.Normalize.NormLevel.Covers, Lean.Level.Normalize.NormLevel.subsumption_covers, Lean.Level.Normalize.NormLevel.subsumption_vars}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1100}
+\uses{thm:lvl-subsumption-step, fam:lvl-subsume-node, def:lvl-normlevel-wf}
+\texttt{s'.Covers s} says that every variable recorded in \texttt{s} is still recorded in
+\texttt{s'}, at a key all of whose elements lie in the original key.
+\texttt{subsumption\_covers} proves that \texttt{s.subsumption} covers \texttt{s} and that each
+of its entries is a sub-node of the corresponding entry of \texttt{s}; the proof is a fold
+induction in which a dropped variable is replaced by the dominating witness at a strictly
+smaller key, which later steps do not touch. \texttt{subsumption\_vars} preserves the
+``variables belong to their key'' half of \texttt{WF}. \texttt{Covers} is exactly the part of a
+map that the feasibility predicates of \S\ref{sec:lvl-reconstruction} read, which is why
+feasibility survives subsumption.
+\end{definition}
+
+\begin{theorem}[Subsumption is semantics-preserving]
+\label{thm:lvl-subsumption-eval}
+\lean{Lean.Level.Normalize.NormLevel.subsumption_eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1157}
+For a well-formed \texttt{s}, \texttt{s.subsumption} has the same value as \texttt{s} under every
+valuation.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-minimize-eval, thm:lvl-subsumption-step, fam:lvl-eval-le, def:lvl-normlevel-wf}
+\leanok
+Fold induction over the entry list, maintaining that the accumulator has the same value as
+\texttt{s}: each step uses \texttt{minimize\_eval\_iff} in one direction and
+\texttt{minimize\_eval\_le} in the other, and observes that erasing a drained key has the same
+effect on the value as keeping an empty node.
+\end{proof}
+
+\begin{theorem}[\texttt{normalize} is semantics-preserving]
+\label{thm:lvl-normalize-eval}
+\lean{Lean.Level.Normalize.normalize_eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1214}
+\uses{def:lvl-normlevel-eval, def:vlevel-oflevel}
+If \texttt{VLevel.ofLevel ls u = some u'} then \texttt{(normalize u).eval ls} $\rho$ equals
+\texttt{u'.eval} $\rho$ for every valuation $\rho$. This is the soundness statement of the whole
+accumulation phase.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalizeaux-eval, thm:lvl-subsumption-eval, thm:lvl-normalizeaux-wf}
+\leanok
+Combine \texttt{normalizeAux\_eval}, started from the empty and trivially well-formed map at the
+root, with \texttt{subsumption\_eval}.
+\thesisref{soundness.tex; the canonical form denotes the same function of the parameter values
+as the input level}
+\end{proof}
+
+\begin{theorem}[Soundness of the normal-form comparison, Theorem 39]
+\label{thm:lvl-le-eval}
+\lean{Lean.Level.Normalize.NormLevel.le_eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1237}
+If every variable recorded in \texttt{l2} belongs to its key and \texttt{l1.le l2} returns
+\texttt{true}, then \texttt{l1.eval ls} $\rho \le$ \texttt{l2.eval ls} $\rho$ for every
+valuation. Operationally, each entry of \texttt{l1} is folded against the entries of \texttt{l2},
+each of which discharges what it can by \texttt{subsumeBy}, and the fold stopping with
+\texttt{none} means nothing is left.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-subsume-node, fam:lvl-eval-le, fam:lvl-subset, family:treemap-axioms}
+\leanok
+Fix an entry of \texttt{l1} and a valuation making its condition set live. An entry of
+\texttt{l2} at a key below it is then live too, hence bounded by the total of \texttt{l2}, which
+is the side condition of \texttt{Node.subsumeBy\_eval\_iff}; induct along the entry list of
+\texttt{l2} with that lemma at each discharging step. The docstring explains why a whole entry of
+\texttt{l2} cannot be required to dominate a whole entry of \texttt{l1}, with the
+\texttt{imax 2 v} $\le$ \texttt{max 2 v} example of \srcloc{Lean4Lean/Tests/Level.lean}{26}.
+\thesisref{axioms.tex, the algorithmic level inequality; this is its semantic soundness
+direction, following Théorème 39 of Géran's paper rather than the thesis rules}
+\axfoot{Std.TreeMap.all\_eq\_all\_toList (Verify/Axioms.lean:10)}
+\end{proof}
+
+\begin{lemma}[\texttt{BEq}-equal normal forms have equal values]
+\label{thm:lvl-eval-congr}
+\lean{Lean.Level.Normalize.NormLevel.eval_congr, Lean.Level.Normalize.Node.eval_congr}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1273}
+If \texttt{a == b} as \texttt{NormLevel}s, which by definition is mutual entry-wise inclusion,
+then \texttt{a} and \texttt{b} have the same value under every valuation.
+\end{lemma}
+\begin{proof}
+\uses{fam:lvl-eval-le, family:treemap-axioms}
+\leanok
+Prove the $\le$ direction for one-sided entry-wise inclusion by a double fold induction over the
+two entry lists, then apply it twice. The lemma is needed because \texttt{NormLevel} is a
+\texttt{Std.TreeMap}, and two maps with the same entries need not be the same tree.
+\axfoot{Std.TreeMap.all\_eq\_all\_toList (Verify/Axioms.lean:10)}
+\end{proof}
+
+\section{Reconstruction: trees and admissible \texttt{imax} chains}
+\label{sec:lvl-reconstruction}
+
+A normal form must be turned back into a \texttt{Lean.Level}, which means choosing an
+\texttt{imax} chain for each key. The subtlety, stated in the docstring at
+\srcloc{Lean4Lean/Level.lean}{183}, is that a chain is not free: each edge itself contributes a
+sublevel $V(S',v_i,0)$, so only \emph{admissible} orders may be used, and the choice must depend
+on the sublevels alone if the output is to be canonical.
+
+\begin{definition}[Semantics of the reconstruction tree]
+\label{def:lvl-tree-eval}
+\lean{Lean.Level.Normalize.Tree.eval, Lean.Level.Normalize.Tree.evalChild, Lean.Level.Normalize.Tree.eval_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1306}
+\uses{def:lvl-normlevel-eval}
+A \texttt{Tree} node evaluates to the maximum of its own node value and the values of its
+children, each child guarded by \texttt{Nat.imax} of the child's value and the value of the edge
+label. This mirrors exactly the level \texttt{imax (reify t) (param a)} that \texttt{reify} emits
+for an edge.
+\end{definition}
+
+\begin{theorem}[\texttt{reify} preserves the value of a tree]
+\label{thm:lvl-tree-reify-eval}
+\lean{Lean.Level.Normalize.Tree.reify_eval, Lean.Level.Normalize.Tree.reifyChild_eval, Lean.Level.Normalize.Tree.plainOffset?_eval, Lean.Level.Normalize.Tree.reifyChild_ge}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1404}
+\uses{def:lvl-tree-eval}
+For every tree \texttt{t}, evaluating the \texttt{Lean.Level} that \texttt{t.reify} emits at the
+valuation \texttt{evalParam ls} $\rho$ gives \texttt{Tree.eval ls} $\rho$ \texttt{t}.
+\end{theorem}
+\begin{proof}
+\leanok
+Mutual induction with \texttt{reifyChild\_eval}, which states the same for a child list taken
+together with the node constant. The delicate part is the \texttt{plainOffset?} optimisation,
+where the \texttt{imax} guard on a child is dropped: \texttt{plainOffset?\_eval} shows the plain
+form \texttt{a+k} and the guarded form \texttt{imax (a+k) a} differ only when the parameter is
+$0$, where the node's own constant already covers the difference. The optimisation is motivated
+in the docstring at \srcloc{Lean4Lean/Level.lean}{264}: without it \texttt{u+1} would reify to
+\texttt{max 1 (imax (u+1) u)}.
+\end{proof}
+
+\begin{definition}[Subtrees at a path, and how \texttt{modify} changes them]
+\label{def:lvl-tree-at}
+\lean{Lean.Level.Normalize.Tree.At, Lean.Level.Normalize.Tree.At.append, Lean.Level.Normalize.Tree.At.suffix, Lean.Level.Normalize.Tree.At.nil_inv, Lean.Level.Normalize.Tree.At.append_inv, Lean.Level.Normalize.Tree.At_modify_self, Lean.Level.Normalize.Tree.At_modify_of_ne, Lean.Level.Normalize.Tree.At_modify_inv}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1449}
+\texttt{Tree.At t p t'} says that \texttt{t'} is the subtree of \texttt{t} reached by following
+the labels of \texttt{p}, innermost first, which is the order \texttt{Tree.modify} takes. The
+accompanying lemmas invert paths (a path passes through all of its suffixes) and describe
+\texttt{Tree.modify}: a modification is visible at its own path, invisible at incomparable
+paths, and every subtree of the modified tree is either a subtree of the original or the
+modified one. About 200 lines of list and tree plumbing, including the generic helpers
+\texttt{modifyAt\_eq}, \texttt{mem\_modifyAt} and \texttt{suffix\_concat}.
+\end{definition}
+
+\begin{theorem}[A tree is bounded iff all its sublevels are]
+\label{thm:lvl-tree-eval-le-iff}
+\lean{Lean.Level.Normalize.Tree.eval_le_iff, Lean.Level.Normalize.Tree.eval_le_of, Lean.Level.Normalize.Tree.At.le, Lean.Level.Normalize.Tree.At.edge_le}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1595}
+\uses{def:lvl-tree-at, def:lvl-tree-eval}
+\texttt{Tree.eval ls} $\rho$ \texttt{t} $\le m$ holds exactly when (i) for every subtree at a
+path \texttt{p}, \texttt{evalPath p} of that subtree's node value is $\le m$, and (ii) for every
+edge \texttt{a :: p}, the sublevel the edge itself contributes, \texttt{evalPath (a :: p)} of the
+value of \texttt{a}, is $\le m$.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-eval-le}
+\leanok
+The forward direction is \texttt{At.le} and \texttt{At.edge\_le}, that each subtree's and each
+edge's contribution is below the total; the converse is the mutual
+\texttt{eval\_le\_of}/\texttt{evalChild\_le\_of} induction. Clause (ii) is the crux of the whole
+reconstruction argument: an \texttt{imax} chain is not free, so chains must be chosen admissibly.
+\end{proof}
+
+\begin{definition}[Dominated edges, feasible keys, admissible chains]
+\label{def:lvl-dom-feas}
+\lean{Lean.Level.Normalize.NormLevel.Dom, Lean.Level.Normalize.NormLevel.Feas, Lean.Level.Normalize.NormLevel.Adm, Lean.Level.Normalize.NormLevel.Dom.mono, Lean.Level.Normalize.NormLevel.Dom.le, Lean.Level.Normalize.NormLevel.Feas.mono, Lean.Level.Normalize.NormLevel.Feas.exchange, Lean.Level.Normalize.NormLevel.Feas.peel, Lean.Level.Normalize.NormLevel.Feas.perm, Lean.Level.Normalize.NormLevel.Feas.cons_last, Lean.Level.Normalize.NormLevel.Adm.suffix}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1616}
+\uses{def:lvl-normlevel-eval, fam:lvl-eval-le}
+\texttt{Dom s a acc} says that the sublevel contributed by an \texttt{imax} edge labelled
+\texttt{a} is dominated by the map: some key \texttt{p} of \texttt{s} records a variable named
+\texttt{a} and every element of \texttt{p} is \texttt{a} or lies in \texttt{acc}.
+\texttt{Dom.le} turns this into the semantic statement that the edge contributes nothing beyond
+the value of \texttt{s}, and \texttt{Dom.mono} says domination is monotone in \texttt{acc}, which
+is what makes the greedy search of \texttt{lexChain} complete. \texttt{Feas s acc rem} says the
+names in \texttt{rem} can be added to \texttt{acc} one at a time, each addition dominated; the
+exchange lemma shows any dominated element may be taken first, and \texttt{peel} extracts the
+element added last. \texttt{Adm l} says an already-ordered chain has every edge dominated.
+\end{definition}
+
+\begin{lemma}[The \texttt{addable} and \texttt{feasible} tests decide \texttt{Dom} and \texttt{Feas}]
+\label{thm:lvl-addable-feasible}
+\lean{Lean.Level.Normalize.NormLevel.addable_sound, Lean.Level.Normalize.NormLevel.addable_complete, Lean.Level.Normalize.NormLevel.feasible_sound, Lean.Level.Normalize.NormLevel.feasible_complete, Lean.Level.Normalize.NormLevel.feasible_go_sound, Lean.Level.Normalize.NormLevel.feasible_go_complete}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1639}
+\texttt{s.addable a acc} decides \texttt{s.Dom a acc}, soundness unconditionally and completeness
+assuming the keys of \texttt{s} and \texttt{acc} are sorted; \texttt{s.feasible acc rem} decides
+\texttt{s.Feas acc rem} under the same sortedness assumptions. The fuel of \texttt{feasible.go}
+is the length of \texttt{rem}, which the completeness proof shows suffices.
+\end{lemma}
+\begin{proof}
+\uses{def:lvl-dom-feas, fam:lvl-subset, def:lvl-sorted, family:treemap-axioms}
+\leanok
+Soundness unfolds the \texttt{any}/\texttt{find?} and reads off the witness. Completeness turns
+the membership statement back into a \texttt{subset} test with \texttt{subset\_of\_sorted}, using
+that a sorted key is duplicate-free to erase the name being added; for \texttt{feasible} it also
+uses \texttt{Feas.exchange} to justify committing to the first \texttt{addable} element.
+\axfoot{Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:14)}
+\end{proof}
+
+\begin{theorem}[Every key of a normal form admits an \texttt{imax} chain]
+\label{thm:lvl-wf-feas}
+\lean{Lean.Level.Normalize.NormLevel.WF.feas, Lean.Level.Normalize.NormLevel.Dom.mono_map, Lean.Level.Normalize.NormLevel.Feas.mono_map, Lean.Level.Normalize.normalize_feas}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1771}
+\uses{def:lvl-normlevel-wf, def:lvl-dom-feas}
+For a well-formed map, every key is \texttt{Feas} from the empty condition set; and since
+subsumption \texttt{Covers} the map it was built from, and domination only reads variable names
+and their keys, this survives into \texttt{normalize u} (\texttt{normalize\_feas}). Every key of
+a normal form can therefore actually be reified as an \texttt{imax} chain.
+\end{theorem}
+\begin{proof}
+\uses{def:lvl-covers}
+\leanok
+Induction on the length of the key, using the parent-pointer clause of \texttt{WF}: the parent is
+the root or a key with one condition fewer, and the variable relating them dominates the edge
+between them. \texttt{Feas.perm} and \texttt{Feas.cons\_last} reorder the chain so that the
+variable just removed is the one added last. This is where the otherwise mysterious third clause
+of \texttt{NormLevel.WF} pays off.
+\end{proof}
+
+\begin{theorem}[\texttt{lexChain} returns an admissible chain]
+\label{thm:lvl-lexchain-spec}
+\lean{Lean.Level.Normalize.NormLevel.lexChain_spec, Lean.Level.Normalize.NormLevel.lexChain_perm, Lean.Level.Normalize.NormLevel.lexChain_inj}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1836}
+\uses{def:lvl-dom-feas, def:lvl-sorted}
+\texttt{lexChain fuel p} always returns a permutation of \texttt{p}, including in the fallback
+branch where it returns \texttt{p} itself (\texttt{lexChain\_perm}, no hypotheses). When the keys
+of \texttt{s} are sorted, \texttt{fuel} is at least the length of \texttt{p}, \texttt{p} is
+sorted and \texttt{p} is feasible, the result is in addition admissible. Distinct sorted keys
+therefore get distinct chains (\texttt{lexChain\_inj}).
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-addable-feasible, family:treemap-axioms}
+\leanok
+Recursion on the fuel. In the \texttt{find?} branch the element found is \texttt{addable} and
+leaves a feasible remainder, so the recursive call applies; in the \texttt{none} branch
+\texttt{Feas.peel} exhibits an element that \texttt{find?} would have found, a contradiction.
+Injectivity follows from \texttt{lexChain\_perm} plus antisymmetry of permutation on sorted
+lists. Taking the lexicographically least admissible chain is what makes reconstruction depend
+only on the sublevels rather than on which \texttt{imax} chains happened to appear in the input,
+the bug documented at \srcloc{Lean4Lean/Tests/Level.lean}{20}.
+\axfoot{Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:14)}
+\end{proof}
+
+\begin{theorem}[What \texttt{toTree} writes and what the tree contains]
+\label{thm:lvl-totree-spec}
+\lean{Lean.Level.Normalize.NormLevel.toTree_spec, Lean.Level.Normalize.NormLevel.WrittenAt, Lean.Level.Normalize.NormLevel.Accounted, Lean.Level.Normalize.NormLevel.treeVar, Lean.Level.Normalize.NormLevel.WrittenAt.write}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2137}
+\uses{def:lvl-tree-at, thm:lvl-lexchain-spec}
+After the single fold that builds the tree, every entry \texttt{(p, n)} is \texttt{WrittenAt} the
+end of \texttt{p}'s chain, carrying \texttt{n}'s constant and \texttt{treeVar p n}, which is
+\texttt{n}'s variables minus the one the innermost edge already contributes. Conversely the tree
+is \texttt{Accounted} for: every subtree is either empty scaffolding or exactly such a written
+entry, and every nonempty path is a suffix of some key's chain.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-subsume-node}
+\leanok
+Fold induction: a write is visible at its own path (\texttt{At\_modify\_self}) and leaves other
+entries alone, either because the paths differ, by \texttt{lexChain\_inj} on distinct sorted
+keys, or because the key repeats and the same data is written.
+\end{proof}
+
+\begin{theorem}[Reconstruction is semantics-preserving]
+\label{thm:lvl-totree-eval}
+\lean{Lean.Level.Normalize.NormLevel.toTree_eval, Lean.Level.Normalize.NormLevel.toTree_le_iff}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2217}
+\uses{def:lvl-tree-eval, def:lvl-normlevel-eval}
+For a map whose keys are sorted and all feasible,
+\texttt{Tree.eval ls} $\rho$ \texttt{(toTree s)} equals \texttt{s.eval ls} $\rho$.
+\texttt{toTree\_le\_iff} is the intermediate biconditional: the tree is bounded by $m$ exactly
+when, for each entry, the recorded node and each edge of its chain are.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-totree-spec, thm:lvl-tree-eval-le-iff, thm:lvl-lexchain-spec, def:lvl-dom-feas, fam:lvl-subsume-node, family:treemap-axioms}
+\leanok
+Both inequalities come from \texttt{toTree\_le\_iff}. Downwards, the recorded node carries a
+subset of the entry's sublevels and every edge is dominated, because \texttt{lexChain} emits only
+admissible chains and \texttt{Dom.le} bounds a dominated edge. Upwards, the one sublevel the
+recorded node omits, the innermost chain element at offset $0$, is exactly what the edge into
+that node contributes.
+\axfoot{Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:14)}
+\end{proof}
+
+\section{Completeness and canonicity}
+
+\begin{definition}[Sublevels and syntactic domination]
+\label{def:lvl-sub}
+\lean{Lean.Level.Normalize.Sub, Lean.Level.Normalize.Sub.path, Lean.Level.Normalize.Sub.le, Lean.Level.Normalize.Sub.le.trans, Lean.Level.Normalize.Sub.le.antisymm, Lean.Level.Normalize.NormLevel.HasSub, Lean.Level.Normalize.Sub.eval, Lean.Level.Normalize.NormLevel.HasSub.le_eval, Lean.Level.Normalize.Node.HasSub, Lean.Level.Normalize.NormLevel.hasSub_iff}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2535}
+\uses{def:lvl-normlevel-eval, fam:lvl-subset}
+A \texttt{Sub} is a single sublevel of the canonical form: \texttt{const p k} is $C(p,k)$ and
+\texttt{var p x k} is $V(p,x,k)$. \texttt{Sub.le} is the paper's domination order: the
+dominator's condition set must be a \emph{subset} of the dominated one, so that it fires
+whenever the dominated sublevel does; a constant is dominated by a variable sublevel of offset
+$K$ up to $K+1$; and a variable sublevel is dominated only by the same variable at a larger
+offset. \texttt{HasSub s t} says \texttt{t} is recorded in \texttt{s}, and
+\texttt{HasSub.le\_eval} that a recorded sublevel is below the total. Domination is transitive,
+and antisymmetric on sorted condition sets.
+\thesisref{axioms.tex, the level inequality judgement; Théorème 39 of Géran's paper is the
+statement that this syntactic order decides the semantic one}
+\end{definition}
+
+\begin{theorem}[Separation: a semantic bound forces a syntactic dominator]
+\label{thm:lvl-separation}
+\lean{Lean.Level.Normalize.NormLevel.separation, Lean.Level.Normalize.NormLevel.bound, Lean.Level.Normalize.NormLevel.bound_spec, Lean.Level.Normalize.NormLevel.lt_eval, Lean.Level.Normalize.Node.lt_eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2674}
+\uses{def:lvl-sub, def:lvl-normlevel-eval}
+The converse of Theorem 39. If every name in every key of \texttt{l1} occurs in \texttt{ls},
+every variable of \texttt{l1} belongs to its key, and \texttt{l1.eval ls} $\rho \le$
+\texttt{l2.eval ls} $\rho$ for \emph{every} valuation $\rho$, then every sublevel of \texttt{l1}
+has a syntactic dominator among the sublevels of \texttt{l2}.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-eval-le}
+\leanok
+Construct, for the sublevel under consideration, a separating valuation: every name in its
+condition set is set to $1$, its own variable if it has one to a value $N$ exceeding every
+constant and offset appearing in \texttt{l2} (\texttt{bound\_spec}), and everything else to $0$.
+Only entries of \texttt{l2} at condition sets below the sublevel's can then contribute, and only
+a sublevel with the same variable can reach $N$; reading off the entry that exceeds the bound
+(\texttt{lt\_eval}) yields the dominator. About 75 lines, with no automation black boxes.
+\thesisref{the converse direction of the algorithmic inequality of axioms.tex, which the thesis
+states but does not prove}
+\end{proof}
+
+\begin{theorem}[Completeness of the normal-form comparison]
+\label{thm:lvl-le-complete}
+\lean{Lean.Level.Normalize.NormLevel.le_complete, Lean.Level.Normalize.NormLevel.le_fold_complete, Lean.Level.Normalize.subsumeVars_complete, Lean.Level.Normalize.Node.subsumeBy_var_complete, Lean.Level.Normalize.Node.subsumeBy_const_complete}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2886}
+\uses{def:lvl-sub, def:lvl-varssorted}
+If every sublevel of \texttt{l1} has a dominator among the sublevels of \texttt{l2}, and both
+maps have sorted keys and sorted variable lists and \texttt{l1} has no empty entry, then
+\texttt{l1.le l2} returns \texttt{true}. \texttt{le\_fold\_complete} is the fold-level statement:
+an entry each of whose sublevels has a dominator in the remaining list is fully discharged.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-subsume-node, fam:lvl-subset, family:treemap-axioms}
+\leanok
+Per entry of \texttt{l1}, induct along the entry list of \texttt{l2}. Each step either skips a key
+that is not a subset, or discharges through \texttt{subsumeBy}; exactness of \texttt{subsumeBy}
+(\texttt{subsumeVars\_complete}, \texttt{subsumeBy\_var\_complete},
+\texttt{subsumeBy\_const\_complete}) guarantees that a sublevel surviving a step still has a
+dominator further down the list.
+\axfoot{Std.TreeMap.all\_eq\_all\_toList (Verify/Axioms.lean:10)}
+\end{proof}
+
+\begin{theorem}[Minimisation removes exactly the dominated sublevels]
+\label{thm:lvl-minimize-exact}
+\lean{Lean.Level.Normalize.NormLevel.minimize_exact, Lean.Level.Normalize.NormLevel.minimize_exact_aux, Lean.Level.Normalize.NormLevel.minimize_hasSub, Lean.Level.Normalize.Node.subsume_hasSub, Lean.Level.Normalize.NormLevel.subsumption_step_hasSub}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3520}
+\uses{def:lvl-sub, def:lvl-varssorted}
+For a map with sorted keys and sorted variable lists, if \texttt{t} is a sublevel of the
+minimised entry at \texttt{p1} and \texttt{t'} is any sublevel of the map with
+\texttt{t.le t'}, then \texttt{t = t'}: minimisation leaves no sublevel that another sublevel
+strictly dominates.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-subsume-node, fam:lvl-subset}
+\leanok
+Fold induction over the entry list (\texttt{minimize\_exact\_aux}, about 90 lines), splitting on
+whether the dominating entry sits at the same key, where the equal-length \texttt{same} flag
+applies and a variable must not discharge itself, or at a strictly smaller one.
+\end{proof}
+
+\begin{theorem}[Subsumption produces a reduced normal form]
+\label{thm:lvl-subsumption-reduced}
+\lean{Lean.Level.Normalize.NormLevel.Reduced, Lean.Level.Normalize.NormLevel.subsumption_reduced, Lean.Level.Normalize.normalize_reduced}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3536}
+\uses{def:lvl-sub}
+\texttt{Reduced s} says that domination between two recorded sublevels forces them to be equal.
+\texttt{subsumption\_reduced} proves \texttt{s.subsumption} reduced for \texttt{s} with sorted
+keys and sorted variable lists, and \texttt{normalize\_reduced} instantiates this at
+\texttt{normalize u}.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-minimize-exact, thm:lvl-subsumption-step, def:lvl-varssorted}
+\leanok
+Fold induction maintaining that every already-processed key is minimised against the current
+map; the key point is that later steps only shrink the map, so they cannot introduce new
+domination.
+\end{proof}
+
+\begin{theorem}[Reduced forms with the same sublevels are equal]
+\label{thm:lvl-eq-of-hassub}
+\lean{Lean.Level.Normalize.NormLevel.eq_of_hasSub_iff, Lean.Level.Normalize.NormLevel.Reduced.hasSub_iff_hasSub, Lean.Level.Normalize.NormLevel.HasSub.path_sorted, Lean.Level.Normalize.sorted_pairs_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3662}
+\uses{def:lvl-sub, def:lvl-varssorted}
+If two reduced normal forms with sorted keys mutually dominate each other's sublevels, then they
+have literally the same sublevels; and two maps with the same sublevels, sorted variable lists
+and no empty entries are \texttt{BEq}-equal.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-subsumption-reduced, fam:lvl-subset}
+\leanok
+Mutual domination plus reducedness plus antisymmetry of \texttt{Sub.le} on sorted condition sets
+forces the dominating sublevel to be the sublevel itself. Equality of the maps then follows entry
+by entry, using \texttt{VarsSorted.eq\_of\_mem\_iff} for the variable lists and
+\texttt{sorted\_pairs\_eq} for the key lists.
+\end{proof}
+
+\begin{lemma}[Invariants of the output of \texttt{normalize}]
+\label{fam:lvl-normalize-invariants}
+\lean{Lean.Level.Normalize.normalize_vars_sorted, Lean.Level.Normalize.normalize_vars, Lean.Level.Normalize.normalize_sorted, Lean.Level.Normalize.normalize_sortedVars, Lean.Level.Normalize.normalize_nonempty, Lean.Level.Normalize.normalize_keys, Lean.Level.Normalize.normalize_feas, Lean.Level.Normalize.normalize_reduced}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{1222}
+The seven properties of \texttt{normalize u} that the end-to-end theorems take as separate
+hypotheses: every recorded variable belongs to its key; keys are sorted; variable lists are
+sorted by name; no entry is empty; every name in a key occurs in the input level, hence in
+\texttt{ls} when the level translates; every key admits an admissible \texttt{imax} chain; and no
+sublevel is dominated by another.
+\end{lemma}
+\begin{proof}
+\uses{thm:lvl-normalizeaux-wf, def:lvl-covers, def:lvl-varssorted, thm:lvl-wf-feas, thm:lvl-subsumption-reduced}
+\leanok
+Each is the corresponding invariant of the accumulation phase, transported through subsumption
+by \texttt{subsumption\_vars}, \texttt{subsumption\_covers}, \texttt{subsumption\_sortedVars} and
+\texttt{subsumption\_reduced}; the statements live at lines 1222, 1807, 2413, 2443, 2524 and
+3600. Collecting them as separate side conditions rather than one bundled predicate is what makes
+the end-to-end theorems below take five or six hypotheses each.
+\end{proof}
+
+\begin{theorem}[Canonicity of the normal form]
+\label{thm:lvl-normalize-complete}
+\lean{Lean.Level.Normalize.normalize_complete}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3721}
+\uses{def:vlevel-oflevel}
+For levels that translate, \texttt{normalize u == normalize v} holds if and only if \texttt{u'}
+and \texttt{v'} are equivalent as \texttt{VLevel}s, that is, have the same value under every
+valuation.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalize-eval, thm:lvl-eval-congr, thm:lvl-separation, thm:lvl-eq-of-hassub, fam:lvl-normalize-invariants, family:treemap-axioms}
+\leanok
+Soundness is \texttt{normalize\_eval} followed by \texttt{eval\_congr}. For completeness, from
+semantic equivalence each map bounds the other under every valuation, so \texttt{separation}
+gives mutual domination of sublevels; both maps are reduced, so
+\texttt{Reduced.hasSub\_iff\_hasSub} upgrades this to equality of the sublevel sets and
+\texttt{eq\_of\_hasSub\_iff} to \texttt{BEq} equality.
+\thesisref{axioms.tex, level equivalence defined as mutual inequality; this is a decision
+procedure for it}
+\axfoot{Std.TreeMap.all\_eq\_all\_toList (Verify/Axioms.lean:10)}
+\end{proof}
+
+\section{The flat fast path}
+
+About 99.8\% of the levels arising in Lean, Std and Batteries contain no essential \texttt{imax}
+(\srcloc{Lean4Lean/Level.lean}{302}), and for those the map can be skipped entirely. The fast
+path is a performance optimisation whose transparency still has to be proved.
+
+\begin{definition}[Flat normal forms]
+\label{def:lvl-flat}
+\lean{Lean.Level.Normalize.flatGet, Lean.Level.Normalize.NormLevel.Flat, Lean.Level.Normalize.RepAcc, Lean.Level.Normalize.NormLevel.addConst_flat, Lean.Level.Normalize.NormLevel.addNode_flat, Lean.Level.Normalize.toNormLevel_flat, Lean.Level.Normalize.NormLevel.subsumption_flat}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{2948}
+\uses{def:lvl-varssorted}
+\texttt{flatGet c vs} describes, pointwise, the map that a level with no essential \texttt{imax}
+normalises to: $C(\emptyset,c)$ at the root and $V(\{x\},x,k)$ at each singleton key.
+\texttt{Flat s c vs} says \texttt{s} agrees with it at every key, and \texttt{RepAcc} relates the
+two branches of the fast traversal to the accumulator of \texttt{normalizeAux}. The constructors
+\texttt{addConst}, \texttt{addNode}, \texttt{toNormLevel} and \texttt{subsumption} all preserve
+flatness, subsumption acting as the identity since nothing is ever dominated.
+\end{definition}
+
+\begin{lemma}[Everything downstream depends on the map only through its entry list]
+\label{fam:lvl-congr}
+\lean{Lean.Level.Normalize.toList_eq_of_get?_eq, Lean.Level.Normalize.normalizeAux_congr, Lean.Level.Normalize.NormLevel.subsumption_congr, Lean.Level.Normalize.NormLevel.toList_eq, Lean.Level.Normalize.NormLevel.addable_congr, Lean.Level.Normalize.NormLevel.feasible_congr, Lean.Level.Normalize.NormLevel.lexChain_congr, Lean.Level.Normalize.NormLevel.toTree_congr}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3177}
+Two \texttt{Std.TreeMap}s with the same entries need not be the same tree, since the shape
+depends on insertion order, so each consumer must be shown to factor through \texttt{toList}:
+\texttt{normalizeAux}, \texttt{subsumption}, \texttt{addable}, \texttt{feasible},
+\texttt{lexChain} and \texttt{toTree} all do, and \texttt{BEq}-equal maps have equal
+\texttt{toList}s.
+\end{lemma}
+\begin{proof}
+\uses{fam:lvl-subset, family:treemap-axioms}
+\leanok
+\texttt{toList\_eq\_of\_get?\_eq} compares the two sorted key-value lists pointwise
+(\texttt{sorted\_pairs\_eq}); the rest propagate that equality through the definitions, one
+congruence lemma per operation. A necessary but tedious layer, well flagged by the docstrings at
+lines 3173--3176 and 3736--3739.
+\axfoot{Std.TreeMap.all\_eq\_all\_toList, Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:10,14)}
+\end{proof}
+
+\begin{theorem}[The flat traversal tracks \texttt{normalizeAux}]
+\label{thm:lvl-flataux-rep}
+\lean{Lean.Level.Normalize.flatAux_rep, Lean.Level.Normalize.NormLevel.Flat.toTree, Lean.Level.Normalize.NormLevel.Flat.toList, Lean.Level.Normalize.NormLevel.Flat.lexChain_singleton}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3261}
+\uses{def:lvl-flat}
+\texttt{flatAux l k (c, vs)} either returns flat data describing the same map that
+\texttt{normalizeAux l [] k s} builds, or throws a map agreeing with it entry for entry. And a
+flat map's \texttt{toTree} is exactly \texttt{flatTree c vs}: every key is a singleton, so its
+\texttt{lexChain} is forced, and the fold adds one child per parameter in name order.
+\end{theorem}
+\begin{proof}
+\uses{fam:lvl-congr, thm:lvl-lexchain-spec, family:treemap-axioms}
+\leanok
+Induction on the level for \texttt{flatAux\_rep}, with the \texttt{imax} case and the case of a
+\texttt{max} whose first argument already threw handled by \texttt{normalizeAux\_congr};
+\texttt{Flat.toTree} computes the entry list of a flat map and folds explicitly.
+\axfoot{Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:14)}
+\end{proof}
+
+\begin{theorem}[The fast path is transparent]
+\label{thm:lvl-normalize-prime-eq}
+\lean{Lean.Level.Normalize.normalize'_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3793}
+\uses{def:kernel-level-normalize}
+\texttt{normalize' l} equals \texttt{(normalize l).toTree.reify} for every level: the flat fast
+path computes exactly the tree the general path does.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-flataux-rep, fam:lvl-congr, def:lvl-flat, family:treemap-axioms}
+\leanok
+Case on \texttt{flatAux l 0 (0, [])}. In the \texttt{ok} case use \texttt{subsumption\_flat} and
+\texttt{Flat.toTree}; in the \texttt{error} case use \texttt{subsumption\_congr} and
+\texttt{toTree\_congr} to move from the map seeded by \texttt{toNormLevel} to the one the general
+path builds.
+\axfoot{Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:14)}
+\end{proof}
+
+\section{End-to-end level theorems}
+
+The seven results below are what the rest of the project could use. Only
+\ref{thm:lvl-isequivlist-wf} actually reaches the verified type checker; see the review notes.
+The fast-path disjuncts defer to core Lean's own \texttt{isEquiv}/\texttt{geq}, already verified
+as \texttt{isEquiv\_wf} and \texttt{geq\_wf} in \srcloc{Lean4Lean/Verify/LevelStd.lean}{528}.
+
+\begin{theorem}[Soundness of the level equivalence test]
+\label{thm:lvl-isequiv-prime-wf}
+\lean{Lean.Level.isEquiv'_wf}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3808}
+\uses{def:kernel-level-isequiv, def:vlevel-oflevel}
+If \texttt{isEquiv' u v} returns \texttt{true} and \texttt{u}, \texttt{v} translate to
+\texttt{u'}, \texttt{v'}, then \texttt{u'} and \texttt{v'} are equivalent \texttt{VLevel}s.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalize-eval, thm:lvl-eval-congr, family:level-axioms, family:treemap-axioms}
+\leanok
+Split the disjunction defining \texttt{isEquiv'}: the fast path is core Lean's \texttt{isEquiv},
+verified in \srcloc{Lean4Lean/Verify/LevelStd.lean}{528}; the fallback rewrites both sides with
+\texttt{normalize\_eval} and applies \texttt{NormLevel.eval\_congr}.
+\axfoot{Lean.Level.normalize\_eq, isExplicitSubsumedAux\_eq, instLawfulBEqLevel; Std.TreeMap.all\_eq\_all\_toList}
+\end{proof}
+
+\begin{theorem}[Soundness of the level-list equivalence test]
+\label{thm:lvl-isequivlist-wf}
+\lean{Lean.Level.isEquivList_wf}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3837}
+\uses{def:kernel-level-isequiv}
+If \texttt{Level.isEquivList us vs} holds and both lists translate elementwise, then the
+translations are pointwise equivalent.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-isequiv-prime-wf, family:level-axioms, family:treemap-axioms}
+\leanok
+Induction on the two lists, applying \texttt{isEquiv'\_wf} pointwise. This is the only end-to-end
+level theorem the verified type checker consumes
+(\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{398}), covering the constant-application
+definitional-equality checks at \srcloc{Lean4Lean/TypeChecker.lean}{742} and
+\srcloc{Lean4Lean/TypeChecker.lean}{866}.
+\axfoot{Lean.Level.normalize\_eq, isExplicitSubsumedAux\_eq, instLawfulBEqLevel; Std.TreeMap.all\_eq\_all\_toList}
+\end{proof}
+
+\begin{theorem}[Soundness of the level inequality test]
+\label{thm:lvl-geq-prime-wf}
+\lean{Lean.Level.geq'_wf}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3828}
+\uses{def:kernel-level-isequiv, def:vlevel-oflevel}
+If \texttt{geq' u v} returns \texttt{true} and both levels translate, then \texttt{v'} $\le$
+\texttt{u'} as \texttt{VLevel}s.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-le-eval, thm:lvl-normalize-eval, fam:lvl-normalize-invariants, family:level-axioms, family:treemap-axioms}
+\leanok
+Split the disjunction; the fast path is core's \texttt{geq}, verified as \texttt{geq\_wf} in
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{534}, and the fallback rewrites both sides with
+\texttt{normalize\_eval} and applies \texttt{NormLevel.le\_eval} with the
+\texttt{normalize\_vars} invariant.
+\axfoot{Lean.Level.normalize\_eq, isExplicitSubsumedAux\_eq, instLawfulBEqLevel; Std.TreeMap.all\_eq\_all\_toList}
+\end{proof}
+
+\begin{theorem}[Soundness of reification]
+\label{thm:lvl-normalize-prime-eval}
+\lean{Lean.Level.normalize'_eval}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3822}
+\uses{def:kernel-level-normalize, def:vlevel-oflevel}
+For a level that translates, evaluating the reconstructed \texttt{Lean.Level}
+\texttt{normalize' u} at \texttt{evalParam ls} $\rho$ gives \texttt{u'.eval} $\rho$: the
+reconstruction denotes the same function as the input.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalize-prime-eq, thm:lvl-tree-reify-eval, thm:lvl-totree-eval, thm:lvl-normalize-eval, fam:lvl-normalize-invariants, family:treemap-axioms}
+\leanok
+Chain \texttt{normalize'\_eq}, \texttt{Tree.reify\_eval} and \texttt{toTree\_eval} (with the
+sortedness and feasibility invariants of \texttt{normalize}), then \texttt{normalize\_eval}.
+\axfoot{Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:14)}
+\end{proof}
+
+\begin{theorem}[Completeness of the level equivalence test]
+\label{thm:lvl-isequiv-prime-complete}
+\lean{Lean.Level.isEquiv'_complete}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3861}
+\uses{def:kernel-level-isequiv, def:vlevel-oflevel}
+For levels that translate, \texttt{isEquiv' u v} returns \texttt{true} if and only if \texttt{u'}
+and \texttt{v'} are equivalent. With soundness this makes \texttt{isEquiv'} a decision procedure
+for level equivalence.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalize-complete, family:level-axioms, family:treemap-axioms}
+\leanok
+Rewrite the fallback disjunct with \texttt{normalize\_complete}; the fast-path disjunct is
+subsumed by soundness of core's \texttt{isEquiv}.
+\thesisref{decidability of level equivalence, the judgement of axioms.tex}
+\axfoot{Lean.Level.normalize\_eq, isExplicitSubsumedAux\_eq, instLawfulBEqLevel; Std.TreeMap.all\_eq\_all\_toList}
+\end{proof}
+
+\begin{theorem}[Canonicity of the reconstructed level]
+\label{thm:lvl-normalize-prime-complete}
+\lean{Lean.Level.normalize'_complete}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3849}
+\uses{def:kernel-level-normalize, def:vlevel-oflevel}
+For levels that translate, \texttt{normalize' u = normalize' v} if and only if \texttt{u'} and
+\texttt{v'} are equivalent: semantically equal levels reify to \emph{syntactically} equal levels.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-normalize-complete, thm:lvl-normalize-prime-eval, fam:lvl-congr, thm:lvl-normalize-prime-eq, family:treemap-axioms}
+\leanok
+Left to right by \texttt{normalize'\_eval} at a fixed valuation. Right to left from
+\texttt{normalize\_complete}, which gives \texttt{BEq}-equal normal forms, hence equal entry
+lists, and then \texttt{toTree\_congr}. This is the strongest statement in the file, a genuine
+canonical form for universe levels, which the thesis does not have.
+\axfoot{Std.TreeMap.all\_eq\_all\_toList, Std.TreeMap.any\_eq\_any\_toList (Verify/Axioms.lean:10,14)}
+\end{proof}
+
+\begin{theorem}[Completeness of the level inequality test]
+\label{thm:lvl-geq-prime-complete}
+\lean{Lean.Level.geq'_complete}
+\leanok
+\srcloc{Lean4Lean/Verify/Level.lean}{3870}
+\uses{def:kernel-level-isequiv, def:vlevel-oflevel}
+For levels that translate, \texttt{geq' u v} returns \texttt{true} if and only if \texttt{v'}
+$\le$ \texttt{u'}.
+\end{theorem}
+\begin{proof}
+\uses{thm:lvl-geq-prime-wf, thm:lvl-separation, thm:lvl-le-complete, thm:lvl-normalize-eval, fam:lvl-normalize-invariants, family:level-axioms, family:treemap-axioms}
+\leanok
+Soundness is \texttt{geq'\_wf}. For completeness, \texttt{separation} applied to
+\texttt{normalize v} and \texttt{normalize u} produces a dominator for each sublevel, and
+\texttt{le\_complete} turns that into a \texttt{true} answer; the \texttt{refine} takes six of
+the \texttt{normalize} invariants at once.
+\thesisref{decidability of the algorithmic inequality of axioms.tex}
+\axfoot{Lean.Level.normalize\_eq, isExplicitSubsumedAux\_eq, instLawfulBEqLevel; Std.TreeMap.all\_eq\_all\_toList}
+\end{proof}
+
+\section{The order used to sort \texttt{max} arguments}
+
+Core Lean's \texttt{Level.normalize} sorts the arguments of a \texttt{max} with
+\texttt{Array.qsort normLt}, so the verification of that function in
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{228} needs to know that \texttt{normLt} is a strict weak
+order. \srcloc{Lean4Lean/Verify/NormLt.lean}{1} supplies exactly the two facts \texttt{qsort}
+requires, by reformulating \texttt{normLt} as an \texttt{Ordering}-valued comparison.
+
+\begin{definition}[Structural comparison of level bases]
+\label{def:normlt-size-basecmp}
+\lean{Lean.Level.baseCmp, Lean.Level.size, Lean.Level.structCmp}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{46}
+\texttt{baseCmp} compares two levels that are not \texttt{succ}s: \texttt{max} against
+\texttt{max} and \texttt{imax} against \texttt{imax} by recursively comparing each argument's
+base and then its offset, \texttt{param} against \texttt{param} and \texttt{mvar} against
+\texttt{mvar} by \texttt{Name.cmp}, and levels with different constructors by the constructor tag
+\texttt{ctorToNat}. It is defined by well-founded recursion on the sum of the structural sizes
+\texttt{size} of the two levels, using that a level's \texttt{getLevelOffset} is no larger than
+the level itself. \texttt{structCmp} is the auxiliary same-constructor part, returning
+\texttt{.eq} on differing constructors. \texttt{size}, \texttt{structCmp} and the size lemmas are
+private.
+\end{definition}
+
+\begin{definition}[Ordering-valued comparison of levels]
+\label{def:normlt-normcmp}
+\lean{Lean.Level.normCmp}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{65}
+\uses{def:normlt-size-basecmp}
+\texttt{normCmp l1 l2} compares \texttt{l1} and \texttt{l2} by their bases, with
+\texttt{baseCmp} on \texttt{getLevelOffset}, and then, on equal bases, by their \texttt{succ}
+offsets. This is the \texttt{Ordering}-valued reformulation of core Lean's boolean
+\texttt{Level.normLt}.
+\end{definition}
+
+\begin{lemma}[\texttt{baseCmp} is the lexicographic product of tag and structure]
+\label{thm:normlt-basecmp-eq}
+\lean{Lean.Level.baseCmp_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{78}
+For all levels, \texttt{baseCmp l1 l2} is \texttt{(compare l1.ctorToNat l2.ctorToNat).then
+(structCmp l1 l2)}: the constructor tags decide first and the structural comparison only breaks
+ties.
+\end{lemma}
+\begin{proof}
+\uses{def:normlt-size-basecmp}
+\leanok
+Case split on both levels, then \texttt{simp [baseCmp, structCmp, normCmp, ctorToNat]}. This is
+the reformulation that lets the lexicographic machinery of \texttt{Lean4Lean.Std.Ord} apply.
+\end{proof}
+
+\begin{lemma}[\texttt{normCmp} is a lawful comparison]
+\label{fam:normlt-order-instances}
+\lean{Lean.Level.normCmp_swap, Lean.Level.normCmp_rot, Lean.Level.normCmp_refl, Lean.Level.eq_of_normCmp_eq, Lean.Level.baseCmp_swap, Lean.Level.baseCmp_rot, Lean.Level.baseCmp_refl}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{99}
+\uses{def:normlt-normcmp}
+The family establishing that \texttt{normCmp}, and with it \texttt{baseCmp}, is an oriented,
+transitive, reflexive comparison that decides equality: \texttt{normCmp l2 l1} is the swap of
+\texttt{normCmp l1 l2}; the rotation property \texttt{Rot} holds at every triple, whence
+transitivity; \texttt{normCmp l l} is \texttt{.eq}; and \texttt{normCmp l1 l2 = .eq} implies
+\texttt{l1 = l2}. Five anonymous instances are derived from them
+(\texttt{TransCmp} and \texttt{ReflCmp} for both comparisons, and \texttt{LawfulEqCmp normCmp}),
+so their generated names are not stated here.
+\end{lemma}
+\begin{proof}
+\uses{thm:normlt-basecmp-eq}
+\leanok
+Transitivity goes through \texttt{Rot.then'} and \texttt{Rot.of\_transCmp} applied to the
+lexicographic decomposition \texttt{baseCmp\_eq}, with a strong induction on the sum of the sizes
+of the three levels; this is the device shared with \texttt{Name.cmp}
+(\srcloc{Lean4Lean/Std/Ord.lean}{25}), needed because \texttt{structCmp} returns \texttt{.eq} on
+unrelated constructors and so is not itself transitive. Antisymmetry uses the private
+\texttt{level\_ext}, that a level is determined by its base and its offset.
+\end{proof}
+
+\begin{lemma}[\texttt{normLtAux} accumulates offsets then runs \texttt{normCmp}]
+\label{thm:normlt-aux-eq}
+\lean{Lean.Level.normLtAux_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{264}
+For all \texttt{l1}, \texttt{k1}, \texttt{l2}, \texttt{k2}, core Lean's
+\texttt{normLtAux l1 k1 l2 k2} equals the boolean test that
+\texttt{(baseCmp l1.getLevelOffset l2.getLevelOffset).then (compare (l1.getOffset + k1)
+(l2.getOffset + k2))} is \texttt{.lt}. This is the bridge between the imperative-looking core
+function and the algebraic comparison.
+\end{lemma}
+\begin{proof}
+\uses{fam:normlt-order-instances, def:normlt-normcmp}
+\leanok
+Induction along \texttt{normLtAux.induct} with fourteen cases, one per syntactic branch of
+\texttt{normLtAux}: the \texttt{succ} cases move a unit from the level into the accumulator, the
+syntactically equal cases close by \texttt{baseCmp\_refl}, and the remaining cases case-split the
+resulting \texttt{Ordering}. About 80 lines, the bulk of the file.
+\end{proof}
+
+\begin{theorem}[\texttt{normLt} is \texttt{normCmp = lt}]
+\label{thm:normlt-eq}
+\lean{Lean.Level.normLt_eq}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{345}
+\uses{def:normlt-normcmp}
+For all levels, \texttt{normLt l1 l2} equals \texttt{normCmp l1 l2 == .lt}.
+\end{theorem}
+\begin{proof}
+\uses{thm:normlt-aux-eq}
+\leanok
+Unfold \texttt{normLt} and apply \texttt{normLtAux\_eq} with both accumulators zero.
+\end{proof}
+
+\begin{lemma}[\texttt{normLt} is a strict weak order]
+\label{thm:normlt-swo}
+\lean{Lean.Level.normLt_asymm, Lean.Level.normLt_le_trans, Lean.Level.normLt_same_base}
+\leanok
+\srcloc{Lean4Lean/Verify/NormLt.lean}{350}
+The three exported facts: \texttt{normLt a b} implies \texttt{¬ normLt b a}; \texttt{¬ normLt b
+a} and \texttt{¬ normLt c b} imply \texttt{¬ normLt c a}; and on levels with equal bases,
+\texttt{normLt} is the comparison of the offsets. The first two are exactly the hypotheses
+\texttt{Array.qsort\_sorted} (\ref{thm:qsort-sorted}) takes.
+\end{lemma}
+\begin{proof}
+\uses{thm:normlt-eq, fam:normlt-order-instances}
+\leanok
+Rewrite with \texttt{normLt\_eq} and apply \texttt{OrientedCmp.not\_lt\_of\_lt} and
+\texttt{TransCmp.isGE\_trans} for the \texttt{normCmp} instances; \texttt{normLt\_same\_base}
+rewrites with \texttt{baseCmp\_refl}. These three are the only results of the file that the rest
+of the project consumes (\srcloc{Lean4Lean/Verify/LevelStd.lean}{240}); everything else is
+private or an instance.
+\end{proof}
+
+\section{A specification for \texttt{Array.qsort}}
+
+\srcloc{Lean4Lean/Verify/QSort.lean}{1} is vendored from the upstream Lean verification in
+\texttt{leanprover/lean4\#14658} and carries a Lean FRO copyright naming Kim Morrison as author.
+It exists only because \texttt{Array.qsort} has no specification in the standard library; the
+consumer is \srcloc{Lean4Lean/Verify/LevelStd.lean}{228}. It is the only file in the project
+using the Lean 4 module system, and it is \texttt{grind}-driven throughout.
+
+\begin{lemma}[Permutations restricted to a slice]
+\label{fam:qsort-perm-extract}
+\lean{List.Perm.take_of_getElem, List.Perm.drop_of_getElem, Array.Perm.extract', Vector.Perm.extract'}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{58}
+If \texttt{l1} is a permutation of \texttt{l2} and the two lists agree elementwise from index
+\texttt{i} on (respectively below \texttt{i}), then their prefixes (respectively suffixes) of
+length \texttt{i} are permutations; and correspondingly, if \texttt{xs} and \texttt{ys} are
+permutations as arrays or vectors and agree outside the range \texttt{[lo, hi)}, then
+\texttt{xs.extract lo hi} and \texttt{ys.extract lo hi} are permutations. These are what let the
+partition step be composed with the recursive sorts.
+\end{lemma}
+\begin{proof}
+\leanok
+Reduce to the existing \texttt{List.Perm.take\_of\_getElem?} and \texttt{drop\_of\_getElem?}, then
+to the array and vector versions through \texttt{perm\_iff\_toList\_perm}; the index bookkeeping
+is closed by \texttt{grind}. All four are declared at \texttt{\_root\_}, so they land in the
+\texttt{List}, \texttt{Array} and \texttt{Vector} namespaces, and are registered as global
+\texttt{grind} lemmas at lines 105--106.
+\end{proof}
+
+\begin{theorem}[\texttt{qsort} preserves size]
+\label{thm:qsort-size}
+\lean{Array.size_qsort}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{110}
+\texttt{(qsort as lt lo hi).size = as.size}.
+\end{theorem}
+\begin{proof}
+\leanok
+\texttt{grind [qsort]}.
+\end{proof}
+
+\begin{theorem}[\texttt{qsort} returns a permutation]
+\label{thm:qsort-perm}
+\lean{Array.qsort_perm}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{137}
+\texttt{qsort as lt lo hi} is a permutation of \texttt{as}.
+\end{theorem}
+\begin{proof}
+\uses{fam:qsort-perm-extract}
+\leanok
+From the private \texttt{qsort\_sort\_perm}, an induction along \texttt{qsort.sort}, and
+\texttt{qpartition\_perm}, which in turn follows from \texttt{qpartition\_loop\_perm} and
+\texttt{Vector.swap\_perm}; the top level is \texttt{grind [qsort]}. Consumed by
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{228} to justify that core \texttt{Level.normalize} may
+sort the arguments of a \texttt{max}.
+\end{proof}
+
+\begin{lemma}[Partition specification and frame conditions]
+\label{fam:qsort-partition-spec}
+\lean{Array.qpartition_fst_lt_hi, Array.getElem_qsort_sort_of_lt_lo, Array.getElem_qsort_sort_of_hi_lt, Array.getElem_qsort_sort_mem, Array.qpartition_spec₁, Array.qpartition_spec₂}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{184}
+The private core lemmas about one partition step: every element of the active range strictly
+below the returned pivot index is \texttt{lt} the pivot, and every element strictly above it and
+at most \texttt{hi} is not; when \texttt{lo < hi} and \texttt{lt} is asymmetric the returned pivot
+index is $<$ \texttt{hi}; sorting a range leaves the entries outside it untouched; and every
+entry the sort places in the range came from that range.
+\end{lemma}
+\begin{proof}
+\uses{fam:qsort-perm-extract}
+\leanok
+Each is a \texttt{fun\_induction} on \texttt{qpartition.loop} or on \texttt{qsort.sort} closed by
+\texttt{grind}, with the pivot-position lemma split into the two cases
+\texttt{qpartition\_loop\_lt\_hi₁} and \texttt{qpartition\_loop\_lt\_hi₂}.
+\end{proof}
+
+\begin{theorem}[Adjacent elements of a sorted range are non-decreasing]
+\label{thm:qsort-sort-spec}
+\lean{Array.qsort_sort_spec}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{264}
+Assume \texttt{lt} is asymmetric and its negation transitive. For
+\texttt{as' = qsort.sort lt as lo hi} and \texttt{lo} $\le$ \texttt{i} $<$ \texttt{hi}, the pair
+\texttt{as'[i]}, \texttt{as'[i+1]} is non-decreasing: \texttt{¬ lt as'[i+1] as'[i]}.
+\end{theorem}
+\begin{proof}
+\uses{fam:qsort-partition-spec, fam:qsort-perm-extract}
+\leanok
+Strong recursion on \texttt{qsort.sort}. After partitioning at \texttt{mid}, the case
+\texttt{i < mid} recurses on the lower half, using the frame lemma
+\texttt{getElem\_qsort\_sort\_of\_lt\_lo} to see the upper half as unchanged; the case
+\texttt{mid = i} is the interesting one, locating both elements as members of the respective
+extracted ranges (\texttt{getElem\_qsort\_sort\_mem}) and concluding from the two partition specs
+plus transitivity; the case \texttt{mid < i} recurses on the upper half. The longest proof in the
+file, and the only place where both hypotheses on \texttt{lt} are used.
+\end{proof}
+
+\begin{lemma}[\texttt{qsort} output is adjacent-sorted]
+\label{thm:qsort-sorted-adjacent}
+\lean{Array.qsort_sorted₁', Array.qsort_sorted₁}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{348}
+The public wrappers of \texttt{qsort\_sort\_spec}: for asymmetric \texttt{lt} with transitive
+negation, adjacent elements of the sorted slice \texttt{[lo, hi]} of \texttt{as.qsort lt lo hi},
+and of the whole array under \texttt{as.qsort lt}, are non-decreasing.
+\end{lemma}
+\begin{proof}
+\uses{thm:qsort-sort-spec}
+\leanok
+Unfold \texttt{qsort}, dispatch the degenerate empty-array branch by \texttt{grind}, and apply
+\texttt{qsort\_sort\_spec}.
+\end{proof}
+
+\begin{theorem}[\texttt{qsort} output is sorted at arbitrary index pairs]
+\label{thm:qsort-sorted}
+\lean{Array.qsort_sorted', Array.qsort_sorted}
+\leanok
+\srcloc{Lean4Lean/Verify/QSort.lean}{370}
+For asymmetric \texttt{lt} with transitive negation: if \texttt{lo} $\le$ \texttt{i} $<$
+\texttt{j} $\le$ \texttt{hi} then \texttt{¬ lt (as.qsort lt lo hi)[j] (as.qsort lt lo hi)[i]};
+and in the whole-array variant, \texttt{i < j} implies
+\texttt{¬ lt (as.qsort lt)[j] (as.qsort lt)[i]}.
+\end{theorem}
+\begin{proof}
+\uses{thm:qsort-sorted-adjacent}
+\leanok
+Induction on \texttt{j}, chaining adjacent-sortedness with transitivity of the negation.
+\texttt{Array.qsort\_sorted} is the theorem consumed by
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{241}.
+\end{proof}
+
+\section{The equivalence manager}
+
+The kernel memoises structural equality of expressions in a union-find keyed by \texttt{ExprMap}
+lookup, that is, by \texttt{Expr}'s \texttt{BEq}, which ignores binder names, \texttt{mdata}
+payloads and \texttt{proj} structure names (\ref{def:kernel-equiv-manager}).
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{1} names that quotient, proves it semantically
+harmless, and shows the cache sound. Two notions it uses are defined elsewhere and have no node
+of their own: the congruence closure \texttt{IsDefEqE} that the manager is allowed to assert
+(\srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{49}) and the manager invariant
+\texttt{EquivManager.WF} (\srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{87}), which says that
+the union-find's node ids are exactly the ids assigned to expressions, and that any two
+identified ids belong to expressions related by \texttt{IsDefEqE}.
+
+\begin{definition}[Relevant structural equality of expressions]
+\label{ind:eqvmgr-relevanteq}
+\lean{Lean4Lean.EquivManager.RelevantEq}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{10}
+An inductively defined congruence on \texttt{Lean.Expr} that ignores exactly the parts the kernel
+treats as irrelevant: binder names and binder info in \texttt{lam} and \texttt{forallE}, the
+\texttt{mdata} payload, the non-dependent flag of \texttt{letE}, and the structure name in
+\texttt{proj}, where only the projection index must agree. All other components must be
+syntactically equal. This is the quotient the memoised \texttt{==} on \texttt{Expr} works up to.
+\end{definition}
+
+\begin{lemma}[\texttt{RelevantEq} is an equivalence refined by \texttt{BEq}]
+\label{fam:eqvmgr-relevanteq-lemmas}
+\lean{Lean4Lean.EquivManager.RelevantEq.rfl, Lean4Lean.EquivManager.RelevantEq.symm, Lean4Lean.EquivManager.RelevantEq.of_eqv, Lean4Lean.EquivManager.RelevantEq.trans}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{26}
+\texttt{RelevantEq} is reflexive, symmetric and transitive, and \texttt{e1 == e2} implies
+\texttt{RelevantEq e1 e2}.
+\end{lemma}
+\begin{proof}
+\uses{ind:eqvmgr-relevanteq, family:expr-beq}
+\leanok
+Each by structural induction on the expression or on the \texttt{RelevantEq} derivation;
+\texttt{of\_eqv} unfolds \texttt{Expr.eqv'} and closes the cases with \texttt{grind [RelevantEq]}.
+Only \texttt{rfl} and \texttt{of\_eqv} are used anywhere; see the review notes.
+\end{proof}
+
+\begin{theorem}[\texttt{RelevantEq} implies \texttt{IsDefEqE}]
+\label{thm:eqvmgr-isdefeqe-relevant}
+\lean{Lean4Lean.EquivManager.IsDefEqE.relevant}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{70}
+\uses{ind:eqvmgr-relevanteq}
+If \texttt{RelevantEq e1 e2} then \texttt{IsDefEqE env us Δ e1 e2}: relevant structural equality
+is a special case of the congruence closure the equivalence manager may assert.
+\end{theorem}
+\begin{proof}
+\leanok
+Induction on the \texttt{RelevantEq} derivation, mapping each constructor to the corresponding
+\texttt{IsDefEqE} constructor.
+\end{proof}
+
+\begin{theorem}[Relevantly equal expressions translate to definitionally equal terms]
+\label{thm:eqvmgr-relevanteq-uniq}
+\lean{Lean4Lean.EquivManager.RelevantEq.uniq}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{81}
+\uses{ind:eqvmgr-relevanteq, ind:trexprs, ind:vt-vlctx-isdefeq, def:hastype-istype}
+Let \texttt{env} be a well-formed environment and let two local contexts be definitionally equal.
+If \texttt{RelevantEq e1 e2}, and \texttt{e1} translates to \texttt{e1'} in the first context and
+\texttt{e2} to \texttt{e2'} in the second (both by \texttt{TrExprS}), then \texttt{e1'} and
+\texttt{e2'} are definitionally equal terms.
+\end{theorem}
+\begin{proof}
+\uses{thm:trproj-uniq}
+\leanok
+Induction on the first translation derivation, inverting the \texttt{RelevantEq} and the second
+translation in lockstep. The binder cases extend the context equality with
+\texttt{VLCtx.IsDefEq.cons}; the \texttt{proj} case defers to \texttt{TrProj.uniq}
+(\ref{thm:trproj-uniq}), which is stated but not proved, and which is the sole reason this
+theorem and the two below carry \texttt{sorryAx}. That case is exactly where the semantic content
+lies: ignoring the structure name of a projection is sound only if the translation of a
+projection is determined by its index, which is what \texttt{TrProj.uniq} would say.
+\axfoot{sorryAx via Lean4Lean.TrProj.uniq (Verify/Typing/Lemmas.lean:992)}
+\end{proof}
+
+\begin{theorem}[\texttt{IsDefEqE} transports translations]
+\label{thm:eqvmgr-isdefeqe-trexpr}
+\lean{Lean4Lean.EquivManager.IsDefEqE.trExpr}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{119}
+\uses{def:trexpr, ind:trexprs}
+If \texttt{IsDefEqE env Us Δ r1 r2} holds in a context with no bound variables, and \texttt{r1} is
+relevantly equal to some \texttt{e1} that translates to \texttt{e'} in a weakened context
+\texttt{Δ'}, then there is an \texttt{e2} relevantly equal to \texttt{r2} which also translates,
+up to definitional equality, to \texttt{e'}.
+\end{theorem}
+\begin{proof}
+\uses{thm:eqvmgr-relevanteq-uniq}
+\leanok
+Induction on the \texttt{IsDefEqE} derivation. The \texttt{defeq} case weakens both translations
+along the bound-variable lift, using that the context has no bound variables to discharge the
+lifting of loose indices, and applies \texttt{RelevantEq.uniq}; the congruence cases rebuild the
+translation with the corresponding \texttt{TrExpr} congruence lemmas.
+\axfoot{sorryAx via Lean4Lean.TrProj.uniq (Verify/Typing/Lemmas.lean:992)}
+\end{proof}
+
+\begin{theorem}[\texttt{IsDefEqE} is sound]
+\label{thm:eqvmgr-isdefeqe-uniq}
+\lean{Lean4Lean.EquivManager.IsDefEqE.uniq}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{163}
+\uses{ind:trexprs, def:hastype-istype}
+If \texttt{env} is well formed, the local context has no bound variables and is well formed, and
+\texttt{e1}, \texttt{e2} translate to \texttt{e1'}, \texttt{e2'}, then
+\texttt{IsDefEqE env Us Δ e1 e2} implies that \texttt{e1'} and \texttt{e2'} are definitionally
+equal.
+\end{theorem}
+\begin{proof}
+\uses{thm:eqvmgr-isdefeqe-trexpr, thm:eqvmgr-relevanteq-uniq}
+\leanok
+Apply \texttt{IsDefEqE.trExpr} at the identity weakening and reflexive \texttt{RelevantEq}, then
+combine with \texttt{RelevantEq.uniq} and transitivity of definitional equality. This is the
+theorem the type checker consumes (\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{165}) to
+turn a positive answer of the cached \texttt{isEquiv} into a real definitional equality.
+\axfoot{sorryAx via Lean4Lean.TrProj.uniq (Verify/Typing/Lemmas.lean:992)}
+\end{proof}
+
+\begin{definition}[Monotone growth of the equivalence manager]
+\label{def:eqvmgr-le}
+\lean{Lean4Lean.EquivManager.LE, Lean4Lean.EquivManager.LE.rfl, Lean4Lean.EquivManager.LE.trans}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{169}
+\uses{def:kernel-equiv-manager}
+\texttt{m1} $\le$ \texttt{m2} records that the union-find of \texttt{m2} identifies everything
+\texttt{m1} did, and that every expression already assigned a node id in \texttt{m1} keeps that
+id in \texttt{m2}. It is reflexive and transitive, with an anonymous \texttt{LE EquivManager}
+instance. The state only ever grows; this order is what lets the monadic reasoning below carry
+facts forward across \texttt{bind}.
+\end{definition}
+
+\begin{definition}[A Hoare-style predicate for the state monad]
+\label{def:eqvmgr-mwf}
+\lean{Lean4Lean.EquivManager.M.WF, Lean4Lean.EquivManager.M.WF.stateWF, Lean4Lean.EquivManager.M.WF.pure, Lean4Lean.EquivManager.M.WF.bind, Lean4Lean.EquivManager.M.WF.mono, Lean4Lean.EquivManager.M.WF.bind_le, Lean4Lean.EquivManager.M.WF.andM}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{181}
+\uses{def:eqvmgr-le}
+\texttt{M.WF env Us Δ m x P} says: if the manager \texttt{m} is well formed, then running the
+stateful computation \texttt{x} from \texttt{m} yields a still well-formed manager \texttt{m'}
+with \texttt{m} $\le$ \texttt{m'} and \texttt{P a m'} for the returned value \texttt{a}. The
+accompanying combinators are the monad laws for this predicate: \texttt{pure}, \texttt{bind},
+\texttt{mono} for weakening the postcondition, \texttt{stateWF} for assuming well-formedness
+while proving, \texttt{bind\_le} for carrying an earlier bound, and \texttt{andM} for the
+short-circuiting \texttt{<\&\&>}.
+\end{definition}
+
+\begin{lemma}[Correctness of the union-find primitives]
+\label{fam:eqvmgr-primitives-wf}
+\lean{Lean4Lean.EquivManager.find.WF, Lean4Lean.EquivManager.merge.WF, Lean4Lean.EquivManager.toNode.WF}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{217}
+\uses{def:eqvmgr-mwf, def:kernel-equiv-manager}
+\texttt{find i} returns a representative equivalent to \texttt{i} and preserves well-formedness
+and the order; \texttt{merge m i j} preserves well-formedness provided the two node ids are the
+ids of two expressions already known to be \texttt{IsDefEqE}; and \texttt{toNode e} returns the
+node id assigned to \texttt{e}, allocating a fresh one if needed, again preserving
+well-formedness.
+\end{lemma}
+\begin{proof}
+\uses{thm:eqvmgr-isdefeqe-relevant, fam:eqvmgr-relevanteq-lemmas, family:expr-axioms}
+\leanok
+Each unfolds the definition, splits on the bounds check, and rebuilds the two fields of
+\texttt{EquivManager.WF} using \texttt{Batteries.UnionFind.equiv\_find}/\texttt{equiv\_union} and
+\texttt{Std.HashMap.getElem?\_insert}. \texttt{toNode.WF} is the delicate one: the fresh id is
+larger than every existing id, so a claimed equivalence involving it forces the two expressions
+to be \texttt{BEq}-equal, hence \texttt{RelevantEq}, hence \texttt{IsDefEqE}.
+\end{proof}
+
+\begin{theorem}[Soundness of the cached structural equality test]
+\label{thm:eqvmgr-isequiv-wf}
+\lean{Lean4Lean.EquivManager.isEquiv.WF}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{262}
+\uses{def:kernel-equiv-manager, def:eqvmgr-mwf}
+Running \texttt{EquivManager.isEquiv useHash e1 e2} from a well-formed manager yields a
+well-formed manager, a larger one in the $\le$ order, and, when the boolean result is
+\texttt{true}, a derivation of \texttt{IsDefEqE env Us Δ e1 e2}. Only soundness is proved:
+nothing says the cache ever answers \texttt{true}, which is the right asymmetry for a kernel.
+\end{theorem}
+\begin{proof}
+\uses{fam:eqvmgr-primitives-wf, axiom:kernel-ptr-eq, family:expr-axioms}
+\leanok
+Structural recursion mirroring \texttt{isEquiv}: the pointer-equality fast path uses the
+\texttt{ptrEqExpr\_eq} axiom (\ref{axiom:kernel-ptr-eq}); the hash mismatch and bound-variable
+cases are immediate; otherwise both expressions are interned by \texttt{toNode.WF} and their
+representatives found by \texttt{find.WF}, an already-equal pair is discharged by the manager
+invariant, and each congruence case recurses and then justifies the \texttt{merge} by
+\texttt{merge.WF}. The \texttt{useHash} parameter is threaded but plays no role in soundness.
+\end{proof}
+
+\begin{theorem}[Recording a discovered equality preserves the invariant]
+\label{thm:eqvmgr-addequiv-wf}
+\lean{Lean4Lean.TypeChecker.Inner.addEquiv.WF}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{313}
+\uses{def:kernel-equiv-manager, ind:trexprs, def:trexpr}
+In the type checker's \texttt{RecM}, updating the state by \texttt{EquivManager.addEquiv e1 e2}
+preserves the whole \texttt{VState} invariant, provided \texttt{e1} and \texttt{e2} translate to
+the same term, one strictly and the other up to definitional equality.
+\end{theorem}
+\begin{proof}
+\uses{fam:eqvmgr-primitives-wf, thm:vtc-methods-iface}
+\leanok
+Unfold \texttt{addEquiv} into two \texttt{toNode} calls and a \texttt{merge}, then apply
+\texttt{toNode.WF} twice and \texttt{merge.WF} once, with the \texttt{IsDefEqE.defeq} witness
+obtained by weakening the two translations to the free-variable context.
+\end{proof}
+
+\begin{theorem}[Soundness of the memoising \texttt{isDefEq} wrapper]
+\label{thm:eqvmgr-isdefeq-wf}
+\lean{Lean4Lean.TypeChecker.Inner.isDefEq.WF}
+\leanok
+\srcloc{Lean4Lean/Verify/EquivManager.lean}{325}
+\uses{ind:trexprs, def:hastype-istype}
+If \texttt{e1} and \texttt{e2} translate to \texttt{e1'} and \texttt{e2'}, then running the type
+checker's \texttt{isDefEq e1 e2} is sound: a \texttt{true} result yields definitional equality of
+\texttt{e1'} and \texttt{e2'}, and the resulting state still satisfies the invariant.
+\end{theorem}
+\begin{proof}
+\uses{thm:eqvmgr-addequiv-wf, thm:vtc-methods-iface}
+\leanok
+Chain the soundness of \texttt{isDefEqCore} with \texttt{addEquiv.WF} for the branch that caches a
+positive answer. This is the entry point consumed all over
+\texttt{Lean4Lean/Verify/TypeChecker/} and at \srcloc{Lean4Lean/Verify/Environment.lean}{178}.
+\end{proof}
+
+\section{Review notes}
+
+Every issue recorded for this group, with severity. No fixes are proposed.
+
+\begin{itemize}
+\item \textbf{Medium. Stale doc/code mismatch in the level tests.}
+\srcloc{Lean4Lean/Tests/Level.lean}{8} states that what is \emph{not} proved, and so is what the
+test file checks, is canonicity of \texttt{normalize'} and completeness of
+\texttt{isEquiv'}/\texttt{geq'}. All three are in fact proved:
+\srcloc{Lean4Lean/Verify/Level.lean}{3849}, \srcloc{Lean4Lean/Verify/Level.lean}{3861} and
+\srcloc{Lean4Lean/Verify/Level.lean}{3870}. The test file's stated purpose no longer matches
+reality.
+\item \textbf{Medium. Dead code that drags in an extra axiom.} \texttt{mkData\_depth},
+\texttt{mkData\_hasParam} and \texttt{mkData\_hasMVar} (\srcloc{Lean4Lean/Verify/Level.lean}{41},
+\srcloc{Lean4Lean/Verify/Level.lean}{58}, \srcloc{Lean4Lean/Verify/Level.lean}{73}) are
+referenced nowhere in the project. They are the only consumers of the
+\texttt{Lean.Level.mkData\_eq} axiom, and they need
+\texttt{set\_option allowUnsafeReducibility true} plus
+\texttt{attribute [local reducible] Data} (lines 38--39) to elaborate.
+\item \textbf{Medium. Trust boundary under the level comparison.} Every main theorem of
+\srcloc{Lean4Lean/Verify/Level.lean}{1} factors through \texttt{Std.TreeMap.all\_eq\_all\_toList}
+and \texttt{any\_eq\_any\_toList}, declared as axioms at
+\srcloc{Lean4Lean/Verify/Axioms.lean}{10} and \srcloc{Lean4Lean/Verify/Axioms.lean}{14} with an
+upstream issue link. \texttt{NormLevel.le}, \texttt{NormLevel.addable} and the \texttt{BEq}
+instance on \texttt{NormLevel} are all defined through \texttt{TreeMap.all}/\texttt{any}, so the
+soundness of the level comparison the kernel performs is modulo these two axioms.
+\item \textbf{Medium. The only \texttt{sorryAx} in the group is load-bearing for the memo cache.}
+\texttt{RelevantEq.uniq} (\srcloc{Lean4Lean/Verify/EquivManager.lean}{81}) and the two theorems
+depending on it reach \texttt{sorryAx} through \texttt{TrProj.uniq}
+(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{992}, \texttt{:= sorry}), because the \texttt{proj}
+case of \texttt{RelevantEq} compares two projections by index alone and ignores the structure
+name. \texttt{isDefEq.WF} (\srcloc{Lean4Lean/Verify/EquivManager.lean}{325}) is the entry point
+used throughout \texttt{Verify/TypeChecker/}, so this hole is on the main path of the verified
+type checker, not in a corner.
+\item \textbf{Low. Stale doc comment in \texttt{LevelStd}.}
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{155} still says the two \texttt{qsort} facts are
+``currently unproved because \texttt{Array.qsort} has no specification in the standard library''
+and names \texttt{qsort\_perm\_toList} and \texttt{pairwise\_qsort\_normLt}, neither of which
+exists. Both facts are now proved, at \srcloc{Lean4Lean/Verify/LevelStd.lean}{228} and
+\srcloc{Lean4Lean/Verify/LevelStd.lean}{234}, on top of
+\srcloc{Lean4Lean/Verify/QSort.lean}{1}.
+\item \textbf{Low. A large verified component that nothing consumes.}
+\texttt{normalize'\_eval} (\srcloc{Lean4Lean/Verify/Level.lean}{3822}),
+\texttt{normalize'\_complete} (\srcloc{Lean4Lean/Verify/Level.lean}{3849}),
+\texttt{isEquiv'\_complete} (\srcloc{Lean4Lean/Verify/Level.lean}{3861}),
+\texttt{geq'\_wf} (\srcloc{Lean4Lean/Verify/Level.lean}{3828}) and
+\texttt{geq'\_complete} (\srcloc{Lean4Lean/Verify/Level.lean}{3870}) are used nowhere. Only
+\texttt{isEquivList\_wf} reaches the verified type checker. In particular the whole
+reconstruction layer, roughly lines 1290--2250, supports \texttt{normalize'}, which the kernel
+never calls: \texttt{geq'} is called at \srcloc{Lean4Lean/Inductive/Add.lean}{226}, whose code
+path has no verification yet, and \texttt{normalize'} appears only in
+\srcloc{Lean4Lean/Tests/Level.lean}{1}.
+\item \textbf{Low. Leftover dead comment block.}
+\srcloc{Lean4Lean/Verify/Level.lean}{16} to line 27 contains a commented-out
+\texttt{VLevel.toLevel} definition and a \texttt{toLevel\_inj ... := sorry}. Harmless, but it is
+the only occurrence of the token \texttt{sorry} in the group and will show up in any audit.
+\item \textbf{Low. No module docstring on a 3880-line file.} The internal section docstrings in
+\srcloc{Lean4Lean/Verify/Level.lean}{1} are excellent, but a reader reaches line 166 before
+learning that the file is about Géran's canonical form; the paper is cited only in
+\srcloc{Lean4Lean/Level.lean}{24}.
+\item \textbf{Low. Dead code in the equivalence manager.} \texttt{RelevantEq.symm}
+(\srcloc{Lean4Lean/Verify/EquivManager.lean}{41}), \texttt{RelevantEq.trans}
+(\srcloc{Lean4Lean/Verify/EquivManager.lean}{58}) and \texttt{M.WF.bind\_le}
+(\srcloc{Lean4Lean/Verify/EquivManager.lean}{205}) are never used, here or elsewhere; the
+similarly named \texttt{RecM.WF.bind\_le} at
+\srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{343} is a different declaration.
+\item \textbf{Low. Overstatement in the \texttt{NormLt} header.}
+\srcloc{Lean4Lean/Verify/NormLt.lean}{6} says the file ``shows it is a strict weak order''. What
+is exported is asymmetry (\srcloc{Lean4Lean/Verify/NormLt.lean}{350}) and transitivity of the
+negation (\srcloc{Lean4Lean/Verify/NormLt.lean}{354}), exactly what
+\texttt{Array.qsort\_sorted} takes, not a packaged strict-weak-order statement.
+\item \textbf{Low. Vendored code carrying upstream TODOs and cross-namespace side effects.}
+\srcloc{Lean4Lean/Verify/QSort.lean}{34} says ``These attributes still need to be moved to the
+standard library''; lines 36--51 are commented-out attribute experiments; line 52 says ``These
+are just the patterns resulting from \texttt{grind}, but the behaviour should be explained!''.
+The file also declares four lemmas at \texttt{\_root\_} into the \texttt{List}, \texttt{Array} and
+\texttt{Vector} namespaces (lines 58--103) and registers them, plus several core lemmas, as
+global \texttt{grind} lemmas, which every importer inherits.
+\item \textbf{Low. Documented gap in the \texttt{qsort} specification.}
+\srcloc{Lean4Lean/Verify/QSort.lean}{27} notes that there is no public theorem giving
+\texttt{(qsort as lt lo hi)[i] = as[i]} for \texttt{i} outside \texttt{[lo, hi]}. The private
+lemmas exist (\srcloc{Lean4Lean/Verify/QSort.lean}{150} and
+\srcloc{Lean4Lean/Verify/QSort.lean}{167}) but are not exported; the current consumer needs only
+permutation and sortedness, so this is a latent limitation rather than a defect.
+\item \textbf{Low. Invariant sprawl in the end-to-end theorems.} Each of them threads five to
+seven separate side conditions about \texttt{normalize u} by hand
+(\srcloc{Lean4Lean/Verify/Level.lean}{1222} and the invariants at lines 1807, 2413, 2443, 2524
+and 3600); \texttt{geq'\_complete} (\srcloc{Lean4Lean/Verify/Level.lean}{3870}) takes six of them
+in a single \texttt{refine}. Bundling them into one predicate would make these statements easier
+to read and to reuse.
+\item \textbf{Low. \texttt{Std.TreeMap} as the representation costs a whole layer.} Because two
+maps with the same entries need not be the same tree, every consumer has to be shown to factor
+through \texttt{toList} (\ref{fam:lvl-congr}, \srcloc{Lean4Lean/Verify/Level.lean}{3177}). The
+design consequence is honestly documented, but a sorted-association-list representation would
+have avoided roughly 150 lines of pure bookkeeping and the awkward \texttt{BEq NormLevel} at
+\srcloc{Lean4Lean/Verify/Level.lean}{3741}.
+\item \textbf{Low. Automation opacity in the two smaller files.}
+\texttt{baseCmp\_swap} (\srcloc{Lean4Lean/Verify/NormLt.lean}{97}) closes its last goals with
+bare \texttt{grind}, and \texttt{normLtAux\_eq} (\srcloc{Lean4Lean/Verify/NormLt.lean}{264}) ends
+several of its fourteen cases in \texttt{simp\_all} or \texttt{grind};
+\srcloc{Lean4Lean/Verify/QSort.lean}{1} is \texttt{grind}-first throughout. A human reviewer
+cannot check those arguments by reading, and they are brittle against changes in \texttt{grind}.
+\item \textbf{Low. Readability of \texttt{baseCmp} and of \texttt{getUndefParam\_none}.}
+\texttt{baseCmp} duplicates its \texttt{max} and \texttt{imax} arms verbatim
+(\srcloc{Lean4Lean/Verify/NormLt.lean}{47}); the duplication is forced by matching on two
+constructors, but it is a readability smell. \texttt{getUndefParam\_none}
+(\srcloc{Lean4Lean/Verify/Level.lean}{101}) is written in a dense
+\texttt{have ... := ?\_} style with several \texttt{simp}-then-\texttt{split} chains that are
+hard to follow.
+\item \textbf{Low. Layering oddity in the equivalence manager file.} The last two theorems,
+\texttt{addEquiv.WF} (\srcloc{Lean4Lean/Verify/EquivManager.lean}{313}) and \texttt{isDefEq.WF}
+(\srcloc{Lean4Lean/Verify/EquivManager.lean}{325}), live in the namespace
+\texttt{Lean4Lean.TypeChecker.Inner} rather than \texttt{EquivManager}, and
+\texttt{isDefEq.WF} would more naturally sit in
+\srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{1}. The placement is defensible, since both
+depend on the manager invariant, but it is surprising.
+\end{itemize}
