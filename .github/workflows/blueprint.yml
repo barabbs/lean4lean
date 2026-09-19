@@ -1,0 +1,386 @@
+# Compiles and publishes the lean4lean blueprint (blueprint/, see its
+# README.md) to GitHub Pages: the leanblueprint PDF + web build, this
+# project's own declaration-census validation (standing in for the
+# unavailable `leanblueprint checkdecls`, see "Design notes" below), and a
+# best-effort doc-gen4 API-docs build so the blueprint's \lean{} links
+# resolve. See blueprint/README.md's "Continuous integration" section for the
+# resulting site layout and the one-time repository settings this needs.
+#
+# Design notes (why this isn't just leanprover-community/docgen-action with
+# `blueprint: true`, the way the stock `leanblueprint` GitHub Actions
+# template suggests): that action's `blueprint: true` path unconditionally
+# runs `lake exe checkdecls blueprint/lean_decls`, which needs a `checkdecls`
+# lake dependency this project's lakefile.toml deliberately does not carry
+# (see blueprint/README.md's Validation section) -- there is no input to
+# turn that step off. So the blueprint PDF/web build and its declaration
+# validation are done here as explicit steps instead, and only the API-docs
+# half of that action's job (a plain doc-gen4 `docbuild` nested project,
+# independent of `blueprint: true`) is worth reusing -- reimplemented below
+# from doc-gen4's own README so this workflow doesn't depend on an action
+# whose main feature it can't use.
+name: Compile blueprint
+
+on:
+  push:
+    branches: [blueprint] # the branch that currently carries blueprint/
+  pull_request:
+    paths:
+      - "blueprint/**"
+      - ".github/workflows/blueprint.yml"
+  # Manual re-run/redeploy without a new commit. GitHub only lists a workflow
+  # under Actions > "Run workflow" once that workflow file exists on the
+  # *default* branch (master); until this file is merged there,
+  # `workflow_dispatch` has no effect from branch 'blueprint' alone.
+  workflow_dispatch:
+
+# Concurrency is scoped per job below, not here at the workflow level: a
+# single workflow-level `concurrency:` group covers every job in the run,
+# including `deploy`, and `cancel-in-progress: true` cancels a job that is
+# already RUNNING, not just one that is pending (see GitHub's docs on
+# concurrency). That's fine for `validate`/`blueprint`/`api-docs` -- no later
+# job depends on an in-progress run's cache, so it's always safe to cancel
+# one -- but it is not fine for `deploy`: canceling it mid-flight would
+# interrupt an in-progress GitHub Pages deployment. So the fast-cancel
+# behavior is opted into per-job for the three build jobs, and `deploy` gets
+# its own `pages` concurrency group with `cancel-in-progress: false` instead
+# (the same group name and setting GitHub's own Pages-deploy starter
+# workflow uses), so a second deploy queues behind an in-progress one rather
+# than canceling it.
+
+permissions:
+  contents: read
+
+jobs:
+  # Builds the Lean project and checks the blueprint's declaration claims
+  # against it. This does not touch blueprint/src/ (see the `blueprint` job
+  # for that) and produces no Pages content by itself.
+  validate:
+    name: Build Lean project and validate blueprint declarations
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Safe to cancel: a stale run's build cache has no downstream consumer.
+    concurrency:
+      group: ${{ github.workflow }}-validate-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      # tools/run_census.sh and the python checkers below all default to
+      # <repo>/.blueprint-work when this is unset; pinned here so every step
+      # is provably reading/writing the same directory.
+      BLUEPRINT_WORK: ${{ github.workspace }}/.blueprint-work
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same build as ci.yml (see its comments for why): no `lint`/
+      # `mk_all-check` inputs, because this project has no lint driver and
+      # isn't a Mathlib-style library that needs an all-modules-imported
+      # check (lean-action's own action.yml defaults both to off/"default",
+      # so simply omitting them, as ci.yml does, is enough).
+      - name: Build
+        uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+        with:
+          use-mathlib-cache: false
+
+      # Lean4Lean.Tests and Lean4Lean.Experimental are not default targets
+      # (see ci.yml), but tools/run_census.sh imports both, to enumerate
+      # every declaration the blueprint's \lean{} names are checked against.
+      - name: Build Lean4Lean.Tests and Lean4Lean.Experimental
+        run: lake build Lean4Lean.Tests Lean4Lean.Experimental
+
+      # Regenerates $BLUEPRINT_WORK/understand/{decls,all-constants}.tsv from
+      # the just-built environment via `lake env lean` (~30 separate passes;
+      # see the script's own header comment for why). This -- not
+      # `leanblueprint checkdecls` / `lake exe checkdecls` -- is the ground
+      # truth the checkers below compare the chapters against; see
+      # blueprint/README.md's Validation section for why checkdecls isn't
+      # wired up in this project.
+      - name: Rebuild the declaration census
+        run: blueprint/tools/run_census.sh
+
+      - name: Rebuild the chapter/label registry
+        run: python3 blueprint/tools/rebuild_registry.py
+
+      # Exits 1 on ERROR: dangling \lean{} names, duplicate/missing \label,
+      # a contributed node missing its \contrib badge, \leanok asserted on a
+      # declaration that still contains a literal sorry, etc. WARNings
+      # (e.g. a node with no \lean{}, underscore-escaping heuristics) are
+      # printed but don't fail the build.
+      - name: Check chapters against the census
+        run: python3 blueprint/tools/check_chapter.py blueprint/src/chapters/*.tex
+
+      # Global checks that need every chapter at once: duplicate labels
+      # across files, unresolved \uses{}, and \uses cycles (which crash
+      # plasTeX's dependency-graph plugin rather than failing cleanly).
+      - name: Check cross-chapter references
+        run: python3 blueprint/tools/check_global.py
+
+  # Builds the leanblueprint PDF and web output. Independent of `validate`
+  # (per blueprint/README.md: "Building does not touch the Lean project"),
+  # so it runs in parallel and a PR gets both signals without waiting on the
+  # (much slower) Lean build.
+  blueprint:
+    name: Build blueprint (PDF + web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Safe to cancel: a stale run's PDF/web output has no downstream consumer.
+    concurrency:
+      group: ${{ github.workflow }}-blueprint-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # print.tex compiles with xelatex via fontspec/unicode-math (see its
+      # header comment for the exact glyph set this needs) and web.tex's
+      # dependency graphs (plastexdepgraph) shell out to `dot`. Package names
+      # below were checked against packages.ubuntu.com's (noble) contents
+      # search rather than guessed:
+      #   fontspec.sty, unicode-math.sty, mathtools.sty -> texlive-latex-recommended
+      #   amsthm.sty, expl3.sty, geometry.sty, hyperref.sty -> texlive-latex-base
+      #   amssymb.sty -> texlive-base
+      #   latinmodern-math.otf (unicode-math's default math font, per print.tex) -> fonts-lmodern
+      #   FreeSerif/FreeSans as OpenType -> fonts-freefont-otf
+      # JetBrains Mono has its own Ubuntu package (fonts-jetbrains-mono), so
+      # no manual GitHub-release download is needed here. pygraphviz (pulled
+      # in transitively by leanblueprint -> plastexdepgraph) ships manylinux
+      # wheels, so `pip install leanblueprint` may just fetch one; either way
+      # libgraphviz-dev + pkg-config are installed so a from-source build
+      # (if pip's platform/Python tag doesn't match a wheel) also works,
+      # compiling against the system graphviz directly with no
+      # --config-settings overrides -- that's Debian/Ubuntu's documented
+      # pygraphviz source-install path (those overrides are only necessary
+      # when the headers/libs aren't on the default search path, e.g. in
+      # docgen-action's own Alpine container, where musl doesn't search
+      # /usr/lib/graphviz by default). `graphviz` itself (the `dot` binary
+      # and layout plugins) is required at runtime regardless of how
+      # pygraphviz was installed.
+      - name: Install TeX Live, fonts and graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            texlive-latex-base texlive-latex-recommended texlive-base texlive-xetex \
+            latexmk \
+            fonts-lmodern fonts-freefont-otf fonts-jetbrains-mono \
+            graphviz libgraphviz-dev pkg-config \
+            python3-venv python3-dev build-essential
+          fc-cache -f
+
+      # Fail loudly here rather than deep inside a cryptic xelatex "font not
+      # found" error later.
+      - name: Check the fonts print.tex needs are visible to fontconfig
+        run: |
+          fc-list | grep -qi freeserif
+          fc-list | grep -qi freesans
+          fc-list | grep -qi "jetbrains mono"
+
+      - name: Install leanblueprint into a venv
+        run: |
+          python3 -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install leanblueprint
+
+      # `leanblueprint pdf`/`web` locate the project by walking up from the
+      # cwd to the nearest git repo (leanblueprint/client.py), so these run
+      # fine from the repository root. `leanblueprint web` shells out to the
+      # bare `plastex` command (see blueprint/README.md), which is why the
+      # venv's bin/ was added to $GITHUB_PATH above rather than called by
+      # full path.
+      - name: Build blueprint PDF
+        run: leanblueprint pdf
+
+      - name: Build blueprint web
+        run: leanblueprint web
+
+      - name: Stage blueprint output for the Pages site
+        run: |
+          mkdir -p out/blueprint
+          cp blueprint/print/print.pdf out/blueprint.pdf
+          cp -r blueprint/web/. out/blueprint/
+
+      # Also a normal, downloadable build artifact (not just Pages input),
+      # so a PR run's rendered PDF/web output is inspectable without a
+      # deploy.
+      - name: Upload blueprint artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: blueprint-build
+          path: out
+          if-no-files-found: error
+
+  # Best-effort API docs, so the blueprint's \lean{} links (plastex.cfg's
+  # \dochome) resolve. `continue-on-error: true` at the job level means a
+  # failure here is reported but never blocks `deploy` (see its `needs`) --
+  # deliberate, since the docbuild recipe below is only as robust as this
+  # project's own dependency graph (in particular its `batteries` pin) lining
+  # up with doc-gen4's; that wasn't runnable while writing this workflow (see
+  # blueprint/README.md's Continuous integration section for the caveat).
+  api-docs:
+    name: API docs (doc-gen4, best effort)
+    needs: validate
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Safe to cancel: a stale run's docbuild output has no downstream consumer.
+    concurrency:
+      group: ${{ github.workflow }}-api-docs-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build
+        uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+        with:
+          use-mathlib-cache: false
+
+      - name: Build Lean4Lean.Tests and Lean4Lean.Experimental
+        run: lake build Lean4Lean.Tests Lean4Lean.Experimental
+
+      # The standard doc-gen4 "docbuild" nested-project recipe (doc-gen4
+      # README, "Usage"): a *separate* Lake project under ./docbuild requires
+      # this package by path and doc-gen4 as a dependency, then builds each
+      # library's `:docs` facet. This never touches the project's own
+      # lakefile.toml/lake-manifest.json -- docbuild gets its own manifest,
+      # generated fresh here and discarded at the end of the job.
+      #
+      # docbuild has no lean-toolchain of its own, so elan resolves it by
+      # walking up to this repo's lean-toolchain (v4.33.0-rc2); doc-gen4 is
+      # pinned to the matching `v4.33.0-rc2` *tag* for the same reason (see
+      # doc-gen4's README: "If you are developing against a release
+      # candidate ... replace `main` below by `v4.x`"). Verified to exist
+      # with `gh api repos/leanprover/doc-gen4/git/refs/tags/v4.33.0-rc2`
+      # rather than assumed.
+      #
+      # The require order (doc-gen4 first, this package second) matches
+      # leanprover-community/docgen-action's own docbuild lakefile.toml as of
+      # its PR #32 ("swap order of doc-gen4 and parent project ... ensures
+      # that the user's versions take precedence ... [over] doc-gen4's
+      # versions" on shared dependencies) -- copied deliberately, not
+      # guessed. The `:docs` facet list is this project's own lean_lib
+      # targets (lakefile.toml), not `defaultTargets`: those omit
+      # Tests/Experimental and include the `lean4lean` *executable*, which
+      # does not expose a `:docs` facet. This project has no mathlib
+      # dependency, so docgen-action's `MATHLIB_NO_CACHE_ON_UPDATE=1`
+      # workaround for mathlib's cache doesn't apply here.
+      - name: Generate API docs via a docbuild nested project
+        run: |
+          set -euo pipefail
+          mkdir -p docbuild
+          cat > docbuild/lakefile.toml <<'EOF'
+          name = "docbuild"
+          reservoir = false
+          version = "0.1.0"
+          packagesDir = "../.lake/packages"
+
+          [[require]]
+          scope = "leanprover"
+          name = "doc-gen4"
+          rev = "v4.33.0-rc2"
+
+          [[require]]
+          name = "lean4lean"
+          path = "../"
+          EOF
+          cd docbuild
+          lake update lean4lean
+          lake build Lean4Lean:docs Lean4Lean.Theory:docs Lean4Lean.Verify:docs Lean4Lean.Tests:docs Lean4Lean.Experimental:docs
+
+      - name: Stage API docs for the Pages site
+        run: |
+          mkdir -p out/docs
+          cp -r docbuild/.lake/build/doc/. out/docs/
+
+      - name: Upload API docs artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: api-docs
+          path: out
+          if-no-files-found: error
+
+  # Assembles blueprint/{print,web} + docs into one Pages site and deploys
+  # it. Needs all three jobs above: `validate` failing must block this (a
+  # skipped `api-docs`, which `needs: validate`, is not a success and so
+  # skips this job too -- see api-docs's own `needs`), while `api-docs`
+  # merely *failing its own steps* must not (that's what its
+  # `continue-on-error: true` is for).
+  deploy:
+    name: Assemble and deploy the Pages site
+    needs: [validate, blueprint, api-docs]
+    # A pull_request run only has to prove the site still builds, never
+    # publish it. This intentionally does not hardcode
+    # `github.repository == 'barabbs/lean4lean'`: on a fork with no Pages
+    # configured, this guard still lets the job run, and the deploy-pages
+    # step simply fails there on its own, rather than the workflow silently
+    # assuming which repository it lives in.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # `pages`, not scoped to this workflow or ref: this is the same group name
+    # (and `cancel-in-progress: false`) GitHub's own Pages-deploy starter
+    # workflow uses, so at most one deployment to this site is ever in
+    # flight. A second `deploy` run queues (pending) behind an in-progress
+    # one instead of canceling it -- cancel-in-progress:true would abort the
+    # `actions/deploy-pages` step mid-poll, leaving the Pages deployment API
+    # call it already made in an indeterminate state.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download blueprint (PDF + web)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: blueprint-build
+          path: site
+
+      # Best effort: api-docs may not have produced an artifact at all (see
+      # its continue-on-error). A missing site/docs/ just means the
+      # blueprint's \lean{} links 404 for this deployment, same as the
+      # pre-existing state blueprint/README.md's Limitations section already
+      # documents.
+      - name: Download API docs (best effort)
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: api-docs
+          path: site
+
+      - name: Build the site's root index page
+        run: |
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>lean4lean blueprint</title>
+          <style>
+            body { font-family: system-ui, sans-serif; max-width: 38rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+            h1 { font-size: 1.4rem; }
+          </style>
+          </head>
+          <body>
+          <h1>lean4lean blueprint</h1>
+          <p>A <a href="https://github.com/PatrickMassot/leanblueprint">leanblueprint</a>
+          of the <a href="https://github.com/barabbs/lean4lean">barabbs/lean4lean</a> fork.</p>
+          <ul>
+            <li><a href="blueprint/">Web version</a> &mdash; dependency graphs, one page per chapter</li>
+            <li><a href="blueprint.pdf">PDF version</a></li>
+            <li><a href="docs/">API documentation</a> (doc-gen4; best effort &mdash; may 404, see blueprint/README.md)</li>
+          </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

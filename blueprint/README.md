@@ -114,3 +114,73 @@ environment — without needing that.
   census all go stale as soon as the underlying branches move; rerun
   `tools/run_census.sh` and `tools/rebuild_registry.py` and re-review before
   trusting this against a later commit.
+
+## Continuous integration
+
+`.github/workflows/blueprint.yml` (repo root, not under `blueprint/`) builds
+and publishes this blueprint to GitHub Pages on every push to branch
+`blueprint`, manually via `workflow_dispatch`, and (build + validate only,
+never deploy) on pull requests touching `blueprint/**`.
+
+It does **not** use `leanblueprint`'s stock GitHub Actions template
+(`leanprover-community/docgen-action` with `blueprint: true`): that action's
+blueprint path unconditionally runs `lake exe checkdecls`, which needs the
+`checkdecls` lake dependency this project's `lakefile.toml` deliberately does
+not carry (see Validation above, and there is no input to turn that step
+off). Instead, the workflow has four jobs:
+
+- **`validate`** builds the Lean project the way `ci.yml` does (no lint, no
+  `mk_all-check`), then runs `tools/run_census.sh` +
+  `tools/rebuild_registry.py` + `tools/check_chapter.py` (all chapters) +
+  `tools/check_global.py` -- the same checks described in Validation above,
+  now run in CI instead of by hand, failing the job on any `ERROR`.
+- **`blueprint`** builds `leanblueprint pdf` and `leanblueprint web` on a
+  runner provisioned with TeX Live (xelatex), the
+  FreeSerif/FreeSans/JetBrains Mono fonts print.tex needs, and Graphviz.
+  It's independent of the Lean project (per Build above) and so runs in
+  parallel with `validate`. Its PDF and web output are uploaded as a normal
+  build artifact on every run, including pull requests, so they're
+  inspectable without a deployment.
+- **`api-docs`** is a best-effort `doc-gen4` build: the standard `docbuild`
+  nested-project recipe (a separate, throwaway Lake project that requires
+  this package by path plus `doc-gen4` pinned to the `v4.33.0-rc2` tag
+  matching `lean-toolchain`), so the blueprint's `\lean{}` links
+  (`plastex.cfg`'s `\dochome`) resolve. It's marked `continue-on-error:
+  true`: a failure here never blocks deployment, it just means `/docs` (and
+  hence those links) 404 for that deployment, same as the pre-existing state
+  described in Limitations above.
+- **`deploy`** assembles the above into one site and publishes it with
+  `actions/upload-pages-artifact` + `actions/deploy-pages`. It's skipped on
+  pull requests.
+
+### Site layout
+
+```
+https://barabbs.github.io/lean4lean/
+├── index.html      minimal landing page linking to the three below
+├── blueprint/      leanblueprint web output (dependency graphs, per-chapter pages)
+├── blueprint.pdf   leanblueprint PDF output
+└── docs/           doc-gen4 API docs (best effort; see api-docs above)
+```
+
+### Owner-side settings this needs
+
+- GitHub Pages must be enabled with **Settings > Pages > Build and
+  deployment > Source: GitHub Actions** (already the case for this fork).
+- The `github-pages` deployment environment currently restricts deployments
+  to branch `master` only (checked via `gh api
+  repos/barabbs/lean4lean/environments/github-pages/deployment-branch-policies`).
+  Since this workflow deploys from `blueprint`, add a branch rule for it
+  under **Settings > Environments > github-pages > Deployment branches and
+  tags > Add deployment branch or tag rule**, entering `blueprint`; otherwise
+  the `deploy` job's `actions/deploy-pages` step fails with an
+  environment-protection error.
+- `workflow_dispatch` only appears in the Actions tab's "Run workflow" list
+  once `.github/workflows/blueprint.yml` exists on the default branch
+  (`master`); until then the workflow only runs via `push`/`pull_request`.
+
+Once a `deploy` run succeeds, the doc links throughout this blueprint resolve
+against `/docs`, and the "have not been generated or published" part of the
+`\lean{}`-links caveat in Limitations above no longer applies -- though
+`api-docs`'s `continue-on-error` means any given deployment's `/docs` should
+still be treated as best-effort, not guaranteed present or current.
