@@ -5,7 +5,11 @@
 % the web version.
 
 % Dummy macros that make sense only for web version.
-\newcommand{\lean}[1]{}
+% In print, \lean typesets the cited declarations under the node title (the web version links them).
+% \path (url package, loaded by hyperref) lets names break after dots, underscores and commas.
+\newcommand{\lean}[1]{{\par\noindent\footnotesize\raggedright
+  \def\UrlFont{\ttfamily\color{bpmeta}}\def\UrlBreaks{\do\,\do\.\do\_}%
+  \textcolor{bpmeta}{\textsf{Lean:}} \path{#1}\par\smallskip}}
 \newcommand{\discussion}[1]{}
 \newcommand{\leanok}{}
 \newcommand{\mathlibok}{}
@@ -37,6 +41,27 @@
   {
     \tl_set:Nn \l__blueprint_srcloc_tl {#1}
     \tl_replace_all:Nnn \l__blueprint_srcloc_tl { / } { / \allowbreak }
-    \texttt{ \tl_use:N \l__blueprint_srcloc_tl : #2 }
+    {\small\color{bpmeta}\texttt{ \tl_use:N \l__blueprint_srcloc_tl : #2 }}
+  }
+\ExplSyntaxOff
+
+% Tables are set small; text-heavy columns carry p{} widths in the sources.
+\AtBeginEnvironment{tabular}{\small}
+
+% Long monospace words (paths, qualified names) cannot hyphenate: let them break after a slash,
+% a dot or an underscore instead of running into the margin. Math mode keeps the original.
+\ExplSyntaxOn
+\cs_new_eq:NN \blueprint_orig_texttt:n \texttt
+\tl_new:N \l__blueprint_tt_tl
+\RenewDocumentCommand{\texttt}{m}
+  {
+    \mode_if_math:TF { \blueprint_orig_texttt:n {#1} }
+      {
+        \tl_set:Nn \l__blueprint_tt_tl {#1}
+        \tl_replace_all:Nnn \l__blueprint_tt_tl { / } { / \allowbreak }
+        \tl_replace_all:Nnn \l__blueprint_tt_tl { . } { . \allowbreak }
+        \tl_replace_all:Nnn \l__blueprint_tt_tl { \_ } { \_ \allowbreak }
+        \blueprint_orig_texttt:n { \tl_use:N \l__blueprint_tt_tl }
+      }
   }
 \ExplSyntaxOff

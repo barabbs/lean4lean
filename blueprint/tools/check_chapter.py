@@ -47,7 +47,7 @@ def check(path):
             if re.search(r'\\leanok\b',line): tgt['leanok']=True
             for m in re.finditer(r'\\uses\{([^}]*)\}',line): tgt['uses'].extend(x.strip() for x in m.group(1).split(',') if x.strip())
             for m in re.finditer(r'\\contrib\{([^}]*)\}',line): tgt['contrib']=m.group(1)
-            if 'Not proved in Lean' in line: tgt['notproved']=True
+            if 'Not proved in Lean' in line or '\\stSorry' in line: tgt['notproved']=True
             if re.search(r'\\end\{proof\}',line) and lastnode and lastnode.get('proof') is tgt: tgt['end']=ln
         # underscore heuristic
         s=re.sub(SAFE,'',line); s=re.sub(r'\$[^$]*\$','',s); s=re.sub(r'\\verb(.).*?\1','',s); s=s.replace('\\_','')

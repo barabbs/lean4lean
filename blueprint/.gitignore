@@ -14,3 +14,6 @@ src/web.paux
 *.xdv
 
 __pycache__/
+
+# Scratch space of rewriting sessions
+/.scratch/

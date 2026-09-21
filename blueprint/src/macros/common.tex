@@ -14,6 +14,9 @@
 % web.tex.  `remark' is deliberately NOT a graph node: it is plain commentary.
 % All of them share the `theorem' counter, which is never reset.
 % ---------------------------------------------------------------------------
+% Every node environment is upright (definition style): node bodies are schematic -- lists,
+% run-in labels, badges -- which read badly in the italics of the plain style.
+\theoremstyle{definition}
 \newtheorem{theorem}{Theorem}
 \newtheorem{proposition}[theorem]{Proposition}
 \newtheorem{lemma}[theorem]{Lemma}
@@ -45,12 +48,37 @@
 % Note: the trailing \space (a plain, breakable interword space) matters:
 % a control space \ is not a legal line break, which produced overfull
 % boxes in the pdf when a badge was followed by a long \srcloc path.
-\newcommand{\contrib}[1]{\textbf{[contributed on branch \texttt{#1}]}\space}
+% ---------------------------------------------------------------------------
+% Schematic-style helpers (see blueprint/STYLE.md).
+% ---------------------------------------------------------------------------
+% Run-in label opening a line of a node: \lead{In short}, \lead{Given}, \lead{Then}, ...
+\newcommand{\lead}[1]{\textbf{#1.}}
+% The one phrase of a node a skimming reader must not miss (at most one per node).
+\definecolor{bphl}{HTML}{9A3B00}
+\newcommand{\hl}[1]{\textcolor{bphl}{\textbf{#1}}}
+% Status badges.
+\definecolor{bpproved}{HTML}{1B7F3B}
+\definecolor{bpsorry}{HTML}{B00020}
+\definecolor{bptainted}{HTML}{B35900}
+\definecolor{bpcontrib}{HTML}{0B6E99}
+\definecolor{bpmeta}{HTML}{555555}
+\newcommand{\stProved}{\textcolor{bpproved}{\textbf{[PROVED]}}}         % proved, no sorry in its closure
+\newcommand{\stSorry}{\textcolor{bpsorry}{\textbf{[SORRY]}}}            % the Lean proof contains a literal sorry
+\newcommand{\stTainted}{\textcolor{bptainted}{\textbf{[USES SORRY]}}}   % proved, but depends on a sorry elsewhere
+\newcommand{\stExperimental}{\textcolor{bpmeta}{\textbf{[EXPERIMENTAL]}}} % research module, not on the verified path
 
-\newcommand{\srcloc}[2]{\texttt{#1:#2}}
+% Attribution badge: first thing in the body of every node not inherited unchanged from upstream.
+%   iota   = added by the iota contribution (rules for recursor reduction on inductive blocks)
+%   trproj = added by the projection contribution (TrProj and structure projections)
+%   mixed  = an upstream declaration modified by a contribution
+% The trailing \space is a breakable interword space (a control space is not a legal break).
+\newcommand{\contrib}[1]{\textcolor{bpcontrib}{\textbf{[#1]}}\space}
 
-\newcommand{\thesisref}[1]{\emph{Thesis: #1}}
+% Source pointer, pinned to the documented commit (web: a link to the GitHub blob).
+\newcommand{\srcloc}[2]{{\small\textcolor{bpmeta}{\texttt{#1:#2}}}}
 
-\newcommand{\axfoot}[1]{\par\noindent{\small Axiom footprint: \texttt{#1}}\par}
+% Correspondence with Carneiro's thesis.
+\newcommand{\thesisref}[1]{{\small\textcolor{bpmeta}{\textbf{Thesis.} #1}}}
 
-\newcommand{\reviewnote}[1]{\par\noindent\emph{Review note: #1}\par}
+% Axiom footprint of a node that depends on a sorry.
+\newcommand{\axfoot}[1]{\par\noindent{\small\stTainted{} \textcolor{bpmeta}{\texttt{#1}}}\par}
