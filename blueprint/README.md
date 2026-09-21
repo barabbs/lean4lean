@@ -52,8 +52,9 @@ per-chapter graphs would hide how a `sorry` in the theory reaches the verificati
 
 ## Build
 
-Needs a Python venv with `leanblueprint`, Graphviz, and a TeX distribution with `xelatex` and the
-FreeSerif, FreeSans and JetBrains Mono fonts. From the repository root:
+Needs a Python venv with `leanblueprint`, Graphviz, and a TeX distribution. The web version needs only
+`kpsewhich` from it (plasTeX locates every `\input` file through it, and silently builds an empty
+document without it); the PDF also needs `xelatex` and the FreeSerif, FreeSans and JetBrains Mono fonts. From the repository root:
 
 ```
 python3 -m venv .venv && .venv/bin/pip install leanblueprint

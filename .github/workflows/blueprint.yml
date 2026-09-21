@@ -122,12 +122,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install graphviz and Python build dependencies
+      # texlive-base is needed even without a PDF: plasTeX locates every \input
+      # file through the `kpsewhich` binary, and without it silently builds an
+      # empty document.
+      - name: Install kpsewhich, graphviz and Python build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            texlive-base \
             graphviz libgraphviz-dev pkg-config \
             python3-venv python3-dev build-essential
+          kpsewhich --version | head -1
 
       - name: Install leanblueprint into a venv
         run: |
@@ -138,6 +143,12 @@ jobs:
 
       - name: Build blueprint web
         run: leanblueprint web
+
+      # plasTeX exits 0 on an empty document; refuse to publish one.
+      - name: Check the web output is not empty
+        run: |
+          test "$(ls blueprint/web/chap-*.html | wc -l)" -ge 18
+          test "$(stat -c %s blueprint/web/dep_graph_document.html)" -gt 100000
 
       - name: Upload blueprint-web artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
