@@ -1,97 +1,58 @@
 \chapter{Translating environments}
 \label{chap:trenv}
 
-This chapter covers the environment layer of lean4lean's verification: the bridge between a
-real \texttt{Lean.Kernel.Environment} (an \texttt{SMap Name ConstantInfo} together with a
-quotient-initialization flag) and the abstract \texttt{VEnv} of the type theory (a partial map
-to \texttt{VConstant}s, a set of defining equations, and, since the \texttt{iota} branch, a set
-of registered pattern reduction rules \texttt{pats}). The central object is the inductive
-relation $\mathtt{TrEnv}'\ safety\ C\ Q\ venv$ (\ref{ind:tr-env}), which has one constructor for
-each way the kernel can extend an environment, and the top of the chapter is
-\texttt{addDecl.WF} (\ref{thm:add-decl-wf}), the statement that a checked declaration addition
-preserves that relation.
+\section*{At a glance}
+\begin{itemize}
+\item \lead{Goal} translate a kernel \texttt{Environment} into the model \texttt{VEnv},
+keeping the two \hl{in step}.
+\item \lead{Main results} \texttt{TrEnv} well-formed (\ref{thm:tr-env-wf}); checked
+addition preserves it (\ref{thm:add-decl-wf}); an inductive block preserves alignment
+(\ref{thm:aligned-add-induct}); quotient initialization is sound (\ref{thm:add-quot-wf});
+projection reduction follows the registered $\iota$ rule (\ref{thm:tr-env-proj-defeq}).
+\item \lead{Status} \stProved{} the constant, mutual-block and quotient layers;
+\stSorry{} 1 proof (\ref{thm:add-decl-wf}, the \texttt{inductDecl} case); \stTainted{} 3
+lemmas via \texttt{orderedStrong}/\texttt{patsStrong} (\ref{family:beta-telescope},
+\ref{thm:tr-env-proj-defeq}, \ref{thm:tr-expr-mk-app-list}).
+\item \lead{Contribution} \texttt{iota} gave \texttt{AddInduct} a real witness and proved
+quotient initialization; \texttt{trproj} added structure-likeness and derived the
+projection rule from the registered $\iota$ rule.
+\item \lead{Lean files} \texttt{Lean4Lean/Verify/Environment/\{Basic,Lemmas,Quot,
+Checker,Extension\}.lean}, \texttt{Lean4Lean/Verify/\{Environment,Axioms\}.lean}.
+\item \lead{Thesis} axioms.tex \S\S ``Definitions'', ``Inductive types'', ``The recursor'',
+``The computation rule'', ``Quotient types''; typesys.tex \S\texttt{sec:undecidable}.
+\end{itemize}
 
-The files are
-\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{1} (619 lines: the translation of one constant,
-the step relations \texttt{VEnv.AddConst}/\texttt{AddDef}/\texttt{AddQuot}, the
-\texttt{insertConsts} map calculus, the inductive-block witness \texttt{AddInduct}, and
-$\mathtt{TrEnv}'$),
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1} (1178 lines: the \texttt{Aligned} companion
-relation and its lookup calculus, $\delta$-soundness, the $\iota$ interface, structure-likeness,
-a $\beta$-telescope calculus and projection reduction),
-\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1} (615 lines: quotient initialization in full),
-\srcloc{Lean4Lean/Verify/Environment/Checker.lean}{1} (230 lines: the per-declaration checks),
-\srcloc{Lean4Lean/Verify/Environment/Extension.lean}{1} (487 lines: the reusable extension
-machinery),
-\srcloc{Lean4Lean/Verify/Environment.lean}{1} (208 lines: the top-level driver) and
-\srcloc{Lean4Lean/Verify/Axioms.lean}{1} (510 lines: the project's trust boundary).
-
-Thesis correspondences are indirect. Carneiro's thesis specifies the type theory, not the
-kernel's environment data structure, so this group is a refinement layer with no counterpart of
-its own; where the statements do touch the thesis they touch \texttt{axioms.tex}
-\S\,``Definitions ($\delta$ reduction)'' (\texttt{TrConstant}, \texttt{TrEnv'.of\_value}),
-\S\,``Inductive types'' and \S\,``The recursor'' (\texttt{TrIndType}, \texttt{TrRecursor},
-\texttt{AddInduct}), \S\,``The computation rule ($\iota$ reduction)'' (\texttt{pats\_iota'} and
-its inverse), \S\,``Quotient types'' (all of \texttt{Quot.lean}), and \texttt{typesys.tex}
-\S\,\texttt{sec:undecidable}, whose $\mathsf{inv}_x$ construction is the shape of the projection
-expansion that \texttt{proj\_defeq} reasons about.
-
-Per-line attribution over the seven files is 1879 lines master, 1328 lines \texttt{iota} and 640
-lines \texttt{trproj}. The \texttt{iota} contribution is concentrated in
-\texttt{Basic.lean} lines 120--519 (the \texttt{insertConsts} calculus, \texttt{TrIndType},
-\texttt{TrRecursor}, \texttt{AddInduct} and its derived lemmas), in the $\iota$ interface of
-\texttt{Lemmas.lean}, and in the whole of \texttt{Quot.lean}. The \texttt{trproj} contribution is
-\texttt{Lemmas.lean} lines 434--666, 771--912 and 949--1178 (structure-likeness,
-\texttt{IotaRule} with the inverse lemma, the $\beta$ telescopes and \texttt{proj\_defeq}) plus
-24 lines in \texttt{Basic.lean}, the parameters and fields it added to \texttt{TrIndType} and
-\texttt{TrRecursor}.
-\texttt{Checker.lean} and \texttt{Axioms.lean} are untouched by both branches. Sixteen of the
-398 \texttt{iota} lines in \texttt{Basic.lean} (lines 34--49) are master code relocated by the
-refactor commit \texttt{3046dff} rather than written on the branch.
-
-Assessment. Within this group the \texttt{iota} branch is the stronger contribution: it replaces
-a deliberately empty \texttt{AddInduct} (documented on master as ``essentially a \texttt{sorry}'')
-with a real structure, derives its bookkeeping instead of assuming it, and is forced into, and
-delivers, a full proof of quotient initialization that master had been getting for free from
-vacuity; it also reaches the kernel model at one real point,
-\texttt{inductiveReduceRecCore.WF}. The \texttt{trproj} contribution here is the more impressive
-single theorem (\ref{thm:pats-iota-inv-shape} with \ref{thm:tr-env-proj-defeq}) and is correctly
-architected, deriving the projection rule from the registered $\iota$ rule rather than
-postulating it, but it is currently disconnected from the checker. Both rest on an undischarged
-hypothesis: nothing in the repository constructs an \texttt{AddInduct} witness, and the
-\texttt{inductDecl} case of \texttt{addDecl.WF} is still \texttt{sorry}
-(\srcloc{Lean4Lean/Verify/Environment.lean}{208}), so the branches moved that \texttt{sorry}
-rather than removing it.
-
-Throughout, $C$ is a kernel constant map, $venv$ a model \texttt{VEnv}, $safety$ a
-\texttt{DefinitionSafety}, and $env_1 \le env_2$ the model extension order.
+A refinement layer with no thesis counterpart of its own. Throughout, $C$ is a kernel
+constant map, $venv$ a model \texttt{VEnv}, $safety$ a \texttt{DefinitionSafety},
+$env_1 \le env_2$ the model extension order.
 
 \section{Translating one constant}
 
-\begin{definition}[Safety level and value accessors of a \texttt{ConstantInfo}]
+\begin{definition}[\texttt{ConstantInfo} safety and value accessors]
 \label{family:constant-info-basics}
 \lean{Lean.ConstantInfo.safety, Lean4Lean.ConstantInfo.hasValue_eq, Lean4Lean.ConstantInfo.value!_eq}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{11}
-\texttt{ConstantInfo.safety} reads a declaration's \texttt{DefinitionSafety}: \texttt{unsafe} if
-\texttt{isUnsafe}, else \texttt{partial} if \texttt{isPartial}, else \texttt{safe}. The two
-accompanying one-line lemmas rewrite \texttt{hasValue} and \texttt{value!} into \texttt{value?}
-(both by \texttt{cases ci}).
+
+\lead{In short} \texttt{safety} reads a declaration's \hl{safety level}: \texttt{unsafe}
+if \texttt{isUnsafe}, else \texttt{partial} if \texttt{isPartial}, else \texttt{safe}.
+\texttt{hasValue\_eq}, \texttt{value!\_eq} rewrite \texttt{hasValue}/\texttt{value!} into
+\texttt{value?}, by \texttt{cases ci}.
 \end{definition}
 
-\begin{definition}[Translation of a kernel constant, \texttt{TrConstant}]
+\begin{definition}[Kernel constant translation, \texttt{TrConstant}]
 \label{def:tr-constant}
 \lean{Lean4Lean.TrConstant, Lean4Lean.TrConstVal, Lean4Lean.TrDefVal}
 \leanok
 \uses{ind:trexprs, family:constant-info-basics}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{21}
-$\mathtt{TrConstant}\ safety\ env\ ci\ ci'$ holds when $safety \le ci.\mathtt{safety}$, the number
-of level parameters of $ci$ equals $ci'.\mathtt{uvars}$, and the kernel type of $ci$ translates by
-\texttt{TrExprS} in the empty local context to $ci'.\mathtt{type}$. \texttt{TrConstVal} adds
-$ci.\mathtt{name} = ci'.\mathtt{name}$; \texttt{TrDefVal} further requires
-$ci.\mathtt{value!}$ (with \texttt{allowOpaque}) to translate to $ci'.\mathtt{value}$.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)'': $\tau_{\bar\ell}(c)$ and
-$v_{\bar\ell}(c)$}
+\thesisref{axioms.tex, \S ``Definitions'': $\tau_{\bar\ell}(c)$ and $v_{\bar\ell}(c)$.}
+
+\lead{In short} \texttt{TrConstant}: $safety \le ci.\mathtt{safety}$, $ci$'s
+level-parameter count is $ci'.\mathtt{uvars}$, $ci$'s type translates (empty context) to
+$ci'.\mathtt{type}$ -- a kernel \texttt{ConstantInfo} \hl{translates} to a model constant.
+\texttt{TrConstVal} adds $ci.\mathtt{name} = ci'.\mathtt{name}$; \texttt{TrDefVal} further
+translates $ci.\mathtt{value!}$ (with \texttt{allowOpaque}) to $ci'.\mathtt{value}$.
 \end{definition}
 
 \begin{lemma}[Monotonicity of constant translation]
@@ -100,66 +61,62 @@ $v_{\bar\ell}(c)$}
 \lean{Lean4Lean.TrConstant.sf_mono, Lean4Lean.TrConstant.mono, Lean4Lean.TrConstVal.mono, Lean4Lean.TrDefVal.mono}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{34}
-\texttt{sf\_mono} lowers the safety index of a \texttt{TrConstant} along $safety \le safety'$; the
-three \texttt{mono} lemmas transport a translation along an environment extension
-$env \le env'$.
+
+\lead{In short} \texttt{sf\_mono} lowers the safety index along $safety \le safety'$; the
+three \texttt{mono} lemmas transport a translation along $env \le env'$ -- it \hl{survives
+raising} either.
 \end{lemma}
 \begin{proof}
 \uses{def:tr-constant, thm:trexprs-mono}
 \leanok
-Each unfolds the conjunction and applies \texttt{TrExprS.mono} (and, for \texttt{sf\_mono},
-transitivity of the safety order).
+\lead{Idea} Unfold the conjunction and apply \texttt{TrExprS.mono}, plus transitivity of the
+safety order for \texttt{sf\_mono}.
 \end{proof}
 
-\begin{remark}
-These four lemmas are marked as contributed by the per-line blame, but they are verbatim master
-code relocated from \texttt{Lemmas.lean} into \texttt{Basic.lean} by the \texttt{iota} refactor
-commit \texttt{3046dff}. The attribution is ``moved'', not ``written''.
-\end{remark}
-
-\begin{definition}[The model step of adding a constant or definition]
+\begin{definition}[Adding a constant or definition]
 \label{def:venv-add-const}
 \lean{Lean4Lean.VEnv.AddConst, Lean4Lean.VEnv.AddConst.le, Lean4Lean.VEnv.AddDef, Lean4Lean.VEnv.AddDef.le}
 \leanok
 \uses{def:tr-constant, def:venv-basic}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{55}
-$\mathtt{VEnv.AddConst}\ venv\ safety\ ci\ ci'\ venv'$ says: if $safety \le ci.\mathtt{safety}$
-then $ci'$ translates $ci$, is well-formed, and $venv.\mathtt{addConst}\ ci.\mathtt{name}\ ci' =
-\mathtt{some}\ venv'$; otherwise $venv' = venv$, matching the \texttt{ignore} step of
-$\mathtt{TrEnv}'$. \texttt{VEnv.AddDef} is the analogue that adds the constant and then its
-defining equation. Both \texttt{.le} lemmas give $venv \le venv'$. Stating this rather than just
-$venv \le venv'$ is what lets a caller see which constant a step added.
+
+\lead{In short} $\mathtt{AddConst}\ venv\ safety\ ci\ ci'\ venv'$: if
+$safety \le ci.\mathtt{safety}$ then $ci'$ translates $ci$, is well-formed, and
+$venv.\mathtt{addConst}\ ci.\mathtt{name}\ ci' = \mathtt{some}\ venv'$, else
+$venv' = venv$ -- the \hl{`add' step} records what it added. \texttt{AddDef} also adds the
+defining equation; both \texttt{.le} lemmas give $venv \le venv'$.
 \end{definition}
 
-\begin{definition}[Refinement witness for quotient initialization, \texttt{AddQuot}]
+\begin{definition}[Quotient-initialization witness, \texttt{AddQuot}]
 \label{def:add-quot-witness}
 \lean{Lean4Lean.AddQuot1, Lean4Lean.AddQuot, Lean4Lean.AddQuot1.to_addQuot, Lean4Lean.AddQuot1.le, Lean4Lean.AddQuot.to_addQuot, Lean4Lean.AddQuot.le}
 \leanok
 \uses{def:tr-constant, def:quot-consts, def:venv-addquot}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{86}
-$\mathtt{AddQuot1}\ name\ kind\ ci'\ P\ m\ env$ records one step of quotient initialization: for
-some level parameters and type, the declaration
-$\mathtt{quotInfo}\ \langle name, kind, \dots\rangle$ translates to the model constant $ci'$ at
-safety \texttt{safe}, $name$ is fresh in $m$, $env.\mathtt{addConst}$ succeeds, and the
-continuation $P$ holds of the extended map and environment. \texttt{AddQuot} chains four such
-steps for \texttt{Quot}, \texttt{Quot.mk}, \texttt{Quot.lift}, \texttt{Quot.ind} and finishes with
-\texttt{addDefEq quotDefEq}. \texttt{to\_addQuot} shows the model side is exactly
-\texttt{VEnv.addQuot}, and \texttt{le} gives monotonicity.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} $\mathtt{AddQuot1}\ name\ kind\ ci'\ P\ m\ env$: the declaration
+$\mathtt{quotInfo}\ \langle name, kind, \ldots\rangle$ translates to $ci'$ at safety
+\texttt{safe}, $name$ is fresh in $m$, $env.\mathtt{addConst}$ succeeds, continuation $P$
+holds -- one step, then \hl{a chain of four}. \texttt{AddQuot} chains it for \texttt{Quot},
+\texttt{Quot.mk}, \texttt{Quot.lift}, \texttt{Quot.ind}, then \texttt{addDefEq quotDefEq};
+\texttt{to\_addQuot} identifies the model side with \texttt{VEnv.addQuot}, \texttt{le} is
+monotonicity.
 \end{definition}
 
 \section{Inserting a block of constants}
 
-\begin{definition}[Inserting a block into the constant map, \texttt{insertConsts}]
+\begin{definition}[Inserting a block, \texttt{insertConsts}]
 \label{def:insert-consts}
 \contrib{iota}
 \lean{Lean4Lean.insertConsts}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{127}
-$\mathtt{insertConsts}\ C\ cis$ folds \texttt{SMap.insert} over $cis$, keying each
-\texttt{ConstantInfo} by its own name. This is the map-level effect of adding a whole inductive
-block, which the kernel performs one declaration at a time.
-\thesisref{axioms.tex, \S ``Inductive types'' and \S ``The recursor''}
+\thesisref{axioms.tex, \S\S ``Inductive types'' and ``The recursor''.}
+
+\lead{In short} $\mathtt{insertConsts}\ C\ cis$ folds \texttt{SMap.insert} over $cis$,
+keying each \texttt{ConstantInfo} by its own name -- the \hl{map-level effect} of adding a
+whole block, which the kernel performs one declaration at a time.
 \end{definition}
 
 \begin{lemma}[Lookup calculus for \texttt{insertConsts}]
@@ -168,332 +125,279 @@ block, which the kernel performs one declaration at a time.
 \lean{Lean4Lean.insertConsts_cons, Lean4Lean.insertConsts_fresh_tail, Lean4Lean.insertConsts_wf, Lean4Lean.insertConsts_find?_mono, Lean4Lean.insertConsts_find?_mono_of_fresh, Lean4Lean.insertConsts_find?_none, Lean4Lean.insertConsts_find?, Lean4Lean.insertConsts_find?_self}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{130}
-Under the hypotheses that $C$ is a well-formed map, that every name of the block is fresh in $C$
-and that the block's names are pairwise distinct: the result is well-formed
-(\texttt{insertConsts\_wf}); a lookup that succeeded before still succeeds with the same value
-(\texttt{insertConsts\_find?\_mono}, \texttt{\_mono\_of\_fresh}); a lookup that succeeds after
-either succeeded before or is one of the block's constants under its own name
-(\texttt{insertConsts\_find?}); and each block constant resolves to itself
-(\texttt{insertConsts\_find?\_self}).
+
+\lead{In short} Given $C$ well-formed and the block's names fresh in $C$ and pairwise
+distinct: the result is well-formed (\texttt{\_wf}); a lookup that succeeded before still
+succeeds at the same value (\texttt{\_find?\_mono}, \texttt{\_mono\_of\_fresh}); one that
+succeeds after either succeeded before or names a block constant (\texttt{\_find?}), each
+resolving to itself (\texttt{\_find?\_self}) -- how lookups behave \hl{across
+\texttt{insertConsts}}.
 \end{lemma}
 \begin{proof}
 \uses{def:insert-consts}
 \leanok
-All by induction on the block, with \texttt{insertConsts\_fresh\_tail} maintaining freshness of
-the tail across the head insertion, and reducing at each step to the \texttt{SMap} lemmas
-\texttt{SMap.find?\_insert}, \texttt{SMap.find?\_insert\_none} and
-\texttt{SMap.insertList\_find?\_mono}.
+\lead{Idea} Induction on the block, keeping the tail fresh across each head insertion and
+reducing to the underlying \texttt{SMap} lemmas.
 \end{proof}
-
-\reviewnote{\texttt{insertConsts\_find?\_none} (\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{165})
-is dead code: apart from its own statement, its only occurrence is its own recursive call.}
 
 \section{The inductive-block witness}
 
-\begin{definition}[Translation of one type former with its constructors, \texttt{TrIndType}]
+\begin{definition}[Type-former translation, \texttt{TrIndType}]
 \label{struct:tr-ind-type}
 \contrib{mixed}
 \lean{Lean4Lean.TrIndType}
 \leanok
 \uses{def:tr-constant, struct:vinductivetype, def:pi-telescope}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{216}
-$\mathtt{TrIndType}\ safety\ env_1\ env_T\ nparams\ block\ ival\ cvals\ t$ says: the kernel
-\texttt{inductInfo} $ival$ translates to the model \texttt{VInductiveType} $t$ in the environment
-$env_1$ before the block; $ival.\mathtt{ctors}$ is exactly the list of names of $cvals$; each
-\texttt{ctorInfo} of $cvals$ translates in $env_T$, the environment already holding the block's
-type formers, and satisfies
-$cval.\mathtt{numParams} + cval.\mathtt{numFields} = c.\mathtt{type}.\mathtt{piArity}$;
-$ival.\mathtt{all} = block$; $ival.\mathtt{numParams} = nparams$; and
+\thesisref{axioms.tex, \S\S ``Inductive types'' and ``The recursor''.}
+
+\lead{In short} A kernel type former \hl{translates together with its constructors}.
+\begin{itemize}
+\item $ival$ translates to the model \texttt{VInductiveType} $t$ in $env_1$;
+$ival.\mathtt{ctors}$ names $cvals$ exactly.
+\item Each \texttt{ctorInfo} of $cvals$ translates in $env_T$, with
+$cval.\mathtt{numParams} + cval.\mathtt{numFields} = c.\mathtt{type}.\mathtt{piArity}$.
+\item $ival.\mathtt{all} = block$; $ival.\mathtt{numParams} = nparams$;
 $ival.\mathtt{numIndices} = t.\mathtt{type}.\mathtt{piArity} - nparams$.
-\thesisref{axioms.tex, \S ``Inductive types'' and \S ``The recursor''}
+\end{itemize}
+\lead{Caveat} Three environments: type formers translate in $env_1$, constructors in
+$env_T$, recursor reducts (Definition~\ref{struct:tr-recursor}) in $env_R$.
 \end{definition}
 
-\begin{remark}
-The core of \texttt{TrIndType} (the fields \texttt{tr}, \texttt{ctor\_names}, \texttt{ctors}) is
-\texttt{iota}; the parameters $nparams$ and $block$ and the fields \texttt{all},
-\texttt{numParams}, \texttt{numIndices} are \texttt{trproj} additions. The arity equation
-$cval.\mathtt{numParams} + cval.\mathtt{numFields} = c.\mathtt{type}.\mathtt{piArity}$ is the
-second conjunct of the \texttt{ctors} field and so is \texttt{iota} as well, not a \texttt{trproj}
-addition; it is the bridge that makes \ref{thm:add-induct-ctor-find} and
-\ref{thm:tr-env-ctor-arity} usable. Note
-that the witness mentions three different environments: type formers translate in $env_1$,
-constructors in $env_T$, and (in \ref{struct:tr-recursor}) reducts in $env_R$. That is correct,
-but demanding on a producer.
-\end{remark}
-
-\begin{definition}[Translation of one recursor with its rules, \texttt{TrRecursor}]
+\begin{definition}[Recursor translation, \texttt{TrRecursor}]
 \label{struct:tr-recursor}
 \contrib{iota}
 \lean{Lean4Lean.TrRecursor}
 \leanok
 \uses{def:tr-constant, struct:vrecursor, ind:trexprs}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{237}
-$\mathtt{TrRecursor}\ safety\ env_C\ env_R\ m_2\ rval\ r$ says the kernel \texttt{recInfo} $rval$
-translates to the model \texttt{VRecursor} $r$ in $env_C$, the environment holding the type
-formers and constructors; the telescope split (\texttt{numParams}, \texttt{numMotives},
-\texttt{numMinors}, \texttt{numIndices}), the \texttt{all} list and the K-like flag \texttt{k} are
-copied from $rval$; and the rules are matched one-to-one, each firing on the same constructor and
-field count, with the constructor's parameter count read off its \texttt{ctorInfo} in the final
-map $m_2$ and a reduct translating in $env_R$. The \texttt{trproj} field \texttt{name\_major}
-adds that the kernel names a recursor $\mathtt{mkRecName}\ n$ after the type former $n$ its major
-premise eliminates.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
-\reviewnote{The fields \texttt{all} (\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240}) and
-\texttt{k} (\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{245}) are never used anywhere in the
-repository; \texttt{k} in particular records a flag for which the model has no rule. Looking up
-the constructor in $m_2$ rather than in the block, by contrast, is a deliberate and documented
-choice for nested blocks, whose auxiliary recursors fire on older constructors.}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} A kernel \texttt{recInfo} \hl{translates rule for rule} to a model
+\texttt{VRecursor}.
+\begin{itemize}
+\item $rval$ translates to $r$ in $env_C$; the telescope split, the \texttt{all} list and
+the K-like flag \texttt{k} are copied from $rval$.
+\item Rules match one-to-one: same constructor and field count, parameter count read off
+$m_2$, reduct translating in $env_R$.
+\item \texttt{name\_major} (\texttt{trproj}): the kernel names a recursor
+$\mathtt{mkRecName}\ n$ after the type former $n$ it eliminates.
+\end{itemize}
+\lead{Caveat} \texttt{all} \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240} and
+\texttt{k} \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{245} are carried, but no
+model rule reads \texttt{k}.
 \end{definition}
 
-\begin{definition}[The constants a block adds, in model stage order]
+\begin{definition}[A block's constants, in stage order]
 \label{def:add-induct-consts}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.consts}
 \leanok
 \uses{family:ind-add-stages}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{259}
-$\mathtt{AddInduct.consts}\ ivals\ rvals$ is the list of \texttt{ConstantInfo}s a block
-contributes: all type formers, then all constructors in block order, then all recursors. This
-mirrors \texttt{VInductDecl.consts}, the order in which the model's \texttt{addTypesCtorsRecs}
-folds \texttt{addConst}. The kernel uses this order for a non-nested block and inserts type by
-type for a nested one, which is why \ref{struct:add-induct} records the actual insertion order
-separately.
+
+\lead{In short} $\mathtt{AddInduct.consts}\ ivals\ rvals$: all type formers, then
+constructors in block order, then recursors -- \hl{the model's addition order}. The
+kernel matches it only for a non-nested block; Definition~\ref{struct:add-induct} records
+its actual order.
 \end{definition}
 
-\begin{definition}[Refinement witness for an inductive block, \texttt{AddInduct}]
+\begin{definition}[Block witness, \texttt{AddInduct}]
 \label{struct:add-induct}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct}
 \leanok
 \uses{struct:tr-ind-type, struct:tr-recursor, def:add-induct-consts, def:insert-consts, family:ind-add-stages}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{272}
-$\mathtt{AddInduct}\ safety\ m_1\ env_1\ decl\ m_2\ env_2$ bundles the kernel-side data
-($ivals$, $rvals$), the three intermediate model environments $env_T$, $env_C$, $env_R$, the four
-successful stages $\mathtt{decl.addTypes}\ env_1 = \mathtt{some}\ env_T$,
-$\mathtt{addCtors}\ env_T = \mathtt{some}\ env_C$,
-$\mathtt{addRecs}\ env_C = \mathtt{some}\ env_R$,
-$\mathtt{addRules}\ env_R = \mathtt{some}\ env_2$, a \texttt{TrIndType} for every type former and
-a \texttt{TrRecursor} for every recursor, freshness in $m_1$ of every inserted name, and the
-equation $m_2 = \mathtt{insertConsts}\ m_1\ order$ for an insertion order $order$ that is a
-permutation of $\mathtt{consts}\ ivals\ rvals$.
-\thesisref{axioms.tex, \S ``Inductive types'' and \S ``The recursor''}
+\thesisref{axioms.tex, \S\S ``Inductive types'' and ``The recursor''.}
+
+\lead{In short} \hl{A whole block's addition}, kernel and model sides bundled together.
+\begin{itemize}
+\item Kernel data $ivals,rvals$; four successful stages
+$env_1 \xrightarrow{addTypes} env_T \xrightarrow{addCtors} env_C \xrightarrow{addRecs}
+env_R \xrightarrow{addRules} env_2$; a \texttt{TrIndType} per type former, a
+\texttt{TrRecursor} per recursor.
+\item Freshness in $m_1$ of every inserted name; $m_2 = \mathtt{insertConsts}\ m_1\ order$
+for $order$ a permutation of $\mathtt{consts}\ ivals\ rvals$.
+\end{itemize}
+\lead{Caveat} Declared as \texttt{Type}, not \texttt{Prop}: the \texttt{induct} step of
+\ref{ind:tr-env} carries this data, since later lemmas project its fields.
 \end{definition}
 
-\begin{remark}
-On master this was a deliberately empty \texttt{Prop} inductive whose docstring called it
-``essentially a \texttt{sorry}'': it had no constructors, so the \texttt{induct} step of
-$\mathtt{TrEnv}'$ could never fire and environments containing inductives were outside the
-verified relation. Replacing it is the single largest structural change of the \texttt{iota}
-branch. Two consequences deserve review. First, \texttt{AddInduct} is declared without a
-\texttt{: Prop} ascription, so it is \texttt{Type}-valued and the \texttt{induct} constructor of
-$\mathtt{TrEnv}'$ now carries data. This is needed because the derived lemmas project its fields
-(\texttt{ivals}, \texttt{envR}, \texttt{order}), which a \texttt{Prop}-valued structure would not
-allow. The often-stated consequence ``$\mathtt{TrEnv}'$ loses large elimination'' would be wrong:
-$\mathtt{TrEnv}'$ has nine constructors, so it never had large elimination. What is true is that
-an \texttt{AddInduct} witness cannot be recovered from a $\mathtt{TrEnv}'$ proof except into
-\texttt{Prop}, which is all the present consumers need; the change to the shape of the project's
-central invariant relative to master's \texttt{inductive AddInduct \ldots : Prop} is nowhere
-documented. Second,
-nothing in the repository ever constructs an \texttt{AddInduct}, so every result below is
-conditional on a witness that \ref{thm:add-decl-wf} still \texttt{sorry}s.
-\end{remark}
-
-\begin{lemma}[Recomposing the four stages of \texttt{VEnv.addInduct}]
+\begin{lemma}[Recomposing \texttt{VEnv.addInduct}]
 \label{family:add-induct-stages}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.env_eq, Lean4Lean.AddInduct.addTypesCtors, Lean4Lean.AddInduct.addTypesCtorsRecs, Lean4Lean.AddInduct.le, Lean4Lean.AddInduct.leR}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{296}
-From the four stage equations of an \texttt{AddInduct} witness: \texttt{env\_eq} recomposes
-$env_1.\mathtt{addInduct}\ decl = \mathtt{some}\ env_2$; \texttt{addTypesCtors} and
-\texttt{addTypesCtorsRecs} recompose the intermediate prefixes; \texttt{le} gives
-$env_1 \le env_2$ and \texttt{leR} gives $env_R \le env_2$.
+
+\lead{In short} An \texttt{AddInduct} witness \hl{recomposes} \texttt{VEnv.addInduct}: the
+full step ($env\_eq$) and its prefixes (\texttt{addTypesCtors},
+\texttt{addTypesCtorsRecs}), plus $env_1 \le env_2$ (\texttt{le}) and $env_R \le env_2$
+(\texttt{leR}).
 \end{lemma}
 \begin{proof}
 \uses{struct:add-induct, def:ind-add-induct, family:indlem-stage-le}
 \leanok
-Each unfolds \texttt{VEnv.addInduct} (respectively its prefixes) and rewrites with the stored
-stage equations; \texttt{leR} is \texttt{VEnv.addRules\_le} applied to the last stage.
+\lead{Idea} Unfold and rewrite with the stored equations; \texttt{leR} follows from
+\texttt{addRules\_le}.
 \end{proof}
 
-\begin{lemma}[Membership in a block's constants, by kind]
+\begin{lemma}[Membership in a block's constants]
 \label{family:add-induct-membership}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.mem_consts, Lean4Lean.AddInduct.novalue}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{312}
-\texttt{mem\_consts} characterises $ci \in \mathtt{consts}\ ivals\ rvals$ three ways: $ci$ is a
-type former, a constructor of some type former, or a recursor. \texttt{novalue} says every such
-constant has $\mathtt{value?} = \mathtt{none}$ and $\mathtt{deltaValue?} = \mathtt{none}$, so a
-block registers nothing $\delta$-reducible.
+
+\lead{In short} $ci \in \mathtt{consts}\ ivals\ rvals$ iff $ci$ is a type former, a
+constructor, or a recursor (\texttt{mem\_consts}); every such $ci$ has \hl{no
+$\delta$-value} (\texttt{novalue}).
 \end{lemma}
 \begin{proof}
 \uses{def:add-induct-consts}
 \leanok
-\texttt{mem\_consts} by \texttt{simp} on the append and \texttt{flatMap} and a case split in each
-direction; \texttt{novalue} by \texttt{rcases} on \texttt{mem\_consts} followed by
-\texttt{rfl} in each of the three cases.
+\lead{Idea} \texttt{simp} on the append/\texttt{flatMap}, then \texttt{rfl} per case.
 \end{proof}
 
-\begin{lemma}[The block's names are the model's, and are distinct]
+\begin{lemma}[The block's names match, and are distinct]
 \label{family:add-induct-names}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.types_names, Lean4Lean.AddInduct.ctors_names, Lean4Lean.AddInduct.recs_names, Lean4Lean.AddInduct.consts_names, Lean4Lean.AddInduct.names_nodup, Lean4Lean.AddInduct.order_fresh, Lean4Lean.AddInduct.order_nodup}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{334}
-The kernel-side names of the type formers, constructors and recursors coincide with the model
-declaration's (\texttt{types\_names}, \texttt{ctors\_names}, \texttt{recs\_names}, assembled by
-\texttt{consts\_names}), and they are pairwise distinct (\texttt{names\_nodup}).
-\texttt{order\_fresh} and \texttt{order\_nodup} transport freshness and distinctness to the
-kernel's actual insertion order through the permutation.
+
+\lead{In short} Kernel-side names of type formers, constructors, recursors \hl{coincide
+with the model's} and are pairwise distinct; \texttt{order\_fresh}/\texttt{order\_nodup}
+carry both facts to the kernel's actual insertion order.
 \end{lemma}
 \begin{proof}
 \uses{struct:add-induct, family:indlem-find-fresh-nodup}
 \leanok
-The name equalities are the pointwise \texttt{map\_eq} lemma for \texttt{List.Forall}$_2$ on the \texttt{tr} fields.
-\texttt{names\_nodup} splits the three-way append and uses that each model stage's
-\texttt{addConst} fold succeeded (\texttt{VEnv.addTypes\_nodup}, \texttt{addCtors\_nodup},
-\texttt{addRecs\_nodup}) together with cross-stage freshness (\texttt{addCtors\_fresh},
-\texttt{addRecs\_fresh}); distinctness is derived, not assumed as a field.
+\lead{Idea} Name equalities from the pointwise \texttt{tr} fields; distinctness derived
+from each stage's successful \texttt{addConst} fold plus cross-stage freshness.
 \end{proof}
 
-\begin{lemma}[An inductive block preserves constant-map well-formedness]
+\begin{lemma}[A block preserves map well-formedness]
 \label{thm:add-induct-wf}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.wf}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{395}
-If $m_1$ is a well-formed \texttt{SMap} then so is $m_2$.
+
+\lead{In short} If $m_1$ is well-formed, so is $m_2$.
 \end{lemma}
 \begin{proof}
 \uses{family:insert-consts-lemmas, family:add-induct-names, struct:add-induct}
 \leanok
-Rewrite by the \texttt{map\_eq} field and apply \texttt{insertConsts\_wf} with
-\texttt{order\_fresh} and \texttt{order\_nodup}.
+\lead{Idea} \texttt{insertConsts\_wf} with \texttt{order\_fresh}/\texttt{order\_nodup}.
 \end{proof}
 
-\begin{lemma}[Lookup transport across an inductive block]
+\begin{lemma}[Lookup transport across a block]
 \label{family:add-induct-find}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.find?_mono, Lean4Lean.AddInduct.find?, Lean4Lean.AddInduct.find?_self, Lean4Lean.AddInduct.value_find}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{400}
-A constant resolvable in $m_1$ is resolvable in $m_2$ to the same value
-(\texttt{find?\_mono}); a constant resolvable in $m_2$ was either resolvable in $m_1$ or is one of
-the block's constants under its own name (\texttt{find?}); each block constant resolves to itself
-(\texttt{find?\_self}); and a constant that has a $\delta$-value and is resolvable in $m_2$ was
-already resolvable in $m_1$ (\texttt{value\_find}).
+
+\lead{In short} Resolvable in $m_1$ $\Rightarrow$ resolvable in $m_2$, same value
+(\texttt{find?\_mono}); resolvable in $m_2$ $\Rightarrow$ resolvable in $m_1$ or a block
+constant (\texttt{find?}), each resolving to itself (\texttt{find?\_self}); a
+$\delta$-valued constant resolvable in $m_2$ was already in $m_1$ (\texttt{value\_find}).
 \end{lemma}
 \begin{proof}
 \uses{family:insert-consts-lemmas, family:add-induct-membership, family:add-induct-names, struct:add-induct}
 \leanok
-All by the \texttt{map\_eq} field plus the corresponding \texttt{insertConsts} lemma, with the
-permutation moving between $order$ and $\mathtt{consts}$; \texttt{value\_find} additionally uses
-\texttt{novalue} to rule out the block case.
+\lead{Idea} \texttt{map\_eq} plus the matching \texttt{insertConsts} lemma, moving between
+$order$ and $\mathtt{consts}$; \texttt{value\_find} also uses \texttt{novalue}.
 \end{proof}
 
-\begin{theorem}[Kernel recursor lookup, resolved against the block]
+\begin{theorem}[Kernel recursor lookup vs. the block]
 \label{thm:add-induct-rec-find}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.rec_find}
 \leanok
 \uses{struct:add-induct, struct:tr-recursor}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{434}
-Assume $m_1$ is a well-formed \texttt{SMap}. If $m_2$ resolves $recName$ to a kernel
-\texttt{recInfo} $rval$, then either $m_1$ already did, or
-there is $r \in decl.\mathtt{recs}$ with $r.\mathtt{name} = recName$, the same major index and the
-same telescope split, such that every kernel rule of $rval$ has a model rule with the same
-constructor, the same field count, the constructor's parameter count as recorded in $m_2$, a
-closed reduct, and a reduct translating the kernel rule's \texttt{rhs} in $env_2$.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} If $m_1$ well-formed and $m_2$ resolves $recName$ to kernel $rval$, then
+either $m_1$ already did, or some $r \in decl.\mathtt{recs}$ named $recName$ has the same
+major index and telescope split, and every kernel rule of $rval$ matches a model rule of
+$r$ -- same constructor and field count, parameter count as in $m_2$, closed reduct
+translating the kernel rule's \texttt{rhs} in $env_2$: a lookup \hl{yields a
+\texttt{TrRecursor}} or predates the block.
 \end{theorem}
 \begin{proof}
 \uses{family:add-induct-find, family:indlem-closed, family:add-induct-stages}
 \leanok
-\texttt{AddInduct.find?} splits the lookup; in the block case
-\texttt{recs.forall\_exists\_l} produces the \texttt{TrRecursor}, the telescope-split fields give
-the equality of \texttt{getMajorIdx}, and \texttt{VEnv.addRules\_closed} together with the
-$env_R \le env_2$ monotonicity of \texttt{leR} supply closedness and the translation in $env_2$.
+\lead{Idea} \texttt{AddInduct.find?} splits; the block case gives the \texttt{TrRecursor},
+closedness and translation following from \texttt{addRules\_closed} and \texttt{leR}.
 \end{proof}
 
-\reviewnote{The conclusion is a long existential conjunction rather than a named structure,
-unlike the dual \ref{thm:add-induct-rec-reg} which feeds \ref{struct:iota-rule}. The asymmetry in
-style makes the two halves of the $\iota$ interface harder to compare than they need to be.}
-
-\begin{theorem}[Model recursor is registered in the kernel map]
+\begin{theorem}[Model recursor is registered]
 \label{thm:add-induct-rec-reg}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.rec_reg}
 \leanok
 \uses{struct:add-induct, struct:tr-recursor}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{464}
-Assume $m_1$ well-formed and, additionally, $decl.\mathtt{WF}\ env_1$. For each
-$r \in decl.\mathtt{recs}$ there is a
-kernel \texttt{RecursorVal} $rval$ with
-$m_2.\mathtt{find?}\ r.\mathtt{name} = \mathtt{some}\ (\mathtt{recInfo}\ rval)$, the same major
-index and telescope split, and such that every model rule of $r$ is found, keyed by constructor,
-among $rval$'s rules by \texttt{List.find?}, with the same field count, the constructor's
-parameter count in $m_2$, and a reduct translating the kernel rule's.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} Given $m_1$ well-formed and $decl.\mathtt{WF}\ env_1$: for each
+$r \in decl.\mathtt{recs}$ there is a kernel $rval$ with
+$m_2.\mathtt{find?}\ r.\mathtt{name} = \mathtt{some}\ (\mathtt{recInfo}\ rval)$, same major
+index and telescope split, and every model rule of $r$ found (by constructor) among
+$rval$'s, with matching field count, parameter count in $m_2$, and reduct: \hl{every model
+recursor is registered} under its kernel name.
 \end{theorem}
 \begin{proof}
 \uses{family:add-induct-find, structure:ind-wf, family:add-induct-stages}
 \leanok
-\texttt{recs.forall\_exists\_r} gives the \texttt{TrRecursor}; \texttt{find?\_self} places the
-recursor in $m_2$ under its name; and \texttt{List.find?\_eq\_of\_nodup\_map} turns rule
-membership into a \texttt{List.find?} result, using distinctness of the kernel rules' constructors
-transported from \texttt{VInductDecl.WF.rules\_nodup}. The hypothesis $decl.\mathtt{WF}$ is used
-only for that distinctness.
+\lead{Idea} \texttt{find?\_self} places the recursor in $m_2$; distinctness of kernel
+rules' constructors (\texttt{rules\_nodup}) turns membership into a \texttt{find?} result.
 \end{proof}
 
-\begin{theorem}[Kernel constructor lookup yields its $\iota$ rule]
+\begin{theorem}[Constructor lookup yields its $\iota$ rule]
 \label{thm:add-induct-ctor-find}
 \contrib{iota}
 \lean{Lean4Lean.AddInduct.ctor_find}
 \leanok
 \uses{struct:add-induct, struct:tr-ind-type}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{494}
-Assume $m_1$ well-formed and $decl.\mathtt{WF}\ env_1$. If $m_2$ resolves $ctorName$ to a kernel \texttt{ctorInfo}
-$cval$, then either $m_1$ already did, or there are $t \in decl.\mathtt{types}$ and
-$c \in t.\mathtt{ctors}$ named $ctorName$, and a recursor $r \in decl.\mathtt{recs}$ with a rule
-$ru$ firing on $ctorName$ such that $ru.\mathtt{ctorParams} = cval.\mathtt{numParams}$,
-$ru.\mathtt{nfields} = cval.\mathtt{numFields}$ and $r.\mathtt{numParams} = cval.\mathtt{numParams}$.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} Given $m_1$ well-formed, $decl.\mathtt{WF}\ env_1$, and $m_2$ resolving
+$ctorName$ to kernel $cval$: either $m_1$ already did, or there are
+$t \in decl.\mathtt{types}$, $c \in t.\mathtt{ctors}$ named $ctorName$, and a recursor
+$r \in decl.\mathtt{recs}$ with a rule $ru$ firing on $ctorName$ such that
+$ru.\mathtt{ctorParams} = cval.\mathtt{numParams}$,
+$ru.\mathtt{nfields} = cval.\mathtt{numFields}$, $r.\mathtt{numParams} =
+cval.\mathtt{numParams}$: a kernel constructor lookup \hl{lines up with its $\iota$ rule}.
 \end{theorem}
 \begin{proof}
 \uses{family:add-induct-find, family:ind-wf-corollaries, thm:indlem-rules-ctor-shape}
 \leanok
-\texttt{AddInduct.find?} splits; then the \texttt{types} and \texttt{ctors} components of the
-witness give the \texttt{TrIndType} data, \texttt{VInductDecl.WF.ctors\_have\_rules} produces the
-rule, \texttt{rules\_own\_params} identifies \texttt{ctorParams} with $r.\mathtt{numParams}$, and
-\texttt{rules\_ctor\_shape} together with the arity field of \texttt{TrIndType.ctors} forces
-$ru.\mathtt{nfields} = cval.\mathtt{numFields}$ by \texttt{omega}.
+\lead{Idea} Splits via \texttt{find?}; \texttt{TrIndType} gives the rule
+(\texttt{ctors\_have\_rules}), and its arity conjunct forces the field count by
+\texttt{omega}.
 \end{proof}
-
-\begin{remark}
-The chapter's source history shows this lemma, and the arity conjunct of
-\texttt{TrIndType.ctors} it rests on, entering on \texttt{iota} in the commit
-\texttt{d69ac5d} ``derive \texttt{AddInduct}'s $\iota$ bookkeeping instead of assuming it'', not on
-\texttt{trproj}; per-line blame agrees. It is the only place the arity conjunct of
-\texttt{TrIndType} earns its keep, and its only consumer is
-\ref{thm:tr-env-structure-rec}, that is, the projection work: the $\iota$ pipeline itself never
-calls it.
-\end{remark}
 
 \section{The translation relation}
 
-\begin{definition}[Mutual definition blocks: map insertion and block translation]
+\begin{definition}[Mutual definition blocks]
 \label{def:insert-defs}
 \lean{Lean4Lean.insertDefs, Lean4Lean.TrDefBlock}
 \leanok
 \uses{def:tr-constant}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{522}
-$\mathtt{insertDefs}\ C\ cis$ inserts a list of \texttt{DefinitionVal}s as \texttt{defnInfo}s.
-$\mathtt{TrDefBlock}\ safety\ env\ env'\ cis\ cis'$ pairs each kernel definition with a
-\texttt{VDefVal}, translating headers against the environment before the block and values against
-$env'$, the environment already holding every constant of the block; this mirrors the kernel
-adding the headers as axioms first.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} $\mathtt{insertDefs}\ C\ cis$ inserts \texttt{DefinitionVal}s as
+\texttt{defnInfo}s; $\mathtt{TrDefBlock}\ safety\ env\ env'\ cis\ cis'$ pairs each with a
+\texttt{VDefVal}, headers against $env$, values against $env'$ (headers all present) --
+mirroring the kernel adding headers as axioms first: a \hl{mutual block}, inserted and
+translated together.
 \end{definition}
 
 \begin{definition}[The environment translation relation, \texttt{TrEnv}]
@@ -503,27 +407,31 @@ adding the headers as axioms first.
 \leanok
 \uses{struct:add-induct, def:add-quot-witness, def:insert-defs, def:tr-constant}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{535}
-$\mathtt{TrEnv}'\ safety\ C\ Q\ venv$ is an inductive relation between a kernel constant map $C$,
-a quotient-initialization flag $Q$ and a model environment $venv$, generated by nine steps:
-\texttt{empty}; \texttt{ignore} (a declaration not visible at $safety$, which extends the map
-only); \texttt{axiom}; \texttt{defn} (constant plus defining equation); \texttt{mutualDef};
-\texttt{thm} (whose model constant must be a \texttt{Prop}); \texttt{opaque} (no defining
-equation); \texttt{quot} (an \texttt{AddQuot} witness, from $Q = \mathtt{false}$ to
-$Q = \mathtt{true}$); and \texttt{induct} (an \texttt{AddInduct} witness with $decl.\mathtt{WF}$).
-$\mathtt{TrEnv}\ safety\ env\ venv$ instantiates it at $env.\mathtt{constants}$ and
-$env.\mathtt{quotInit}$.
-\thesisref{axioms.tex, the admissible-declaration judgments of \S\S ``Definitions'', ``Inductive
-types'' and ``Quotient types''}
-\end{definition}
+\thesisref{axioms.tex, the admissible-declaration judgments of \S\S ``Definitions'',
+``Inductive types'' and ``Quotient types''.}
 
-\begin{remark}
-This is a master relation; the \texttt{iota} branch changed exactly one line, the
-\texttt{AddInduct} argument of the \texttt{induct} constructor
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{584}), which now carries $safety$. Since
-\texttt{AddInduct} is \texttt{Type}-valued, that constructor is the one place where
-$\mathtt{TrEnv}'$, itself still a \texttt{Prop}, quantifies over data that no consumer can read
-back out.
-\end{remark}
+\lead{In short} $\mathtt{TrEnv}'\ safety\ C\ Q\ venv$ relates a kernel map, a
+\hl{quotient-initialization flag} $Q$, and a model environment, by nine steps.
+$\mathtt{TrEnv}\ safety\ env\ venv$ instantiates it at $env.\mathtt{constants}$,
+$env.\mathtt{quotInit}$.
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Step & Effect \\
+\midrule
+\texttt{empty} & the empty environment \\
+\texttt{ignore} & invisible at $safety$: extends the map only \\
+\texttt{axiom} & adds the constant \\
+\texttt{defn} & adds the constant plus its defining equation \\
+\texttt{mutualDef} & a mutual block, all headers then all values \\
+\texttt{thm} & adds the constant; its model type must be a \texttt{Prop} \\
+\texttt{opaque} & adds the constant, no defining equation \\
+\texttt{quot} & an \texttt{AddQuot} witness, $Q\!:\mathtt{false}\to\mathtt{true}$ \\
+\texttt{induct} & an \texttt{AddInduct} witness with $decl.\mathtt{WF}$ \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
+\end{definition}
 
 \begin{theorem}[A translated environment is well-formed]
 \label{thm:tr-env-wf}
@@ -532,42 +440,33 @@ back out.
 \leanok
 \uses{ind:tr-env}
 \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{591}
-If $\mathtt{TrEnv}'\ safety\ C\ Q\ venv$ then $venv.\mathtt{WF}$: the model environment is built
-by a legal sequence of \texttt{VEnv} declarations.
+
+\lead{In short} $\mathtt{TrEnv}'\ safety\ C\ Q\ venv$ implies $venv.\mathtt{WF}$: built by a
+\hl{legal sequence} of \texttt{VEnv} declarations.
 \end{theorem}
 \begin{proof}
 \uses{family:add-induct-stages, def:add-quot-witness}
 \leanok
-Induction on the relation; each case appends the corresponding \texttt{VEnv.Decls} step to the
-sequence produced by the induction hypothesis. The \texttt{thm} case adds an \texttt{example}
-step and then an axiom. The \texttt{quot} case uses \texttt{AddQuot.to\_addQuot}; the
-\texttt{induct} case, contributed on \texttt{iota}, uses \texttt{AddInduct.env\_eq}.
+\lead{Idea} Induction on the relation; each case appends the matching \texttt{VEnv.Decls}
+step.
 \end{proof}
 
 \section{Alignment and lookup transfer}
 
-\begin{definition}[Alignment of the kernel map with the model's constants, \texttt{Aligned}]
+\begin{definition}[\texttt{Aligned}: kernel map vs. model constants]
 \label{ind:aligned}
 \contrib{mixed}
 \lean{Lean4Lean.Aligned}
 \leanok
 \uses{def:tr-constant, def:insert-consts, def:venv-addpat}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{12}
-$\mathtt{Aligned}\ safety\ C\ venv$ is the weaker, constants-only companion of $\mathtt{TrEnv}'$:
-it records that $C$ and $venv.\mathtt{constants}$ were built in step, by \texttt{empty},
-\texttt{ignoreConst}, \texttt{const}, \texttt{defeq}, and the two \texttt{iota} additions
-\texttt{pat} (registering a pattern reduction rule changes neither the map nor the constants) and
-\texttt{block} (a whole list of fresh, pairwise distinct constants inserted at once, each
-translating in the environment $venv'$ reached at the end of the block's \texttt{addConst} fold).
-\thesisref{axioms.tex, \S ``Inductive types'' and \S ``The recursor''}
-\end{definition}
+\thesisref{axioms.tex, \S\S ``Inductive types'' and ``The recursor''.}
 
-\begin{remark}
-The \texttt{block} constructor is the crux. A nested mutual block is inserted type by type by the
-kernel, but the types of the block's recursors mention every type former and constructor of the
-block, so it cannot be aligned one constant at a time. The constructor's docstring says exactly
-that. \texttt{pat} is a one-line addition mirroring the new \texttt{VEnv.addPat}.
-\end{remark}
+\lead{In short} The \hl{constants-only} companion of $\mathtt{TrEnv}'$, built by
+\texttt{empty}, \texttt{ignoreConst}, \texttt{const}, \texttt{defeq}, plus \texttt{pat}
+(registration touches neither) and \texttt{block} (fresh, distinct constants inserted at
+once, each translating in the environment reached at the end of the fold).
+\end{definition}
 
 \begin{lemma}[Basic consequences of alignment]
 \label{family:aligned-basic}
@@ -575,19 +474,19 @@ that. \texttt{pat} is a one-line addition mirroring the new \texttt{VEnv.addPat}
 \lean{Lean4Lean.Aligned.map_wf, Lean4Lean.Aligned.find?_iff, Lean4Lean.Aligned.find?, Lean4Lean.Aligned.find?_uniq}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{35}
-\texttt{map\_wf}: the constant map is a well-formed \texttt{SMap}. \texttt{find?\_iff}: a name
-resolves in $C$ to a declaration visible at $safety$ if and only if it resolves in
-$venv.\mathtt{constants}$. \texttt{find?}: such a lookup produces a model constant that translates
-the kernel one. \texttt{find?\_uniq}: a kernel lookup and a model lookup of the same name agree on
-the name and are related by \texttt{TrConstant}.
+
+\lead{In short} The constant map is well-formed (\texttt{map\_wf}); a name resolves in $C$
+visible at $safety$ iff in $venv.\mathtt{constants}$ (\texttt{find?\_iff}), producing a
+model constant translating the kernel one (\texttt{find?}); a kernel and model lookup of
+the same name agree and are \texttt{TrConstant}-related (\texttt{find?\_uniq}) --
+\hl{well-formedness and lookup equivalence}.
 \end{lemma}
 \begin{proof}
 \uses{ind:aligned, family:insert-consts-lemmas, family:indlem-addconst-spec}
 \leanok
-Induction on \texttt{Aligned}. The \texttt{pat} cases are monotonicity one-liners along
-\texttt{VEnv.addPat\_le}; the \texttt{block} cases, which are substantial rather than
-boilerplate, go through \texttt{insertConsts\_find?}, \texttt{VEnv.addConst\_foldlM\_find} and
-\texttt{addConst\_foldlM\_constants\_inv}.
+\lead{Idea} Induction on \texttt{Aligned}: \texttt{pat} is monotonicity along
+\texttt{addPat\_le}; \texttt{block} goes through \texttt{insertConsts\_find?} and the
+\texttt{addConst\_foldlM} lemmas.
 \end{proof}
 
 \begin{lemma}[Quotient initialization preserves alignment]
@@ -595,32 +494,32 @@ boilerplate, go through \texttt{insertConsts\_find?}, \texttt{VEnv.addConst\_fol
 \lean{Lean4Lean.Aligned.addQuot1, Lean4Lean.Aligned.addQuot}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{75}
-A continuation-passing combinator over one \texttt{AddQuot1} step, iterated four times, shows that
-$\mathtt{AddQuot}\ C_1\ C_2\ venv_1\ venv_2$ carries $\mathtt{Aligned}\ safety\ C_1\ venv_1$ to
-$\mathtt{Aligned}\ safety\ C_2\ venv_2$.
+
+\lead{In short} $\mathtt{AddQuot}\ C_1\ C_2\ venv_1\ venv_2$ carries \hl{\texttt{Aligned}
+forward} across the four quotient steps.
 \end{lemma}
 \begin{proof}
 \uses{ind:aligned, def:add-quot-witness}
 \leanok
-Each step is an \texttt{Aligned.const} (at safety \texttt{safe}, lowered by \texttt{sf\_mono});
-the final continuation adds the quotient defining equation by \texttt{Aligned.defeq}.
+\lead{Idea} Each step is an \texttt{Aligned.const}; the final continuation adds the
+defining equation by \texttt{Aligned.defeq}.
 \end{proof}
 
-\begin{lemma}[Registering a block's $\iota$ rules preserves alignment]
+\begin{lemma}[$\iota$-rule registration preserves alignment]
 \label{thm:aligned-add-rules}
 \contrib{iota}
 \lean{Lean4Lean.Aligned.addRules}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{88}
-If $decl.\mathtt{addRules}\ venv = \mathtt{some}\ venv'$ then alignment of $C$ with $venv$
-transfers to $venv'$.
+
+\lead{In short} $decl.\mathtt{addRules}\ venv = \mathtt{some}\ venv'$ transports
+\hl{alignment of $C$} from $venv$ to $venv'$.
 \end{lemma}
 \begin{proof}
 \uses{ind:aligned, family:indlem-foldlm, def:ind-add-rec-rule}
 \leanok
-Two nested \texttt{VEnv.foldlM\_inv} inductions over the recursors and their rules; each
-\texttt{VEnv.addRecRule} step is unfolded to an \texttt{addPat} and closed by
-\texttt{Aligned.pat}, which touches neither the map nor the constants.
+\lead{Idea} Two nested \texttt{VEnv.foldlM\_inv} inductions, over recursors then rules; each
+\texttt{addRecRule} step unfolds to an \texttt{addPat}, closed by \texttt{Aligned.pat}.
 \end{proof}
 
 \begin{theorem}[Adding an inductive block preserves alignment]
@@ -630,22 +529,16 @@ Two nested \texttt{VEnv.foldlM\_inv} inductions over the recursors and their rul
 \leanok
 \uses{ind:aligned, struct:add-induct}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{102}
-From an $\mathtt{AddInduct}\ safety\ C_1\ venv_1\ decl\ C_2\ venv_2$ witness and
-$\mathtt{Aligned}\ safety\ C_1\ venv_1$ one gets $\mathtt{Aligned}\ safety\ C_2\ venv_2$: the
-three constant stages form a single \texttt{Aligned.block} step and the rule stage is
-\ref{thm:aligned-add-rules}.
-\thesisref{axioms.tex, \S ``Inductive types'' and \S ``The recursor''}
+\thesisref{axioms.tex, \S\S ``Inductive types'' and ``The recursor''.}
+
+\lead{In short} An \texttt{AddInduct} witness plus alignment of $C_1$ with $venv_1$ gives
+\hl{alignment of $C_2$} with $venv_2$.
 \end{theorem}
 \begin{proof}
 \uses{thm:aligned-add-rules, family:indlem-addconst-spec, thm:indlem-addtypesctorsrecs-eq, family:add-induct-names, family:add-induct-stages}
 \leanok
-Build the kind-wise matching of the kernel constants with \texttt{VInductDecl.consts}, all
-translated in $env_R$ (monotonicity moves each from the stage where it was checked); permute it
-into the kernel's insertion order with \texttt{List.Forall}$_2$\texttt{.perm\_left}; and show the
-corresponding \texttt{addConst} fold succeeds by \texttt{VEnv.addConst\_foldlM\_perm} and
-\texttt{VInductDecl.addTypesCtorsRecs\_eq}, an \texttt{addConst} fold being insensitive to order.
-This replaces master's one-line \texttt{nomatch}, and isolates the whole kernel-order versus
-model-order difficulty in one permutation argument.
+\lead{Idea} The three constant stages form one \texttt{Aligned.block} step; permute into
+the kernel's insertion order, since an \texttt{addConst} fold is order-insensitive.
 \end{proof}
 
 \begin{lemma}[Mutual blocks preserve alignment]
@@ -653,14 +546,14 @@ model-order difficulty in one permutation argument.
 \lean{Lean4Lean.Aligned.addDefEqs, Lean4Lean.Aligned.insertDefs}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{128}
-Adding a list of defining equations leaves alignment untouched; inserting a block of definitions
-whose headers translate keeps the map aligned with the extended environment.
+
+\lead{In short} A defining-equation list, and a header-translated \hl{definition block},
+each keep alignment.
 \end{lemma}
 \begin{proof}
 \uses{ind:aligned, def:insert-defs}
 \leanok
-Both by induction on the block, the second threading freshness through the head insertion and
-applying \texttt{Aligned.const} at each member.
+\lead{Idea} Both by induction on the block.
 \end{proof}
 
 \begin{theorem}[A translated environment is aligned]
@@ -670,72 +563,64 @@ applying \texttt{Aligned.const} at each member.
 \leanok
 \uses{ind:tr-env, ind:aligned}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{162}
-Every $\mathtt{TrEnv}'$ derivation yields an \texttt{Aligned} derivation for the same map and
-environment; hence the kernel constant map of a translated environment is a well-formed
-\texttt{SMap}.
+
+\lead{In short} Every $\mathtt{TrEnv}'$ derivation yields an \hl{\texttt{Aligned}}
+derivation; hence its kernel map is a well-formed \texttt{SMap}.
 \end{theorem}
 \begin{proof}
 \uses{thm:aligned-add-induct, family:aligned-quot, family:aligned-defs, family:aligned-basic}
 \leanok
-Induction on $\mathtt{TrEnv}'$, one constructor per case. The \texttt{induct} case, contributed on
-\texttt{iota}, is \ref{thm:aligned-add-induct} applied to the induction hypothesis.
+\lead{Idea} Induction on $\mathtt{TrEnv}'$, one constructor per case; \texttt{induct} is
+\ref{thm:aligned-add-induct} applied to the induction hypothesis.
 \end{proof}
 
-\begin{lemma}[Pulling a lookup back across quotient initialization]
+\begin{lemma}[Pulling a lookup back]
 \label{family:quot-pullbacks}
 \contrib{mixed}
 \lean{Lean4Lean.pull_insert, Lean4Lean.AddQuot1.pull, Lean4Lean.AddQuot.pull}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{184}
-\texttt{pull\_insert} pulls a lookup back across one insertion of a different constant.
-\texttt{AddQuot1.pull} is the corresponding one-step combinator, and \texttt{AddQuot.pull}
-iterates it four times: a constant that is not a \texttt{quotInfo} and is resolvable after
-quotient initialization was already resolvable before.
+
+\lead{In short} A lookup that is not the inserted constant \hl{survives} the insertion
+(\texttt{pull\_insert}), hence four in a row (\texttt{AddQuot1.pull}, iterated as
+\texttt{AddQuot.pull}).
 \end{lemma}
 \begin{proof}
 \uses{def:add-quot-witness}
 \leanok
-\texttt{pull\_insert} rewrites by \texttt{SMap.find?\_insert} and discards the equal-name branch
-by the assumed difference of the two constants; the iteration is the same combinator four times.
+\lead{Idea} Rewrite by \texttt{SMap.find?\_insert}, discard the equal-name branch by the
+assumed difference; iterate four times.
 \end{proof}
 
-\begin{remark}
-Both branches contributed here, but not equally: \texttt{AddQuot1.pull} and \texttt{AddQuot.pull}
-were introduced with the $\iota$ work and then generalised on \texttt{trproj}, which also added
-\texttt{pull\_insert} for \ref{thm:tr-env-structure-rec}; per-line blame is 18 lines
-\texttt{trproj} to 6 \texttt{iota}. The family is needed because
-\ref{thm:tr-env-pats-iota} and \ref{thm:tr-env-structure-rec} induct over $\mathtt{TrEnv}'$ and
-must survive the \texttt{quot} step.
-\end{remark}
-
-\begin{lemma}[A block of definitions preserves map well-formedness]
+\begin{lemma}[A definition block preserves well-formedness]
 \label{thm:insert-defs-wf}
 \lean{Lean4Lean.insertDefs_wf}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{211}
-Inserting a list of \texttt{DefinitionVal}s with fresh, pairwise distinct names into a well-formed
-map yields a well-formed map.
+
+\lead{In short} Fresh, pairwise distinct names keep the map \hl{well-formed}.
 \end{lemma}
 \begin{proof}
 \uses{def:insert-defs}
 \leanok
-Induction on the block, reproving freshness of the tail after the head insertion. This is master
-code relocated here from \texttt{Extension.lean} by the \texttt{iota} refactor, so the per-line
-blame marks it as contributed.
+\lead{Idea} Induction on the block, reproving freshness of the tail after the head
+insertion.
 \end{proof}
 
-\begin{lemma}[\texttt{Aligned} lookup lemmas against the kernel environment]
+\begin{lemma}[\texttt{Aligned} lookups, at \texttt{TrEnv}]
 \label{family:tr-env-find}
 \lean{Lean4Lean.TrEnv.find?_iff, Lean4Lean.TrEnv.find?, Lean4Lean.TrEnv.find?_uniq}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{284}
-The three \texttt{Aligned} lookup lemmas restated for $\mathtt{TrEnv}\ safety\ env\ venv$.
+
+\lead{In short} The three \texttt{Aligned} lookup lemmas, restated for
+$\mathtt{TrEnv}\ safety\ env\ venv$.
 \end{lemma}
 \begin{proof}
 \uses{family:aligned-basic, thm:tr-env-aligned}
 \leanok
-Each converts \texttt{Environment.find?}, which is \texttt{SMap.find?'}, into \texttt{SMap.find?}
-using \texttt{map\_wf}, and then applies the \texttt{Aligned} version.
+\lead{Idea} Convert \texttt{Environment.find?} to \texttt{SMap.find?} via \texttt{map\_wf},
+then apply the \texttt{Aligned} version.
 \end{proof}
 
 \begin{lemma}[Lookups in a mutual-definition block]
@@ -743,58 +628,54 @@ using \texttt{map\_wf}, and then applies the \texttt{Aligned} version.
 \lean{Lean4Lean.VEnv.addDefEqs_self, Lean4Lean.insertDefs_find?}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{304}
-Every member of a block has its defining equation in the extended model environment; and a lookup
-after \texttt{insertDefs} either predates the block or is one of the block's definitions.
+
+\lead{In short} Every block member's defining equation is present after insertion; a lookup
+after \hl{predates or is} the block.
 \end{lemma}
 \begin{proof}
 \uses{def:insert-defs}
 \leanok
-Both by induction on the block.
+\lead{Idea} Both by induction on the block.
 \end{proof}
 
-\begin{lemma}[Forward transport of a lookup across fresh insertions]
+\begin{lemma}[Forward transport of a lookup]
 \label{family:forward-find-transport}
 \contrib{iota}
 \lean{Lean4Lean.insertDefs_find?_mono, Lean4Lean.AddQuot1.find?_mono, Lean4Lean.AddQuot.find?_mono}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{412}
-A constant already resolvable stays resolvable to the same value across a block of definitions and
-across quotient initialization.
+
+\lead{In short} A resolvable constant \hl{stays resolvable}, same value, across a
+definition block or quotient initialization.
 \end{lemma}
 \begin{proof}
 \uses{def:insert-defs, def:add-quot-witness}
 \leanok
-\texttt{SMap.insertList\_find?\_mono} for the definition block, and
-\texttt{SMap.find?\_insert\_of\_fresh} iterated four times through an \texttt{AddQuot1}
-combinator. These are the forward duals of \ref{family:quot-pullbacks}; both directions are needed
-because the induction hypotheses of \ref{thm:tr-env-pats-iota} and \ref{thm:tr-env-structure-rec}
-carry lookups in both directions.
+\lead{Idea} \texttt{insertList\_find?\_mono} for the block, freshness iterated four times
+for quotients: the forward duals of \ref{family:quot-pullbacks}.
 \end{proof}
 
 \section{Soundness of delta reduction}
 
-\begin{theorem}[$\delta$-reduction is sound in a translated environment]
+\begin{theorem}[$\delta$-reduction is sound]
 \label{thm:tr-env-of-value}
 \contrib{mixed}
 \lean{Lean4Lean.TrEnv'.of_value, Lean4Lean.TrEnv.of_value}
 \leanok
 \uses{ind:tr-env}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{333}
-If a name resolves in a translated environment to a declaration $ci$ visible at $safety$ whose
-$\delta$-value is $v$, then $v$ translates to something definitionally equal to the constant
-itself: $\mathtt{TrExpr}\ venv\ ci.\mathtt{levelParams}\ []\ v\ (\mathtt{const}\ ci.\mathtt{name}\ \overline{\ell})$
-with $\overline{\ell}$ the level parameters
-of $ci$.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} If a translated environment resolves a name to $ci$, visible at $safety$,
+with $\delta$-value $v$, then $v$ \hl{translates to something equal} to the constant
+itself: $\mathtt{TrExpr}\ venv\ ci.\mathtt{levelParams}\ []\ v\ (\mathtt{const}\
+ci.\mathtt{name}\ \overline{\ell})$, $\overline{\ell}$ its level parameters.
 \end{theorem}
 \begin{proof}
 \uses{family:add-induct-find, family:insert-defs-lookup}
 \leanok
-Induction on $\mathtt{TrEnv}'$. The \texttt{defn} and \texttt{mutualDef} cases apply
-\texttt{VEnv.IsDefEq.extra0} to the registered defining equation; the \texttt{thm} case uses proof
-irrelevance; the \texttt{axiom} and \texttt{opaque} cases are vacuous because those declarations
-have no value; and the \texttt{induct} case, contributed on \texttt{iota}, is discharged by
-\texttt{AddInduct.value\_find}, since the block's constants carry no $\delta$-value.
+\lead{Idea} Induction on $\mathtt{TrEnv}'$: the value cases unfold the registered
+equation or proof irrelevance; \texttt{induct} uses \texttt{AddInduct.value\_find}.
 \end{proof}
 
 \section{Structure-likeness}
@@ -805,40 +686,37 @@ have no value; and the \texttt{induct} case, contributed on \texttt{iota}, is di
 \lean{Lean4Lean.Aligned.constants_pull}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{439}
-If $C$ is aligned with $env$, $env \le env'$, and a name $c$ resolves in $C$ to a declaration
-visible at $safety$, then a model constant for $c$ in $env'$ was already the model constant of
-$env$.
+
+\lead{In short} If $C$ is aligned with $env$, $env \le env'$, and $c$ resolves in $C$
+visible at $safety$, then $c$'s model constant in $env'$ is already $env$'s: it
+\hl{survives into any later environment} unchanged.
 \end{lemma}
 \begin{proof}
 \uses{family:aligned-basic}
 \leanok
-\texttt{find?\_iff} produces a model constant in $env$, monotonicity transports it into $env'$,
-and injectivity of \texttt{some} identifies the two. Small but load-bearing: it is what lets
-\ref{thm:tr-env-ctor-arity} read a constructor's arity off the environment stage where the
-constructor was introduced rather than the final one.
+\lead{Idea} \texttt{find?\_iff} gives the constant in $env$, monotonicity transports it,
+injectivity of \texttt{some} identifies the two.
 \end{proof}
 
-\begin{theorem}[A constructor's model type has arity $numParams + numFields$]
+\begin{theorem}[A constructor's arity]
 \label{thm:tr-env-ctor-arity}
 \contrib{trproj}
 \lean{Lean4Lean.TrEnv'.ctor_arity, Lean4Lean.TrEnv.ctor_arity}
 \leanok
 \uses{ind:tr-env, struct:tr-ind-type, def:pi-telescope}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{449}
-If a translated environment resolves $c$ to a kernel \texttt{ctorInfo} $cval$ and the model
-resolves $c$ to $ci$, then
-$ci.\mathtt{type}.\mathtt{piArity} = cval.\mathtt{numParams} + cval.\mathtt{numFields}$.
-\thesisref{axioms.tex, \S ``Inductive types''}
+\thesisref{axioms.tex, \S ``Inductive types''.}
+
+\lead{In short} If a translated environment resolves $c$ to a kernel $cval$ and the model
+resolves $c$ to $ci$, then $ci.\mathtt{type}.\mathtt{piArity} = cval.\mathtt{numParams} +
+cval.\mathtt{numFields}$: a constructor's $\Pi$-arity is \hl{parameters plus fields}.
 \end{theorem}
 \begin{proof}
 \uses{thm:aligned-constants-pull, family:add-induct-find, family:quot-pullbacks, family:insert-defs-lookup}
 \leanok
-Visibility of $cval$ at $safety$ is recovered from the model lookup by
-\texttt{Aligned.find?\_iff}. Then induction on $\mathtt{TrEnv}'$: every non-\texttt{induct} step
-pulls the kernel lookup back through its insertion and the model lookup back with
-\ref{thm:aligned-constants-pull}; the \texttt{induct} step, in the block case, reads the arity off
-the \texttt{ctors} field of \texttt{TrIndType} after identifying the model constant through
-\texttt{VEnv.addCtors\_find}.
+\lead{Idea} Induct on $\mathtt{TrEnv}'$, pulling both lookups back through each
+non-\texttt{induct} insertion; in the block case, read the arity off
+\texttt{TrIndType}'s \texttt{ctors} field.
 \end{proof}
 
 \begin{lemma}[\texttt{mkRecName} is injective]
@@ -847,11 +725,13 @@ the \texttt{ctors} field of \texttt{TrIndType} after identifying the model const
 \lean{Lean4Lean.mkRecName_inj}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{513}
-$\mathtt{mkRecName}\ a = \mathtt{mkRecName}\ b$ implies $a = b$.
+
+\lead{In short} $\mathtt{mkRecName}\ a = \mathtt{mkRecName}\ b$ implies $a = b$.
 \end{lemma}
 \begin{proof}
 \leanok
-\texttt{injection}: \texttt{mkRecName} appends the fixed component \texttt{rec}.
+\lead{Idea} \texttt{injection}: \texttt{mkRecName} appends the fixed component
+\texttt{rec}.
 \end{proof}
 
 \begin{theorem}[Structure-likeness: the recursor's telescope split]
@@ -861,141 +741,112 @@ $\mathtt{mkRecName}\ a = \mathtt{mkRecName}\ b$ implies $a = b$.
 \leanok
 \uses{ind:tr-env, struct:tr-ind-type, struct:tr-recursor}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{523}
-Let a translated environment resolve $S$ to an \texttt{inductInfo} $ival$ and
-$\mathtt{mkRecName}\ S$ to a \texttt{recInfo} $rval$, both visible at $safety$, and assume the
-kernel's own structure tests $ival.\mathtt{all} = [S]$, $ival.\mathtt{ctors} = [ctorName]$ and
-$ival.\mathtt{numIndices} = 0$. Then $rval.\mathtt{numParams} = ival.\mathtt{numParams}$,
-$rval.\mathtt{numMotives} = 1$, $rval.\mathtt{numMinors} = 1$, $rval.\mathtt{numIndices} = 0$, and
-$ctorName$ resolves to a \texttt{ctorInfo} $cval$ with
-$cval.\mathtt{numParams} = ival.\mathtt{numParams}$.
-\thesisref{axioms.tex, \S ``The recursor''}
+\thesisref{axioms.tex, \S ``The recursor''.}
+
+\lead{In short} Given a translated environment resolving $S$ to $ival$ and
+$\mathtt{mkRecName}\ S$ to $rval$, both visible at $safety$, with
+$ival.\mathtt{all} = [S]$, $ival.\mathtt{ctors} = [ctorName]$,
+$ival.\mathtt{numIndices} = 0$: then $rval.\mathtt{numParams} = ival.\mathtt{numParams}$,
+$rval.\mathtt{numMotives} = rval.\mathtt{numMinors} = 1$, $rval.\mathtt{numIndices} = 0$,
+and $ctorName$ resolves to $cval$ with $cval.\mathtt{numParams} = ival.\mathtt{numParams}$
+-- the kernel's own \hl{structure tests} force the telescope split.
+\lead{Caveat} Does not assert $cval$ visible at $safety$; rests on the naming convention
+$\mathtt{mkRecName}\ S$, not a structural link to the type former.
 \end{theorem}
 \begin{proof}
 \uses{thm:add-induct-ctor-find, family:quot-pullbacks, family:forward-find-transport, thm:mk-rec-name-inj, structure:ind-wf, family:add-induct-find, family:insert-defs-lookup}
 \leanok
-Induction on $\mathtt{TrEnv}'$, about 120 lines. Every non-\texttt{induct} step pulls both lookups back
-and pushes the constructor lookup forward. The \texttt{induct} step splits four ways: if neither
-constant comes from the block, apply the induction hypothesis; if exactly one does, the naming
-field \texttt{TrRecursor.name\_major} together with \texttt{VInductDecl.WF.recs\_over\_block} or
-\texttt{types\_have\_rec} produces a name that the freshness field of \texttt{AddInduct} says
-cannot already resolve, a contradiction; if both do, the counts come from
-\texttt{VInductDecl.WF.rec\_counts} and \texttt{rec\_params} together with the \texttt{all},
-\texttt{numParams} and \texttt{numIndices} fields of \texttt{TrIndType}, and
-\ref{thm:add-induct-ctor-find} supplies the constructor's parameter count.
+\lead{Idea} Induction on $\mathtt{TrEnv}'$; \texttt{induct} splits by how many constants
+come from the block, using \texttt{name\_major}.
 \end{proof}
-
-\reviewnote{Two caveats. The conclusion does not assert that the returned $cval$ is visible at
-$safety$, so a caller that needs a \texttt{TrConstant} for it must re-derive visibility. And the
-argument relies on the naming convention $\mathtt{mkRecName}\ S$ rather than on a structural link,
-through the \texttt{TrRecursor.name\_major} field: a syntactic assumption about the kernel's
-\texttt{AddInductive} that is asserted, not proved.}
 
 \section{The iota-rule interface}
 
-\begin{theorem}[Every kernel recursor rule is a registered $\iota$ rule]
+\begin{theorem}[Every recursor rule is registered]
 \label{thm:tr-env-pats-iota}
 \contrib{iota}
 \lean{Lean4Lean.TrEnv'.pats_iota', Lean4Lean.TrEnv.pats_iota'}
 \leanok
 \uses{ind:tr-env, def:pattern-iota-rhs, ind:trexprs}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{674}
-If a translated environment resolves $recName$ to a \texttt{recInfo} $rval$ visible at $safety$
-and $rval.\mathtt{rules}.\mathtt{find?}\ (\cdot.\mathtt{ctor} = cName)$ is $rule$, then there are a
-constructor $cval$ resolvable under $cName$ and a closed model term $rhs$ translating
-$rule.\mathtt{rhs}$ such that $venv.\mathtt{pats}$ contains the pattern
-$\mathtt{SimplePattern.iota}\ recName\ M\ cName\ N$, with $M$ the kernel telescope split
-$\mathtt{numParams} + \mathtt{numMotives} + \mathtt{numMinors} + \mathtt{numIndices}$ and
-$N = cval.\mathtt{numParams} + rule.\mathtt{nfields}$, registered with reduct
-$\mathtt{SimplePattern.iotaRHS}$ at those counts over $rhs$ and the trivial check.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} Given a translated environment resolving $recName$ to $rval$, visible at
+$safety$, with a rule $rule$ of $rval$ firing on $cName$: there are $cval$ resolvable
+under $cName$ and a closed $rhs$ translating $rule.\mathtt{rhs}$ such that
+$venv.\mathtt{pats}$ contains $\mathtt{SimplePattern.iota}\ recName\ M\ cName\ N$ ($M$ the
+kernel telescope split, $N = cval.\mathtt{numParams} + rule.\mathtt{nfields}$), registered
+with reduct $\mathtt{iotaRHS}$ at those counts over $rhs$: a kernel rule \hl{is a
+registered pattern} of the model.
 \end{theorem}
 \begin{proof}
 \uses{thm:add-induct-rec-find, family:indlem-pat-registration, family:quot-pullbacks, family:forward-find-transport, family:add-induct-find}
 \leanok
-Induction on $\mathtt{TrEnv}'$. Every non-\texttt{induct} step transports the registration along
-\texttt{VEnv.LE.pats} and the two lookups along the insertion lemmas, the \texttt{ignore} case
-using the visibility hypothesis to rule out the inserted name. The \texttt{induct} step uses
-\ref{thm:add-induct-rec-find} to resolve the recursor against the block and closes with
-\texttt{VEnv.addInduct\_pat}. The \texttt{TrEnv} version additionally converts \texttt{SMap.find?}
-into the environment's own \texttt{find?}.
+\lead{Idea} Induction on $\mathtt{TrEnv}'$, transporting the registration along the
+insertion lemmas; \texttt{induct} uses \ref{thm:add-induct-rec-find} and
+\texttt{VEnv.addInduct\_pat}.
 \end{proof}
 
-\reviewnote{The prime in \texttt{pats\_iota'} is a leftover of an earlier unprimed version that no
-longer exists.}
-
-\begin{definition}[The kernel data behind one registered $\iota$ pattern, \texttt{IotaRule}]
+\begin{definition}[Kernel data behind one $\iota$ pattern, \texttt{IotaRule}]
 \label{struct:iota-rule}
 \contrib{trproj}
 \lean{Lean4Lean.TrEnv'.IotaRule}
 \leanok
 \uses{def:pattern-iota-rhs, def:ind-rec-shape, def:ind-rule-shape, def:ind-minor-for, ind:trexprs}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{782}
-$\mathtt{IotaRule}\ C\ venv\ recName\ cName\ M\ N\ r\ rval\ rule\ cval\ rhs\ hc\ rci$ bundles
-eleven fields: $recName$ resolves in $C$ to \texttt{recInfo} $rval$, whose rule for $cName$ is
-$rule$; $cName$ resolves to \texttt{ctorInfo} $cval$; $M$ is the kernel telescope split and
-$N = cval.\mathtt{numParams} + rule.\mathtt{nfields}$; $rhs$ translates $rule.\mathtt{rhs}$; the
-registered entry $r$ is \texttt{iotaRHS} at those counts, stated with \texttt{HEq} because the
-type of $r.1$ mentions $M$ and $N$, with the trivial check; and on the model side $recName$ is a
-registered constant $rci$ whose type has \texttt{RecShape} at that split and whose $j$-th minor
-premise is a \texttt{MinorFor} $cName$ with at least $rule.\mathtt{nfields}$ binders, the reduct
-having \texttt{RuleShape} at the matching counts.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
-\reviewnote{The \texttt{HEq} field is forced by the dependent \texttt{Pattern.RHS} type and is
-honestly documented, but it makes the structure awkward to consume: the only consumer,
-\ref{thm:tr-env-proj-defeq}, has to \texttt{cases eq\_of\_heq} it, and uses nine of the eleven
-fields (all but \texttt{tr} and \texttt{rec\_shape}).}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} Ties one registered pattern back to \hl{the kernel rule it came from}:
+kernel side, $recName$ resolves to $rval$ whose rule for $cName$ is $rule$, $cName$
+resolves to
+$cval$, $M$ the kernel telescope split, $N = cval.\mathtt{numParams} +
+rule.\mathtt{nfields}$, $rhs$ translating $rule.\mathtt{rhs}$; registration, $r$ is
+\texttt{iotaRHS} at those counts (via \texttt{HEq}, since $r.1$'s type mentions $M,N$);
+model side, $recName$ is a registered $rci$ with \texttt{RecShape} at that split, its
+$j$-th minor premise a \texttt{MinorFor} $cName$ with $\ge rule.\mathtt{nfields}$ binders,
+reduct of matching \texttt{RuleShape}.
 \end{definition}
 
-\begin{lemma}[Transport of an \texttt{IotaRule} along a non-\texttt{induct} step]
+\begin{lemma}[\texttt{IotaRule} transport along a step]
 \label{thm:iota-rule-step}
 \contrib{trproj}
 \lean{Lean4Lean.TrEnv'.IotaRule.step}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{807}
-Given $venv \le venv'$ and a map embedding that preserves lookups, an \texttt{IotaRule} over
-$(C, venv)$ is one over $(C', venv')$: the kernel data is unchanged, only the translation and the
-model constant lookup move.
+
+\lead{In short} Given $venv \le venv'$ and a map embedding preserving lookups, an
+\texttt{IotaRule} over $(C, venv)$ is one over $(C', venv')$, the kernel data unchanged --
+it \hl{survives} a model/map extension.
 \end{lemma}
 \begin{proof}
 \uses{struct:iota-rule, thm:trexprs-mono}
 \leanok
-Field by field, using \texttt{TrExprS.mono} for the translation and \texttt{VEnv.LE.constants}
-for the recursor's model constant.
+\lead{Idea} Field by field: \texttt{TrExprS.mono} for the translation,
+\texttt{VEnv.LE.constants} for the recursor's model constant.
 \end{proof}
 
-\begin{theorem}[Inverse of \texttt{pats\_iota'}: a registered pattern comes from a kernel rule]
+\begin{theorem}[Inverse of \texttt{pats\_iota'}]
 \label{thm:pats-iota-inv-shape}
 \contrib{trproj}
 \lean{Lean4Lean.TrEnv'.pats_iota_inv_shape}
 \leanok
 \uses{struct:iota-rule, ind:tr-env}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{826}
-If $venv.\mathtt{pats}$ contains
-$(\mathtt{SimplePattern.iota}\ recName\ M\ cName\ N).\mathtt{toPattern}$ with entry $r$ in a
-translated environment, then there exist $rval$, $rule$, $cval$, $rhs$, its closedness proof and
-$rci$ with $\mathtt{IotaRule}\ C\ venv\ recName\ cName\ M\ N\ r\ rval\ rule\ cval\ rhs\ hc\ rci$.
-In particular $M$ and $N$ are forced to be the kernel telescope split and
-$cval.\mathtt{numParams} + rule.\mathtt{nfields}$.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} If a translated environment's $venv.\mathtt{pats}$ contains
+$(\mathtt{SimplePattern.iota}\ recName\ M\ cName\ N).\mathtt{toPattern}$ with entry $r$,
+then there exist $rval$, $rule$, $cval$, $rhs$ (with closedness) and $rci$ with
+$\mathtt{IotaRule}\ C\ venv\ recName\ cName\ M\ N\ r\ rval\ rule\ cval\ rhs\ hc\ rci$, $M,N$
+forced to be the kernel telescope split and $cval.\mathtt{numParams} +
+rule.\mathtt{nfields}$: a registered pattern \hl{traces back to a kernel rule}.
 \end{theorem}
 \begin{proof}
 \uses{thm:iota-rule-step, thm:add-induct-rec-reg, family:indlem-pats-origin, thm:indlem-iota-topattern-inj, family:indlem-addinduct-consts, family:add-induct-stages, family:quot-pullbacks, family:forward-find-transport, structure:ind-wf}
 \leanok
-Induction on $\mathtt{TrEnv}'$. Every non-\texttt{induct} step rewrites the \texttt{pats} field
-away (\texttt{VEnv.addConst\_pats}, \texttt{addDefEq\_pats}, \texttt{addConsts\_pats},
-\texttt{addQuot\_pats}) and applies \ref{thm:iota-rule-step}. The \texttt{induct} step uses
-\texttt{VEnv.addInduct\_pats\_origin'} to decide whether the entry is old or new;
-in the new case \texttt{VEnv.iota\_toPattern\_inj} recovers the key,
-\ref{thm:add-induct-rec-reg} supplies the kernel side, and
-\texttt{VInductDecl.WF.rec\_shape} and \texttt{rule\_shape} supply the model-side shape.
+\lead{Idea} Induction on $\mathtt{TrEnv}'$; \texttt{induct} decides old vs. new entry, the
+new case supplying both sides' shape via \ref{thm:add-induct-rec-reg}.
 \end{proof}
-
-\begin{remark}
-This is the hardest theorem of the \texttt{trproj} branch in this group and the reason
-\ref{thm:add-induct-rec-reg} exists. The statement is the right one:
-\ref{thm:tr-env-proj-defeq} needs to know that a pattern it found through the \texttt{pat} field
-of \texttt{TrProjCtor} really is the recursor's rule.
-\end{remark}
 
 \begin{lemma}[\texttt{pats\_iota\_inv\_shape} at the kernel environment level]
 \label{thm:tr-env-pats-iota-inv-shape}
@@ -1003,76 +854,65 @@ of \texttt{TrProjCtor} really is the recursor's rule.
 \lean{Lean4Lean.TrEnv.pats_iota_inv_shape}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{903}
-The same statement with $C$ instantiated to $env.\mathtt{constants}$.
+
+\lead{In short} The same statement \hl{instantiated} at $C = env.\mathtt{constants}$.
+\lead{Caveat} Unlike its sibling \ref{thm:tr-env-pats-iota}, it does not convert the
+\texttt{SMap.find?} lookups of \texttt{IotaRule} to \texttt{Environment.find?}; consumers
+convert by hand.
 \end{lemma}
 \begin{proof}
 \uses{thm:pats-iota-inv-shape}
 \leanok
-Literally the application of \ref{thm:pats-iota-inv-shape}: the two statements are definitionally
-equal.
+\lead{Idea} Direct application of \ref{thm:pats-iota-inv-shape}: the two statements are
+definitionally equal.
 \end{proof}
 
-\reviewnote{Near-redundant. Unlike its sibling \ref{thm:tr-env-pats-iota}, it does not convert the
-\texttt{SMap.find?} lookups of \texttt{IotaRule} into \texttt{Environment.find?}, so it adds
-nothing over the primed version, and \ref{thm:tr-env-proj-defeq} still performs those conversions
-by hand (\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1060} and
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1072}). Its docstring claims the conversion it
-does not perform.}
-
-\begin{lemma}[A registered pattern fires on a well-typed redex]
+\begin{lemma}[A registered pattern fires]
 \label{thm:tr-env-iota-defeq}
 \contrib{iota}
 \lean{Lean4Lean.TrEnv.iota_defeq}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{917}
-If $venv.\mathtt{pats}\ p\ r$, a term $e$ matches $p$ with substitutions $m_1$, $m_2$, $e$ has type
-$A$, and the check component of $r$ is realized by side conditions that are themselves
-definitional equalities, then $e$ is definitionally equal (as an \texttt{IsDefEqU}) to the reduct
-$r.1.\mathtt{apply}\ m_1\ m_2$.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} Given $venv.\mathtt{pats}\ p\ r$, $e$ matching $p$ with substitutions
+$m_1,m_2$, $e:A$, and $r$'s check realized by definitional-equality side conditions: $e$
+is definitionally equal (\texttt{IsDefEqU}) to $r.1.\mathtt{apply}\ m_1\ m_2$ -- a matched,
+well-typed pattern reduces \hl{by definitional equality}.
 \end{lemma}
 \begin{proof}
 \uses{rule:isdefeq-pat}
 \leanok
-Three lines: package \texttt{VEnv.IsDefEq.pat} at the type $A$ into \texttt{IsDefEqU}.
+\lead{Idea} Package \texttt{VEnv.IsDefEq.pat} at type $A$ into \texttt{IsDefEqU}.
 \end{proof}
 
-\reviewnote{The name \texttt{TrEnv.iota\_defeq} places the lemma in the \texttt{TrEnv} namespace
-although no \texttt{TrEnv} hypothesis appears in it; it is pure theory-layer material and belongs
-next to \texttt{VEnv.IsDefEq.pat}.}
-
-\begin{theorem}[The $\iota$ step of a translated environment]
+\begin{theorem}[The $\iota$ step]
 \label{thm:tr-env-iota-rec}
 \contrib{iota}
 \lean{Lean4Lean.TrEnv.iota_rec}
 \leanok
 \uses{ind:tr-env, def:pattern-iota-rhs}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{929}
-If a translated environment resolves $recName$ to a visible \texttt{recInfo} $rval$ with a rule for
-$cName$, resolves $cName$ to \texttt{ctorInfo} $cval$, and a term $e$ of type $A$ matches the
-$\iota$ pattern at the kernel's telescope split and at
-$cval.\mathtt{numParams} + rule.\mathtt{nfields}$, then there is a closed $rhs$ translating
-$rule.\mathtt{rhs}$ with $e$ definitionally equal to the \texttt{iotaRHS} reduct applied to the
-match.
-\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''}
+\thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
+
+\lead{In short} Given a translated environment resolving $recName$ to a visible $rval$
+with a rule for $cName$, resolving $cName$ to $cval$, and $e:A$ matching the $\iota$
+pattern at the kernel's telescope split and $cval.\mathtt{numParams} +
+rule.\mathtt{nfields}$: there is a closed $rhs$ translating $rule.\mathtt{rhs}$ with $e$
+definitionally equal to the \texttt{iotaRHS} reduct applied -- a term matching the $\iota$
+pattern \hl{reduces} to the recursor's rule.
 \end{theorem}
 \begin{proof}
 \uses{thm:tr-env-pats-iota, thm:tr-env-iota-defeq}
 \leanok
-Compose \ref{thm:tr-env-pats-iota} with \ref{thm:tr-env-iota-defeq} at the trivial check, after
-identifying the constructor returned by the former with the one given.
+\lead{Idea} Compose \ref{thm:tr-env-pats-iota} with \ref{thm:tr-env-iota-defeq} at the
+trivial check, identifying the two constructors.
 \end{proof}
-
 \begin{remark}
-This is the single point where the $\iota$ work of this group is consumed by the kernel model:
-\texttt{inductiveReduceRecCore.WF} (declared at \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17},
-calling \ref{thm:tr-env-iota-rec} at \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{119}). That
-theorem has no \texttt{sorry} of its own, though it inherits \texttt{sorryAx} through the strong
-system. The enclosing \texttt{reduceRecursor.WF}
-(\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{147}, \texttt{sorry} at line 149) is not proved,
-so the chain to \texttt{whnf} is not closed.
+\lead{Caveat} The only point where this interface reaches the kernel model:
+\texttt{inductiveReduceRecCore.WF} has no \texttt{sorry} of its own, but the enclosing
+\texttt{reduceRecursor.WF} is \texttt{sorry}, so the chain to \texttt{whnf} does not close.
 \end{remark}
-
 \section{Beta telescopes and projection reduction}
 
 \begin{lemma}[$\beta$-reduction of a saturated $\lambda$-telescope]
@@ -1081,34 +921,22 @@ so the chain to \texttt{whnf} is not closed.
 \lean{Lean4Lean.VEnv.HasType.mkApps_inv_head, Lean4Lean.VEnv.IsDefEqU.beta_app, Lean4Lean.VEnv.IsDefEqU.mkApps_congr, Lean4Lean.VEnv.IsDefEqU.betaN}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{959}
-For a well-formed environment and a well-typed application spine: the head of the spine is
-well-typed (\texttt{mkApps\_inv\_head}); a $\lambda$ at the head $\beta$-reduces
-(\texttt{beta\_app}); a definitional equality of heads extends along the spine
-(\texttt{mkApps\_congr}); and, for a spine of exactly the telescope's arity,
-$(\lambda x_1{:}A_1 \dots x_m{:}A_m.\,b)\ a_1 \dots a_m \equiv \mathtt{instFields}\ b\ [a_1,\dots,a_m]$
-(\texttt{betaN}).
-\thesisref{axioms.tex, \S ``Definitional equality'', the $\beta$ rule}
+\thesisref{axioms.tex, \S ``Definitional equality'', the $\beta$ rule.}
 \axfoot{sorryAx via VEnv.WF.orderedStrong, VEnv.WF.patsStrong}
+
+\lead{In short} The head of a well-typed spine is well-typed (\texttt{mkApps\_inv\_head});
+a $\lambda$ at the head $\beta$-reduces (\texttt{beta\_app}); head equality extends along
+the spine (\texttt{mkApps\_congr}); for a spine of exactly the telescope's arity,
+$(\lambda x_1{:}A_1 \ldots x_m{:}A_m.\,b)\ a_1 \ldots a_m \equiv
+\mathtt{instFields}\ b\ [a_1,\ldots,a_m]$ (\texttt{betaN}) -- a well-typed spine
+\hl{$\beta$-reduces telescope by telescope}.
 \end{lemma}
 \begin{proof}
 \uses{fam:strong-inversions, def:proj-inst-fields}
 \leanok
-Induction on the argument list. Each step inverts the application and the abstraction
-(\texttt{HasType.app\_inv}, \texttt{HasType.lam\_inv}) to type the redex for
-\texttt{IsDefEq.beta}, and uses unique typing (\texttt{IsDefEqU.of\_l}) to carry the head
-equality along the spine; \texttt{betaN} then peels one binder at a time and closes by
-transitivity.
+\lead{Idea} Induction on the argument list, typing each redex and peeling one binder at a
+time by unique typing.
 \end{proof}
-
-\reviewnote{This family is generic \texttt{VExpr} metatheory with no environment-translation
-content; it sits in \texttt{Verify/Environment/Lemmas.lean} only because
-\ref{thm:tr-env-proj-defeq} needs it, and belongs in the theory layer. It is also where the
-projection work picks up \texttt{sorryAx}, but not, as one might expect, only through unique
-typing: \texttt{mkApps\_inv\_head} uses nothing but \texttt{HasType.app\_inv}, whose
-\texttt{OrderedStrong} argument is supplied by the \texttt{VEnv.WF} coercion
-\texttt{VEnv.WF.orderedStrong}, and that is defined from the \texttt{sorry}
-\texttt{VEnv.WF.patsStrong} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}). Every lemma of
-the family is tainted for that reason, whether or not it also uses \texttt{IsDefEqU.of\_l}.}
 
 \begin{theorem}[Projection reduction]
 \label{thm:tr-env-proj-defeq}
@@ -1117,125 +945,98 @@ the family is tainted for that reason, whether or not it also uses \texttt{IsDef
 \leanok
 \uses{ind:tr-env, struct:trprojctor, def:proj-field-selector}
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}
-Let a translated environment resolve $S$ to an \texttt{inductInfo} $ival$ with
-$ival.\mathtt{all} = [S]$, $ival.\mathtt{ctors} = [ctorName]$ and $ival.\mathtt{numIndices} = 0$,
-and resolve $ctorName$ to a \texttt{ctorInfo} $cval$. Let
-$\mathtt{TrProjCtor}\ venv\ U\ \Gamma\ S\ i\ d\ e''\ ctorName\ usS\ uss\ params'\ np\ fieldTys$
-present $e''$ as the recursor expansion of the $i$-th projection of $d$. If $\Gamma$ is a
-well-formed context and $d$ is definitionally equal to a saturated constructor spine
-$\mathtt{const}\ ctorName\ \overline{us}$ applied to $params \mathbin{+\!\!+} fields$ with
-$|params| = ival.\mathtt{numParams}$, $|fields| = cval.\mathtt{numFields}$ and
-$i < cval.\mathtt{numFields}$, then $e'' \equiv fields[i]$.
-\thesisref{typesys.tex, \S \texttt{sec:undecidable}: the $\mathsf{inv}_x$ recursor idiom the
-projection expansion copies}
+\thesisref{typesys.tex, \S\texttt{sec:undecidable}: the $\mathsf{inv}_x$ recursor idiom the
+projection expansion copies.}
 \axfoot{sorryAx via VEnv.WF.orderedStrong, VEnv.WF.patsStrong; plus the three PersistentHashMap axioms}
+
+\lead{In short} Given a translated environment resolving $S$ to $ival$ with
+$ival.\mathtt{all} = [S]$, $ival.\mathtt{ctors} = [ctorName]$,
+$ival.\mathtt{numIndices} = 0$, $ctorName$ to $cval$, and
+$\mathtt{TrProjCtor}\ venv\ U\ \Gamma\ S\ i\ d\ e''\ ctorName\ usS\ uss\ params'\ np\
+fieldTys$ presenting $e''$ as the recursor expansion of $d$'s $i$-th projection, with
+$\Gamma$ well-formed and $d$ definitionally equal to a saturated constructor spine
+$\mathtt{const}\ ctorName\ \overline{us}$ applied to $params \mathbin{+\!\!+} fields$,
+$|params| = ival.\mathtt{numParams}$, $|fields| = cval.\mathtt{numFields}$,
+$i < cval.\mathtt{numFields}$: then $e'' \equiv fields[i]$ -- a projection's recursor
+expansion \hl{reduces to the field it reads}.
 \end{theorem}
 \begin{proof}
 \uses{thm:pats-iota-inv-shape, thm:tr-env-structure-rec, thm:tr-env-ctor-arity, family:beta-telescope, thm:pattern-iota-rhs-apply, thm:pattern-matches-varn-const, thm:proj-instfields-minor-spine}
 \leanok
-Six stages, labelled (A) to (F) in the source. (A) the constructor arity
-$np + |fieldTys| = cval.\mathtt{numParams} + cval.\mathtt{numFields}$ from
-\ref{thm:tr-env-ctor-arity} and \texttt{instPis\_piArity}. (B) the registered rule and its
-model-side shape from \ref{thm:pats-iota-inv-shape}, after converting the two lookups by hand.
-(C) the kernel's structure facts turned by \ref{thm:tr-env-structure-rec} into
-$\mathtt{numMotives} = \mathtt{numMinors} = 1$ and $\mathtt{numIndices} = 0$. (D) the minor
-premise has exactly the fields as binders, so the reduct has no recursive arguments. (E)
-congruence from $d$ to the spine, then the $\iota$ step by \texttt{VEnv.IsDefEq.pat} with
-\texttt{Pattern.matches\_varN\_const} on both sides and \texttt{iotaRHS'\_apply}. (F) two
-\texttt{betaN} steps, one through the rule template and one through
-\texttt{VExpr.fieldSelector}, landing on $fields[i]$ through
-\texttt{instFields\_minor\_spine} and \texttt{instFields\_bvar}.
+\lead{Idea} Six stages: the constructor arity, the registered rule's shape and telescope
+split, the $\iota$ step, then two \texttt{betaN} steps to $fields[i]$.
 \end{proof}
 
-\reviewnote{Technically the strongest result of this group, and correctly architected: the
-projection computation rule is derived from the registered $\iota$ rule rather than postulated.
-But it is orphaned. No non-test declaration uses it. The places that would use it are
-\texttt{reduceProjCore.WF} (\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143}, \texttt{sorry}
-at line 145; note that \texttt{reduceProj.WF} one line below it \emph{is} proved, by delegating to
-\texttt{reduceProjCore.WF}), \texttt{inferProj.WF\_struct}
-(\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{392}, \texttt{sorry} at line 398) and
-\texttt{inferProj.WF} (\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{407}, \texttt{sorry} at
-line 410). Its premise \texttt{TrProjCtor} is only ever inhabited by hand in
-\texttt{Tests/ProjInhabit.lean}, the general construction \texttt{inferProj.WF\_struct} being
-itself \texttt{sorry}. The parameter name
-\texttt{kenv} also deviates from the \texttt{env} used by every neighbouring lemma.}
-
-\begin{lemma}[Rebuilding an application spine in the translation]
+\begin{lemma}[Rebuilding a translated spine]
 \label{thm:tr-expr-mk-app-list}
 \contrib{trproj}
 \lean{Lean4Lean.TrExpr.mkAppList}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1166}
-If a head and a list of arguments translate, and the model spine $f'.\mathtt{mkApps}\ as'$ is
-well-typed, then $f.\mathtt{mkAppList}\ as$ translates to $f'.\mathtt{mkApps}\ as'$.
 \axfoot{sorryAx via VEnv.WF.orderedStrong, VEnv.WF.patsStrong}
+
+\lead{In short} Given a translated head and argument list with model spine
+$f'.\mathtt{mkApps}\ as'$ well-typed, $f.\mathtt{mkAppList}\ as$ translates to
+$f'.\mathtt{mkApps}\ as'$: a translated spine \hl{rebuilds} as the model's
+\texttt{mkApps}.
 \end{lemma}
 \begin{proof}
 \uses{family:beta-telescope, family:trexpr-builders}
 \leanok
-Induction on the pointwise translation of the arguments; each application node needs the typing of
-its function and argument, which \texttt{HasType.mkApps\_inv\_head} and \texttt{HasType.app\_inv}
-read off the whole spine. Unlike \ref{thm:tr-env-proj-defeq} this lemma does reach the kernel
-model, at \srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{131}.
+\lead{Idea} Induction on the pointwise translation, typing each application node by
+\texttt{mkApps\_inv\_head} and \texttt{app\_inv}.
 \end{proof}
 
 \section{Quotient initialization}
 
-\begin{lemma}[Unfolding one \texttt{withLocalDecl} of the expression builder]
+\begin{lemma}[Unfolding \texttt{withLocalDecl}]
 \label{thm:with-local-decl-run}
 \contrib{iota}
 \lean{Lean4Lean.withLocalDecl_run}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{20}
-$\mathtt{withLocalDecl}\ n\ bi\ ty\ k$, run at a local context and a name generator, equals $k$
-applied to the fresh free variable $\langle ngen.\mathtt{curr}\rangle$, the context extended by
-\texttt{mkLocalDecl}, and $ngen.\mathtt{next}$.
+
+\lead{In short} $\mathtt{withLocalDecl}\ n\ bi\ ty\ k$, run at a context and a name
+generator, is $k$ applied to \hl{a fresh free variable}
+$\langle ngen.\mathtt{curr}\rangle$, the extended context, and $ngen.\mathtt{next}$.
 \end{lemma}
 \begin{proof}
 \leanok
-\texttt{rfl}.
+\lead{Idea} \texttt{rfl}.
 \end{proof}
 
-\reviewnote{Used once, inside \ref{thm:check-eq-type-ok}, but declared outside the
-\texttt{AddQuotAux} namespace, so a very general name lands in the \texttt{Lean4Lean} root
-namespace.}
-
-\begin{definition}[A symbolic replay of what \texttt{Environment.addQuot} builds]
+\begin{definition}[Symbolic replay of \texttt{addQuot}]
 \label{def:quot-telescope-data}
 \contrib{iota}
 \lean{Lean4Lean.AddQuotAux.ng0, Lean4Lean.AddQuotAux.x1, Lean4Lean.AddQuotAux.x2, Lean4Lean.AddQuotAux.x3, Lean4Lean.AddQuotAux.x4, Lean4Lean.AddQuotAux.x5, Lean4Lean.AddQuotAux.x6, Lean4Lean.AddQuotAux.u, Lean4Lean.AddQuotAux.v, Lean4Lean.AddQuotAux.αr, Lean4Lean.AddQuotAux.quot_r, Lean4Lean.AddQuotAux.L1, Lean4Lean.AddQuotAux.L2, Lean4Lean.AddQuotAux.L3, Lean4Lean.AddQuotAux.L2', Lean4Lean.AddQuotAux.L3', Lean4Lean.AddQuotAux.L4, Lean4Lean.AddQuotAux.L5, Lean4Lean.AddQuotAux.L6, Lean4Lean.AddQuotAux.L4i, Lean4Lean.AddQuotAux.L5i, Lean4Lean.AddQuotAux.T1, Lean4Lean.AddQuotAux.T2, Lean4Lean.AddQuotAux.sanity, Lean4Lean.AddQuotAux.T3, Lean4Lean.AddQuotAux.all_quot, Lean4Lean.AddQuotAux.T4, Lean4Lean.AddQuotAux.q1, Lean4Lean.AddQuotAux.q2, Lean4Lean.AddQuotAux.q3, Lean4Lean.AddQuotAux.q4}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{27}
-Abbreviations reproducing, symbolically, the state the kernel's quotient initializer reaches: the
-six free variables its name generator produces, the levels $u$ and $v$, the abbreviations
-$\alpha r$ for the relation type and \texttt{quot\_r} for $\mathtt{Quot}\ \alpha\ r$, the ten local
-contexts
-$L_1, \dots, L_{5i}$ built by \texttt{mkLocalDecl}, the four \texttt{mkForall} telescopes
-$T_1, \dots, T_4$ (with the auxiliary bodies \texttt{sanity} for \texttt{Quot.lift} and
-\texttt{all\_quot} for \texttt{Quot.ind}), and the four resulting \texttt{quotInfo} declarations
-$q_1, \dots, q_4$ for \texttt{Quot}, \texttt{Quot.mk}, \texttt{Quot.lift}, \texttt{Quot.ind}.
-\thesisref{axioms.tex, \S ``Quotient types''}
-\reviewnote{These abbreviations mirror \texttt{Lean4Lean/Quot.lean} line by line, which is the
-only way to compute with a monadic expression builder, but nothing links the two beyond the
-proofs breaking: any change to a binder name, a binder info or the order of the
-\texttt{withLocalDecl} calls silently invalidates \ref{thm:add-quot-eq}.}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} \hl{Symbolic abbreviations} for the state the kernel's quotient
+initializer reaches: six free variables and levels $u,v$; ten local contexts
+$L_1,\ldots,L_{5i}$; four \texttt{mkForall} telescopes $T_1,\ldots,T_4$; the four
+resulting \texttt{quotInfo} declarations $q_1,\ldots,q_4$.
+\lead{Caveat} Mirrors \texttt{Lean4Lean/Quot.lean} line by line, linked only by the proofs
+failing if it changes.
 \end{definition}
 
-\begin{lemma}[Lookup ladder for the quotient telescope contexts]
+\begin{lemma}[Lookup ladder for telescope contexts]
 \label{family:quot-telescope-find}
 \contrib{iota}
 \lean{Lean4Lean.AddQuotAux.L1_mwf, Lean4Lean.AddQuotAux.L1_find, Lean4Lean.AddQuotAux.L2_mwf, Lean4Lean.AddQuotAux.L2_find, Lean4Lean.AddQuotAux.L3_find, Lean4Lean.AddQuotAux.L2'_mwf, Lean4Lean.AddQuotAux.L2'_find, Lean4Lean.AddQuotAux.L3'_mwf, Lean4Lean.AddQuotAux.L3'_find, Lean4Lean.AddQuotAux.L4_mwf, Lean4Lean.AddQuotAux.L4_find, Lean4Lean.AddQuotAux.L5_mwf, Lean4Lean.AddQuotAux.L5_find, Lean4Lean.AddQuotAux.L6_find, Lean4Lean.AddQuotAux.L4i_mwf, Lean4Lean.AddQuotAux.L4i_find, Lean4Lean.AddQuotAux.L5i_find}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{92}
-For each context $L$: the underlying \texttt{fvarIdToDecl} map is well-formed, and
-$L.\mathtt{find?}\ x$ reduces to one decidable comparison against the newest free variable
-followed by the previous context's lookup.
+
+\lead{In short} Each $L$'s underlying map is well-formed, and $L.\mathtt{find?}\ x$
+reduces to one comparison against the newest free variable then the previous lookup --
+\hl{its lookups compute}.
 \end{lemma}
 \begin{proof}
 \uses{def:quot-telescope-data, family:lctx-empty-decl}
 \leanok
-All by \texttt{LocalContext.find?\_mkLocalDecl}, which needs only well-formedness of the
-underlying map, threaded along the chain from the empty context.
+\lead{Idea} All by \texttt{LocalContext.find?\_mkLocalDecl}, needing only well-formedness
+of the underlying map, threaded from the empty context.
 \end{proof}
 
 \begin{definition}[Two macros driving the telescope computations]
@@ -1245,30 +1046,30 @@ underlying map, threaded along the chain from the empty context.
 \leanok
 \uses{family:quot-telescope-find}
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{144}
-\texttt{quot\_simp} rewrites along the lookup ladder, decides the free-variable comparisons and
-unfolds \texttt{mkBindingList1} and \texttt{Expr.abstract}. \texttt{quot\_mem} discharges the side
-condition of \texttt{LocalContext.mkForall\_eq\_fold} that every telescope variable is declared in
-its context. The two are \texttt{macro} declarations; their elaborated constants carry the
-\texttt{tactic} prefix.
+
+\lead{In short} \texttt{quot\_simp} rewrites along the lookup ladder, decides
+free-variable comparisons, unfolds \texttt{mkBindingList1}/\texttt{Expr.abstract};
+\texttt{quot\_mem} discharges \texttt{mkForall\_eq\_fold}'s side condition that every
+telescope variable is declared -- two \hl{tactic macros} that compute the telescopes.
 \end{definition}
 
-\begin{lemma}[Evaluating the four quotient types to closed expressions]
+\begin{lemma}[Evaluating the quotient types]
 \label{family:quot-type-eqs}
 \contrib{iota}
 \lean{Lean4Lean.AddQuotAux.T1_eq, Lean4Lean.AddQuotAux.T2_eq, Lean4Lean.AddQuotAux.sanity_eq, Lean4Lean.AddQuotAux.T3_eq, Lean4Lean.AddQuotAux.all_quot_eq, Lean4Lean.AddQuotAux.T4_inner_eq, Lean4Lean.AddQuotAux.T4_eq}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{159}
-Each \texttt{mkForall} telescope is computed to an explicit de Bruijn \texttt{Expr}. For instance
-$T_1 = \forall \{\alpha : \mathsf{Sort}\ u\}\ (r : \alpha \to \alpha \to \mathsf{Prop}),\ \mathsf{Sort}\ u$,
-and analogously for \texttt{Quot.mk}, for \texttt{Quot.lift} through the
-\texttt{sanity} hypothesis, and for \texttt{Quot.ind} through \texttt{all\_quot}.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} Each \texttt{mkForall} telescope $T_1,\ldots,T_4$ (and the auxiliary
+\texttt{sanity}, \texttt{all\_quot}) \hl{evaluates} to an explicit de Bruijn term.
 \end{lemma}
 \begin{proof}
 \uses{def:quot-telescope-data, def:quot-tactics, thm:mkforall-eq-fold}
 \leanok
-Rewrite \texttt{LocalContext.mkForall} into a fold by \texttt{mkForall\_eq\_fold}, whose side
-conditions are discharged by \texttt{quot\_mem}, and evaluate the fold by \texttt{quot\_simp}.
+\lead{Idea} Rewrite \texttt{LocalContext.mkForall} into a fold
+(\texttt{mkForall\_eq\_fold}, side conditions by \texttt{quot\_mem}), evaluate the fold by
+\texttt{quot\_simp}.
 \end{proof}
 
 \begin{lemma}[The computed effect of \texttt{Environment.addQuot}]
@@ -1277,15 +1078,17 @@ conditions are discharged by \texttt{quot\_mem}, and evaluate the fold by \textt
 \lean{Lean4Lean.AddQuotAux.addQuot_eq}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{72}
-If quotient initialization has not happened, \texttt{checkEqType} succeeds, and the four names
-pass \texttt{checkName}, then $\mathtt{Environment.addQuot}\ env$ returns
-\texttt{markQuotInit} of $env$ with $q_1, q_2, q_3, q_4$ added in order.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} If initialization has not happened, \texttt{checkEqType} succeeds, and the
+four names pass \texttt{checkName}, then $\mathtt{Environment.addQuot}\ env$ returns
+\texttt{markQuotInit} of $env$ with $q_1,\ldots,q_4$ \hl{added in order}.
 \end{lemma}
 \begin{proof}
 \uses{def:quot-telescope-data}
 \leanok
-Unfold \texttt{Environment.addQuot}, rewrite by the five hypotheses, and close by \texttt{rfl}.
+\lead{Idea} Unfold \texttt{Environment.addQuot}, rewrite by the five hypotheses, close by
+\texttt{rfl}.
 \end{proof}
 
 \begin{definition}[The expected type of \texttt{Eq}]
@@ -1295,11 +1098,12 @@ Unfold \texttt{Environment.addQuot}, rewrite by the five hypotheses, and close b
 \leanok
 \uses{def:quot-tactics, thm:mkforall-eq-fold}
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{224}
-$\mathtt{TE}\ u$ is the telescope
-$\forall \{\alpha : \mathsf{Sort}\ u\},\ \alpha \to \alpha \to \mathsf{Prop}$ exactly as
-\texttt{checkEqType} builds it, \texttt{LE1\_find} is its one-entry lookup lemma, and
-\texttt{TE\_eq} evaluates it to the explicit de Bruijn expression.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} $\mathtt{TE}\ u = \forall \{\alpha : \mathsf{Sort}\ u\},\ \alpha \to
+\alpha \to \mathsf{Prop}$, exactly as \texttt{checkEqType} builds it -- the type
+\hl{\texttt{checkEqType} expects} of \texttt{Eq}. \texttt{LE1\_find} is its one-entry
+lookup lemma, \texttt{TE\_eq} evaluates it to the explicit de Bruijn expression.
 \end{definition}
 
 \begin{lemma}[\texttt{Environment.get} success implies \texttt{find?} success]
@@ -1308,15 +1112,15 @@ $\forall \{\alpha : \mathsf{Sort}\ u\},\ \alpha \to \alpha \to \mathsf{Prop}$ ex
 \lean{Lean4Lean.AddQuotAux.Environment.get_ok}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{244}
-$env.\mathtt{get}\ n = \mathtt{ok}\ ci$ implies $env.\mathtt{find?}\ n = \mathtt{some}\ ci$.
+
+\lead{In short} $env.\mathtt{get}\ n = \mathtt{ok}\ ci$ implies
+$env.\mathtt{find?}\ n = \mathtt{some}\ ci$.
 \end{lemma}
 \begin{proof}
 \leanok
-Case split on \texttt{find?}: the \texttt{none} branch contradicts the success of \texttt{get}.
+\lead{Idea} Case split on \texttt{find?}: the \texttt{none} branch contradicts
+\texttt{get}'s success.
 \end{proof}
-
-\reviewnote{Declared inside \texttt{AddQuotAux}, so this generally useful lemma has the full name
-\texttt{Lean4Lean.AddQuotAux.Environment.get\_ok} and is hidden in an auxiliary namespace.}
 
 \begin{theorem}[What a successful \texttt{checkEqType} establishes]
 \label{thm:check-eq-type-ok}
@@ -1325,70 +1129,60 @@ Case split on \texttt{find?}: the \texttt{none} branch contradicts the success o
 \leanok
 \uses{def:check-eq-type-shape}
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{253}
-If $\mathtt{checkEqType}\ env = \mathtt{ok}\ ()$ then \texttt{Eq} resolves in $env$ to an
-\texttt{inductInfo} that is not unsafe, has exactly one universe parameter $u$, and whose type is
-syntactically $\mathtt{TE}\ u$.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} If $\mathtt{checkEqType}\ env = \mathtt{ok}\ ()$ then \texttt{Eq} resolves
+in $env$ to an \texttt{inductInfo} that is not unsafe, has exactly one universe parameter
+$u$, and whose type is syntactically $\mathtt{TE}\ u$: a successful check pins down
+\hl{\texttt{Eq}'s exact shape}.
 \end{theorem}
 \begin{proof}
 \uses{thm:environment-get-ok, thm:with-local-decl-run}
 \leanok
-Destruct the monadic check: the constant must be an \texttt{inductInfo}, not unsafe, with a
-one-element \texttt{levelParams} and a one-element \texttt{ctors} list; the type equality is
-extracted from the \texttt{bne} branch after unfolding \texttt{ExprBuildT} and
-\ref{thm:with-local-decl-run}.
+\lead{Idea} Destruct the monadic check, extracting the type equality from the
+\texttt{bne} branch via \ref{thm:with-local-decl-run}.
 \end{proof}
 
-\begin{remark}
-This replaces master's \texttt{checkEqType.WF}, which proved \texttt{False}: on master no
-\texttt{TrEnv} could contain the inductive \texttt{Eq}, because \texttt{AddInduct} had no
-constructors, so quotient initialization was vacuously well-formed in the interesting branch.
-Making \texttt{AddInduct} inhabitable forced this file into existence, and it is the clearest
-example of the \texttt{iota} contribution paying for itself.
-\end{remark}
-
-\begin{lemma}[The quotient types translate to the model's]
+\begin{lemma}[The quotient types translate]
 \label{family:quot-type-tr}
 \contrib{iota}
 \lean{Lean4Lean.AddQuotAux.T1', Lean4Lean.AddQuotAux.T2', Lean4Lean.AddQuotAux.T3', Lean4Lean.AddQuotAux.T4', Lean4Lean.AddQuotAux.T1_tr, Lean4Lean.AddQuotAux.T2_tr, Lean4Lean.AddQuotAux.T3_tr, Lean4Lean.AddQuotAux.T4_tr}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{305}
-Each computed kernel type $T_i'$ has a \texttt{TrExprS} derivation into the type of the
-corresponding model constant (\texttt{quotConst}, \texttt{quotMkConst}, \texttt{quotLiftConst},
-\texttt{quotIndConst}), given that the constants it mentions (\texttt{Quot}, \texttt{Quot.mk},
-\texttt{Eq}) are already registered in the model.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} Given \texttt{Quot}, \texttt{Quot.mk} and \texttt{Eq} already registered in
+the model, each computed kernel type $T_i'$ has a \texttt{TrExprS} derivation into the
+type of \texttt{quotConst}, \texttt{quotMkConst}, \texttt{quotLiftConst},
+\texttt{quotIndConst} respectively: it \hl{translates} to the model constant's type.
 \end{lemma}
 \begin{proof}
 \uses{ind:trexprs, def:quot-consts, family:quot-type-eqs}
 \leanok
-Explicit \texttt{TrExprS} derivation trees, built binder by binder with \texttt{refine .forallE},
-every typing side condition discharged by the \texttt{type\_tac} macro.
+\lead{Idea} Explicit \texttt{TrExprS} derivation trees, built binder by binder with
+\texttt{refine .forallE}, every typing side condition discharged by \texttt{type\_tac}.
 \end{proof}
 
-\reviewnote{Sixty lines of hand-built derivation trees: correct, but unreadable and fragile. A
-\texttt{TrExprS}-building tactic would collapse them, as the \texttt{type\_tac} macro they rely on
-already notes for its own case.}
-
-\begin{theorem}[A well-shaped \texttt{Eq} is the model's \texttt{eqConst}]
+\begin{theorem}[\texttt{Eq}'s shape gives \texttt{eqConst}]
 \label{thm:quot-ready}
 \contrib{iota}
 \lean{Lean4Lean.AddQuotAux.quotReady}
 \leanok
 \uses{ind:tr-env, def:venv-addquot}
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{398}
-If a translated environment resolves \texttt{Eq} to a safe \texttt{inductInfo} with one level
-parameter whose type is $\mathtt{TE}\ u$, then $venv.\mathtt{QuotReady}$: the model environment's
-\texttt{Eq} is exactly \texttt{eqConst}.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} If a translated environment resolves \texttt{Eq} to a safe
+\texttt{inductInfo} with one level parameter and type $\mathtt{TE}\ u$, then
+$venv.\mathtt{QuotReady}$: a well-shaped kernel \texttt{Eq} \hl{is exactly}
+\texttt{eqConst}.
 \end{theorem}
 \begin{proof}
 \uses{thm:check-eq-type-ok, family:tr-env-find, def:check-eq-type-shape}
 \leanok
-\texttt{TrEnv.find?} yields a model constant translating \texttt{Eq}; \texttt{TrExprS.eqv}
-transports the derivation along the syntactic type equality, the derivation is then inverted
-\texttt{forallE}, \texttt{sort}, \texttt{bvar} by \texttt{cases}, and the level and de Bruijn side
-conditions pin the model type to \texttt{eqConst}'s.
+\lead{Idea} \texttt{TrEnv.find?} yields a model constant translating \texttt{Eq};
+transport along the type equality and invert to pin the model type to
+\texttt{eqConst}'s.
 \end{proof}
 
 \begin{theorem}[The \texttt{AddQuot} witness of quotient initialization]
@@ -1398,18 +1192,18 @@ conditions pin the model type to \texttt{eqConst}'s.
 \leanok
 \uses{def:add-quot-witness, ind:tr-env}
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{436}
-If a translated environment is \texttt{QuotReady} and the four quotient names are fresh, then the
-four model \texttt{addConst}s succeed in sequence and the resulting environment, extended by
-\texttt{quotDefEq}, is related to the kernel map $C'$ (the four insertions) by \texttt{AddQuot}.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} Given a translated, \texttt{QuotReady} environment with the four quotient
+names fresh: the four model \texttt{addConst}s succeed in sequence, and the result,
+extended by \texttt{quotDefEq}, relates to the kernel map $C'$ by \texttt{AddQuot} -- a
+\hl{\texttt{QuotReady} environment has a witness}.
 \end{theorem}
 \begin{proof}
 \uses{family:quot-type-eqs, family:quot-type-tr, thm:quot-ready, def:quot-consts}
 \leanok
-Construct the four intermediate environments by \texttt{VEnv.addConst\_eq\_none}, propagate
-freshness through \texttt{addConst\_eq\_of\_ne}, and supply each \texttt{AddQuot1} step with its
-\texttt{TrConstant}, obtained from the computed type equalities and the translations of
-\ref{family:quot-type-tr}.
+\lead{Idea} Construct the four intermediate environments, supplying each
+\texttt{AddQuot1} step its \texttt{TrConstant} from \ref{family:quot-type-tr}.
 \end{proof}
 
 \begin{theorem}[Quotient initialization preserves well-formedness]
@@ -1419,49 +1213,38 @@ freshness through \texttt{addConst\_eq\_of\_ne}, and supply each \texttt{AddQuot
 \leanok
 \uses{ind:tr-env, def:vtc-venvs}
 \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{500}
-A successful $\mathtt{Environment.addQuot}\ env$ yields a model family $ves'$ that is well-formed
-for the new environment and extends $ves$ at every safety level. If the environment was already
-initialized nothing happens; otherwise the four quotient constants and the computation rule are
-added by the \texttt{quot} step of $\mathtt{TrEnv}'$.
-\thesisref{axioms.tex, \S ``Quotient types''}
+\thesisref{axioms.tex, \S ``Quotient types''.}
+
+\lead{In short} A successful $\mathtt{Environment.addQuot}\ env$ yields a well-formed
+model family extending $ves$: if already initialized, nothing happens, else the four
+constants and the computation rule are added by the \texttt{quot} step -- \hl{quotient
+initialization} holds.
+\lead{Caveat} \texttt{Quot.sound} is a core Lean axiom, not added here: this covers the
+other four quotient names plus the computation rule.
 \end{theorem}
 \begin{proof}
 \uses{thm:exists-add-quot, thm:quot-ready, thm:add-quot-eq, family:check-name, family:safe-primitives}
 \leanok
-Extract the five successful checks from the monadic result, rewrite by \ref{thm:add-quot-eq},
-turn the shape of \texttt{Eq} into \texttt{VEnv.QuotReady} at every level by
-\ref{thm:quot-ready}, choose the extended model family with \texttt{VEnvs.axiom\_of\_choice}, and
-rebuild the four \texttt{VEnvs.WF} fields (\texttt{tr}, \texttt{hasPrimitives},
-\texttt{safePrimitives}, \texttt{mono}) one by one.
+\lead{Idea} Rewrite by \ref{thm:add-quot-eq}, turn \texttt{Eq}'s shape into
+\texttt{QuotReady} by \ref{thm:quot-ready}, and rebuild the \texttt{VEnvs.WF} fields.
 \end{proof}
-
-\reviewnote{Two smells in the assembly: the four \texttt{checkName} results are extracted by four
-near-identical seven-line blocks
-(\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{521}), and the \texttt{safePrimitives} field is
-rebuilt by a 22-line hand-nested chain of \texttt{Environment.find?\_add\_of\_ne}
-(\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{584}); a single auxiliary lemma would remove
-both. Note also that \texttt{Quot.sound}, the only genuine axiom among the quotient constants in
-the thesis, is not added here (Lean declares it in core), so this theorem covers the four
-kernel-builtin constants plus the computation rule.}
 
 \section{The extension machinery}
 
-\begin{lemma}[Monotonicity of model extension, and existence of extensions]
+\begin{lemma}[Extension monotonicity and existence]
 \label{family:venv-mono}
 \contrib{mixed}
 \lean{Lean4Lean.VEnv.addConst_mono, Lean4Lean.VEnv.addDefEq_mono, Lean4Lean.VEnv.addConsts_mono, Lean4Lean.VEnv.addDefEqs_mono, Lean4Lean.TrEnv.exists_addConst, Lean4Lean.TrEnv.constants_eq_none, Lean4Lean.TrEnv.exists_addConsts}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Extension.lean}{11}
-Adding the same constant, defining equation, or list of either, to two environments related by
-$\le$ preserves $\le$; and in a translated environment a kernel name that does not resolve has no
-model constant, so a fresh name can always be given one.
+
+\lead{In short} Adding the same constant(s) or equation(s) to two $\le$-related
+environments \hl{preserves $\le$}; a fresh name always has a free slot.
 \end{lemma}
 \begin{proof}
 \uses{def:venv-add-const, family:tr-env-find, def:venv-basic}
 \leanok
-By unfolding \texttt{addConst} and its list form, using \texttt{find?\_iff} to rule out a clash.
-The \texttt{iota} branch touched only two lines here, adding the \texttt{pats} component to two
-\texttt{VEnv.LE} constructions when \texttt{VEnv.LE} gained that field.
+\lead{Idea} Unfold \texttt{addConst}; \texttt{find?\_iff} rules out a clash.
 \end{proof}
 
 \begin{lemma}[Bookkeeping for the primitive-declaration side conditions]
@@ -1469,62 +1252,59 @@ The \texttt{iota} branch touched only two lines here, adding the \texttt{pats} c
 \lean{Lean4Lean.safePrimitives_add', Lean4Lean.VEnvs.WF.safePrimitives_add, Lean4Lean.VEnvAt.safePrimitives_add, Lean4Lean.VEnv.HasPrimitives.addConsts, Lean4Lean.VEnv.HasPrimitives.addDefEqs, Lean4Lean.Environment.constants_addDefs, Lean4Lean.VEnvs.WF.safePrimitives_addDefs, Lean4Lean.Environment.quotInit_addDefs, Lean4Lean.Environment.find?_add_of_ne}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Extension.lean}{46}
-The \texttt{safePrimitives} invariant (every name in \texttt{Environment.primitives} is declared
-safe and with no level parameters) and the \texttt{HasPrimitives} model invariant are preserved by
-each way of extending the environment, together with the constant-map bookkeeping for definition
-blocks.
+
+\lead{In short} \texttt{safePrimitives} (every primitive safe, no level parameters) and
+\texttt{HasPrimitives} \hl{survive every extension}, with matching bookkeeping for
+definition blocks.
 \end{lemma}
 \begin{proof}
 \leanok
-Each is a short computation on the constant map or on the model environment, keyed on the name
-being distinct from the primitive in question.
+\lead{Idea} Each a short computation keyed on the name being distinct from the primitive.
 \end{proof}
 
-\begin{lemma}[A block invisible at a safety level extends only the map]
+\begin{lemma}[An invisible block extends only the map]
 \label{thm:tr-env-ignore-defs}
 \lean{Lean4Lean.TrEnv'.ignoreDefs}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Extension.lean}{135}
-A list of definitions none of which is visible at $safety$ extends the constant map by
-\texttt{insertDefs} without changing the model environment.
+
+\lead{In short} A definition list \hl{invisible at $safety$} extends the map by
+\texttt{insertDefs} alone; the model environment is untouched.
 \end{lemma}
 \begin{proof}
 \uses{ind:tr-env, def:insert-defs}
 \leanok
-Induction on the list, applying the \texttt{ignore} step of $\mathtt{TrEnv}'$ at each member.
+\lead{Idea} Induction on the list, applying the \texttt{ignore} step at each member.
 \end{proof}
 
-\begin{definition}[Headers of a mutual block, and the temporary environment]
+\begin{definition}[Mutual-block headers and temporary environment]
 \label{def:tr-mutual-header}
 \lean{Lean4Lean.TrMutualHeader, Lean4Lean.VEnvAt.addAxioms}
 \leanok
 \uses{def:tr-constant}
 \srcloc{Lean4Lean/Verify/Environment/Extension.lean}{159}
-\texttt{TrMutualHeader} is the data the header loop of \texttt{addMutual} produces per member: a
-translated \texttt{VDefVal} header, its well-formedness, freshness of the name, and
-non-primitiveness. \texttt{VEnvAt.addAxioms} models the temporary environment in which the bodies
-are checked, in which every header has been added as an axiom, so a body may refer to any member
-of the block, itself included, but cannot $\delta$-unfold it.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} \texttt{TrMutualHeader}: a translated \texttt{VDefVal} header, its
+well-formedness, freshness, non-primitiveness. \texttt{VEnvAt.addAxioms}: the temporary
+environment, letting a body refer to any member (itself included) without
+$\delta$-unfolding it -- \hl{where bodies are checked}.
 \end{definition}
 
-\begin{lemma}[Adding a whole mutual block preserves well-formedness]
+\begin{lemma}[A mutual block preserves well-formedness]
 \label{thm:add-mutual-block-wf}
 \lean{Lean4Lean.addMutualBlock.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Extension.lean}{209}
-Given headers checked in $env$, bodies checked in the temporary environment, distinct fresh names
-and non-primitiveness, the environment obtained by adding all the definitions is well-formed and
-extends the old one at every safety level.
+
+\lead{In short} Checked headers and bodies, fresh distinct names $\Rightarrow$ the
+extension is \hl{well-formed} and extends the old one at every level.
 \end{lemma}
 \begin{proof}
 \uses{ind:tr-env, def:tr-mutual-header, thm:tr-env-ignore-defs, family:safe-primitives}
 \leanok
-Split on visibility of the block at each safety level: where it is invisible,
-\ref{thm:tr-env-ignore-defs}; where it is visible, the \texttt{mutualDef} step of
-$\mathtt{TrEnv}'$, with the primitive side conditions discharged by \ref{family:safe-primitives}.
-Like the unsafe branch of \texttt{addDefinition}, this cannot conclude a \texttt{VEnv.AddDef} for
-the individual members, because their bodies do not translate before the block is added.
+\lead{Idea} Split on visibility per safety level: invisible by \ref{thm:tr-env-ignore-defs},
+else the \texttt{mutualDef} step.
 \end{proof}
 
 \begin{lemma}[Generic single-constant extension lemmas]
@@ -1532,35 +1312,32 @@ the individual members, because their bodies do not translate before the block i
 \lean{Lean4Lean.addConstCore.WF, Lean4Lean.addConst.WF, Lean4Lean.addDef.WF, Lean4Lean.addUnsafeDef.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Extension.lean}{291}
-The reusable core behind \ref{thm:add-axiom-wf}, \ref{thm:add-theorem-wf},
-\ref{thm:add-opaque-wf} and \ref{thm:add-definition-wf}: given a translation of the header,
-well-formedness of the model constant, freshness, non-primitiveness and a per-safety-level
-$\mathtt{TrEnv}'$ step, adding the constant, and optionally its defining equation, preserves
-\texttt{VEnvs.WF} and produces the corresponding \texttt{VEnv.AddConst} or \texttt{VEnv.AddDef}
-step.
+
+\lead{In short} The \hl{reusable core} behind adding an axiom, theorem, opaque or
+definition: a translated, fresh, non-primitive header preserves \texttt{VEnvs.WF} and
+yields the matching \texttt{AddConst}/\texttt{AddDef} step.
 \end{lemma}
 \begin{proof}
 \uses{def:venv-add-const, ind:tr-env, family:safe-primitives, def:vtc-venvs}
 \leanok
-\texttt{VEnvs.axiom\_of\_choice} picks the extended family, then the four \texttt{VEnvs.WF} fields
-are rebuilt one by one.
+\lead{Idea} \texttt{VEnvs.axiom\_of\_choice} picks the extended family; rebuild the four
+\texttt{VEnvs.WF} fields.
 \end{proof}
 
 \section{Per-declaration checks}
 
-\begin{lemma}[Name freshness and metavariable or free-variable checks]
+\begin{lemma}[Name and variable checks]
 \label{family:check-name}
 \lean{Lean4Lean.ConstantInfo.defnInfo_safety, Lean4Lean.checkName.WF, Lean4Lean.checkNoMVar.WF, Lean4Lean.checkNoFVar.WF, Lean4Lean.checkNoMVarNoFVar.WF, Lean4Lean.Except.WF.trivial, Lean4Lean.TypeChecker.M.WF.pureBind}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Checker.lean}{8}
-A successful \texttt{checkName} means the name does not resolve in the environment and, unless
-explicitly allowed, is not a primitive. A successful \texttt{checkNoMVarNoFVar} means the
-expression has no metavariables and no free variables.
+
+\lead{In short} \texttt{checkName} \hl{gives freshness} (and non-primitiveness unless
+allowed); \texttt{checkNoMVarNoFVar} gives no metavariables and no free variables.
 \end{lemma}
 \begin{proof}
 \leanok
-Direct inspection of the monadic checks, through the \texttt{Except.WF} and
-\texttt{TypeChecker.M.WF} framework.
+\lead{Idea} Direct inspection via \texttt{Except.WF}.
 \end{proof}
 
 \begin{lemma}[Verification of the shared declaration-header check]
@@ -1568,16 +1345,16 @@ Direct inspection of the monadic checks, through the \texttt{Except.WF} and
 \lean{Lean4Lean.checkConstantValBody.WF, Lean4Lean.checkConstantValCore.WF, Lean4Lean.checkConstantVal.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Checker.lean}{56}
-A successful \texttt{checkConstantVal} on a \texttt{ConstantInfo} produces a model
-\texttt{VConstVal} translating the header, its well-formedness, freshness of the name and
-non-primitiveness: the common precondition of every \texttt{add} lemma.
+
+\lead{In short} A successful \texttt{checkConstantVal} \hl{translates the header}: a model
+\texttt{VConstVal}, well-formed, fresh, non-primitive -- the common precondition of every
+\texttt{add} lemma.
 \end{lemma}
 \begin{proof}
 \uses{def:tr-constant, family:check-name}
 \leanok
-Runs the level-parameter duplication check, \texttt{checkNoMVarNoFVar} and \texttt{checkType}
-through the \texttt{TypeChecker.M.WF} framework; the translation comes from
-\texttt{checkType.WF}, whose correctness is where this family inherits \texttt{sorryAx}.
+\lead{Idea} \texttt{checkNoMVarNoFVar} then \texttt{checkType}; the translation is
+\texttt{checkType.WF}'s, whence this family inherits \texttt{sorryAx}.
 \end{proof}
 
 \begin{lemma}[Verification of the body check]
@@ -1585,13 +1362,14 @@ through the \texttt{TypeChecker.M.WF} framework; the translation comes from
 \lean{Lean4Lean.checkBodyCore, Lean4Lean.checkBodyCore.WF, Lean4Lean.checkBody, Lean4Lean.checkBody.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Checker.lean}{104}
-A successful body check yields a model term translating the declaration's value together with a
-\texttt{HasType} derivation against the declared type.
+
+\lead{In short} A successful body check \hl{yields a typed translation} against the
+declared type.
 \end{lemma}
 \begin{proof}
 \uses{family:check-constant-val}
 \leanok
-\texttt{TypeChecker.checkType.WF} translates the value, then \texttt{isDefEq.WF} converts its
+\lead{Idea} \texttt{checkType.WF} translates the value; \texttt{isDefEq.WF} matches its
 inferred type to the declared one.
 \end{proof}
 
@@ -1600,16 +1378,15 @@ inferred type to the declared one.
 \lean{Lean4Lean.checkTheorem, Lean4Lean.checkTheorem.WF, Lean4Lean.checkDefinitionBody.WF, Lean4Lean.checkDefinition, Lean4Lean.checkDefinition.WF, Lean4Lean.checkOpaque, Lean4Lean.checkOpaque.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Checker.lean}{146}
-Reimplementations of the kernel's theorem, definition and opaque checks in the verified
-\texttt{TypeChecker} monad, each with a \texttt{WF} lemma producing exactly the data its
-consumer needs: header translation, body translation, Prop-ness for theorems, and
-primitive preservation for definitions.
+
+\lead{In short} Verified reimplementations of the kernel's \hl{theorem, definition and
+opaque checks}, each giving exactly what its consumer needs.
 \end{lemma}
 \begin{proof}
 \uses{family:check-constant-val, family:check-body}
 \leanok
-Each composes \ref{family:check-constant-val} with \ref{family:check-body} and, for theorems, the
-\texttt{Sort 0} check on the statement.
+\lead{Idea} Compose \ref{family:check-constant-val} with \ref{family:check-body}, plus the
+\texttt{Sort 0} check for theorems.
 \end{proof}
 
 \section{The top-level driver}
@@ -1619,17 +1396,16 @@ Each composes \ref{family:check-constant-val} with \ref{family:check-body} and, 
 \lean{Lean4Lean.addAxiom.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment.lean}{11}
-If the safety-indexed model family $ves$ is well-formed for $env$, then a successful
-$\mathtt{addAxiom}\ env\ v$ yields an environment for which there is a well-formed family $ves'$
-and a model constant $ci'$ such that at every safety level the step is a \texttt{VEnv.AddConst} of
-$\mathtt{axiomInfo}\ v$.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} A checked $\mathtt{addAxiom}\ env\ v$ \hl{extends the model family}: a
+\texttt{VEnv.AddConst} of $\mathtt{axiomInfo}\ v$ at every safety level.
 \end{lemma}
 \begin{proof}
 \uses{family:check-constant-val, family:add-const-wf, def:venv-add-const, ind:tr-env}
 \leanok
-\texttt{checkConstantVal.WF} translates the header at the safety level the kernel checks at, then
-\texttt{addConst.WF} with the \texttt{axiom} step of $\mathtt{TrEnv}'$.
+\lead{Idea} \texttt{checkConstantVal.WF} then \texttt{addConst.WF} with the
+\texttt{axiom} step.
 \end{proof}
 
 \begin{lemma}[Adding a definition preserves well-formedness]
@@ -1637,18 +1413,16 @@ $\mathtt{axiomInfo}\ v$.
 \lean{Lean4Lean.addDefinition.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment.lean}{28}
-A successful $\mathtt{addDefinition}\ env\ v$ yields a well-formed model family extending the old
-one at every safety level, and, unless $v$ is unsafe, a \texttt{VDefVal} $ci'$ such that the step
-is a \texttt{VEnv.AddDef} at every level.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} A checked $\mathtt{addDefinition}\ env\ v$ \hl{extends the model family};
+unless unsafe, a \texttt{VDefVal} with the step a \texttt{VEnv.AddDef} at every level.
 \end{lemma}
 \begin{proof}
 \uses{family:check-decls, family:add-const-wf, family:check-body, family:safe-primitives}
 \leanok
-Case split on $v.\mathtt{safety} = \mathtt{unsafe}$. The unsafe branch adds the header as an
-axiom and then checks the body against that environment, concluding by \texttt{addUnsafeDef.WF};
-the safe branch uses \texttt{checkDefinition.WF} and \texttt{addDef.WF}, with the
-primitive-preservation side condition discharged from \texttt{hasPrimitives}.
+\lead{Idea} Split on $v.\mathtt{safety}$: unsafe adds the header as an axiom then checks
+the body; safe uses \texttt{checkDefinition.WF} then \texttt{addDef.WF}.
 \end{proof}
 
 \begin{lemma}[Adding a theorem preserves well-formedness]
@@ -1656,15 +1430,16 @@ primitive-preservation side condition discharged from \texttt{hasPrimitives}.
 \lean{Lean4Lean.addTheorem.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment.lean}{75}
-A successful $\mathtt{addTheorem}\ env\ v$ yields a well-formed model family extending the old
-one, the step being a \texttt{VEnv.AddConst} of $\mathtt{thmInfo}\ v$ at every safety level: the
-proof term is discarded, only its existence and the Prop-ness of the statement are recorded.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} A checked $\mathtt{addTheorem}\ env\ v$ \hl{discards the proof term}: a
+\texttt{VEnv.AddConst} of $\mathtt{thmInfo}\ v$ at every safety level.
 \end{lemma}
 \begin{proof}
 \uses{family:check-decls, family:add-const-wf, ind:tr-env}
 \leanok
-\texttt{checkTheorem.WF} then \texttt{addConst.WF} with the \texttt{thm} step.
+\lead{Idea} \texttt{checkTheorem.WF} then \texttt{addConst.WF} with the \texttt{thm}
+step.
 \end{proof}
 
 \begin{lemma}[Adding an opaque definition preserves well-formedness]
@@ -1672,46 +1447,49 @@ proof term is discarded, only its existence and the Prop-ness of the statement a
 \lean{Lean4Lean.addOpaque.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment.lean}{91}
-A successful $\mathtt{addOpaque}\ env\ v$ gives a well-formed model family with a
-\texttt{VEnv.AddConst} step for $\mathtt{opaqueInfo}\ v$ at each safety level; no defining
-equation is registered, so the body is checked but unusable for $\delta$.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} A checked $\mathtt{addOpaque}\ env\ v$ \hl{registers no defining equation}:
+a \texttt{VEnv.AddConst} of $\mathtt{opaqueInfo}\ v$; the body is checked but unusable for
+$\delta$.
 \end{lemma}
 \begin{proof}
 \uses{family:check-decls, family:add-const-wf, ind:tr-env}
 \leanok
-\texttt{checkOpaque.WF} then \texttt{addConst.WF} with the \texttt{opaque} step.
+\lead{Idea} \texttt{checkOpaque.WF} then \texttt{addConst.WF} with the \texttt{opaque}
+step.
 \end{proof}
 
-\begin{lemma}[Trivial \texttt{Except.WF} lemmas for the failure branches]
+\begin{lemma}[Trivial \texttt{Except.WF} failure lemmas]
 \label{family:except-wf-throw}
 \lean{Lean4Lean.Except.WF.throw', Lean4Lean.Except.WF.throwBind}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment.lean}{114}
-Two private one-liners saying that a \texttt{throw}, possibly bound to a continuation, satisfies
-any postcondition vacuously.
+
+\lead{In short} A \texttt{throw}, possibly bound onward, \hl{satisfies any postcondition
+vacuously}.
 \end{lemma}
 \begin{proof}
 \leanok
-There is no successful result to constrain.
+\lead{Idea} No successful result to constrain.
 \end{proof}
 
-\begin{lemma}[Adding a mutual definition block preserves well-formedness]
+\begin{lemma}[Adding a mutual block preserves well-formedness]
 \label{thm:add-mutual-wf}
 \lean{Lean4Lean.addMutual.WF}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment.lean}{120}
-A successful $\mathtt{addMutual}\ env\ vs$ yields a well-formed model family extending the old one
-at every safety level. The headers are checked first, as axioms, and the bodies against the
-temporary environment holding all of them, which is what the \texttt{mutualDef} step expects.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
+
+\lead{In short} A checked $\mathtt{addMutual}\ env\ vs$ \hl{extends the model family}:
+headers checked first as axioms, bodies against the temporary environment holding all of
+them, matching the \texttt{mutualDef} step.
 \end{lemma}
 \begin{proof}
 \uses{thm:add-mutual-block-wf, def:tr-mutual-header, family:check-constant-val, family:except-wf-throw}
 \leanok
-Two monadic loops verified through \texttt{TypeChecker.M.WF.forInFresh} and
-\texttt{forInForall}$_2$, the first producing \texttt{TrMutualHeader} data for each member and the
-second the translated bodies; concluded by \ref{thm:add-mutual-block-wf}.
+\lead{Idea} Two monadic loops (\texttt{forInFresh}, \texttt{forInForall}$_2$) produce the
+headers then the bodies; concluded by \ref{thm:add-mutual-block-wf}.
 \end{proof}
 
 \begin{theorem}[Checked declaration addition preserves well-formedness]
@@ -1721,34 +1499,33 @@ second the translated bodies; concluded by \ref{thm:add-mutual-block-wf}.
 \leanok
 \uses{ind:tr-env, def:vtc-venvs}
 \srcloc{Lean4Lean/Verify/Environment.lean}{197}
-For any \texttt{Declaration}, a successful
-$\mathtt{addDecl}\ env\ decl$ with checking enabled gives a well-formed model family $ves'$ that
-extends $ves$ at every safety level. This is the top of the environment-side verification: it is
-what would make \texttt{TrEnv} an invariant of kernel operation.
-\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''}
+\thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
 \axfoot{sorryAx: the inductDecl case is itself a sorry}
+
+\lead{In short} The top of the environment-side verification: a checked
+$\mathtt{addDecl}\ env\ decl$ \hl{keeps the model family well-formed}, extending it at
+every safety level -- what would make \texttt{TrEnv} an invariant of kernel operation.
 \end{theorem}
 \begin{proof}
 \uses{thm:add-axiom-wf, thm:add-definition-wf, thm:add-theorem-wf, thm:add-opaque-wf, thm:add-mutual-wf, thm:add-quot-wf}
-\textbf{Not proved in Lean.} One case per declaration kind, each discharged by the corresponding
-lemma above; the \texttt{quotDecl} case is now discharged by the real \ref{thm:add-quot-wf}
-contributed on \texttt{iota}, where master had a vacuous argument. The \texttt{inductDecl} case is
-\texttt{sorry} (\srcloc{Lean4Lean/Verify/Environment.lean}{208}): what is missing is a
-construction of an \texttt{AddInduct} witness from \texttt{Environment.addInductive}. The
-\texttt{iota} contribution to this declaration itself is confined to the docstring, the signature
-line and the \texttt{quotDecl} line.
+\stSorry{} \lead{Missing} a construction of an \texttt{AddInduct} witness from
+\texttt{Environment.addInductive} for the \texttt{inductDecl} case
+(\srcloc{Lean4Lean/Verify/Environment.lean}{208}).
+\lead{Idea} One case per declaration kind, each the corresponding lemma above;
+\texttt{quotDecl} by the real \ref{thm:add-quot-wf}.
 \end{proof}
 
 \section{The trust boundary}
 
-\begin{definition}[\texttt{Std.TreeMap.all} and \texttt{any} agree with the list view]
+\begin{definition}[\texttt{TreeMap.all}/\texttt{any} agree with the list]
 \label{family:treemap-axioms}
 \lean{Std.TreeMap.all_eq_all_toList, Std.TreeMap.any_eq_any_toList}
 \leanok
 \srcloc{Lean4Lean/Verify/Axioms.lean}{10}
-Two axioms stating that \texttt{TreeMap.all} and \texttt{any} equal the corresponding
-\texttt{List} predicates over \texttt{toList}. Both cite leanprover/lean4 issue 12798, that is,
-they are missing upstream lemmas rather than unprovable facts.
+
+\lead{In short} Two axioms: \texttt{TreeMap.all}/\texttt{any} \hl{equal the \texttt{List}
+predicate} over \texttt{toList} -- missing upstream lemmas (issue 12798), not unprovable
+facts.
 \end{definition}
 
 \begin{definition}[\texttt{PersistentArray} as a list]
@@ -1756,9 +1533,10 @@ they are missing upstream lemmas rather than unprovable facts.
 \lean{Lean.PersistentArrayNode.toList', Lean.PersistentArray.WF, Lean.PersistentArray.toList', Lean.PersistentArray.toList'_empty, Lean.PersistentArray.toList'_push, Lean.PersistentArray.size_empty, Lean.PersistentArray.size_push, Lean.PersistentArray.WF.toList'_length}
 \leanok
 \srcloc{Lean4Lean/Verify/Axioms.lean}{22}
-A noncomputable list view of \texttt{PersistentArray} with a \texttt{WF} predicate generated by
-\texttt{empty} and \texttt{push}. Only \texttt{toList'\_push} is an axiom, because
-\texttt{insertNewLeaf} is \texttt{partial}; the other facts are proved.
+
+\lead{In short} A noncomputable \hl{list view} of \texttt{PersistentArray}, \texttt{WF}
+generated by \texttt{empty}/\texttt{push}; only \texttt{toList'\_push} is an axiom
+(\texttt{insertNewLeaf} is \texttt{partial}), the rest proved.
 \end{definition}
 
 \begin{definition}[\texttt{PersistentHashMap} as an association list]
@@ -1766,14 +1544,13 @@ A noncomputable list view of \texttt{PersistentArray} with a \texttt{WF} predica
 \lean{Lean.PersistentHashMap.Node.toList', Lean.PersistentHashMap.toList', Lean.PersistentHashMap.WF, Lean.PersistentHashMap.WF.toList'_insert, Lean.PersistentHashMap.WF.find?_eq, Lean.PersistentHashMap.findAux_isSome}
 \leanok
 \srcloc{Lean4Lean/Verify/Axioms.lean}{55}
-The list view of \texttt{PersistentHashMap}, with three axioms: insertion permutes the list view,
-\texttt{find?} is \texttt{lookup} on it, and \texttt{containsAux} agrees with \texttt{findAux}.
-They are axioms because \texttt{insertAux}, \texttt{findAux} and \texttt{containsAux} are opaque.
-Together with \texttt{sorryAx} these three are what
+
+\lead{In short} The list view of \texttt{PersistentHashMap}: \hl{three axioms} for its
+opaque operations -- insertion permutes the list, \texttt{find?} is \texttt{lookup} on it,
+\texttt{containsAux} agrees with \texttt{findAux}. With \texttt{sorryAx}, all that
 \texttt{\#print axioms Lean4Lean.TrEnv.proj\_defeq}
 (\srcloc{Lean4Lean/Tests/ProjInhabit.lean}{595}) reports beyond \texttt{propext},
-\texttt{Classical.choice} and \texttt{Quot.sound}, so they are on the critical path of the
-contributed projection work.
+\texttt{Classical.choice}, \texttt{Quot.sound}.
 \end{definition}
 
 \begin{definition}[Structural equality of \texttt{Syntax}]
@@ -1781,8 +1558,9 @@ contributed projection work.
 \lean{Lean.Syntax.structEq', Lean.Syntax.structEq'_node, Lean.Syntax.structEq_eq}
 \leanok
 \srcloc{Lean4Lean/Verify/Axioms.lean}{90}
-A total copy \texttt{structEq'} of the \texttt{partial def Lean.Syntax.structEq}, an unfolding
-lemma for the node case, and the axiom identifying the two.
+
+\lead{In short} A total copy \texttt{structEq'} of the \texttt{partial}
+\texttt{Lean.Syntax.structEq}, an unfolding lemma, and the axiom \hl{identifying the two}.
 \end{definition}
 
 \begin{definition}[A total copy of \texttt{Lean.Level.normalize}]
@@ -1790,12 +1568,11 @@ lemma for the node case, and the axiom identifying the two.
 \lean{Lean.Level.Total.size, Lean.Level.Total.normalize, Lean.Level.Total.mkMaxAux, Lean.Level.Total.skipExplicit, Lean.Level.Total.isExplicitSubsumedAux, Lean.Level.Total.getMaxArgsAux, Lean.Level.Total.one_le_size, Lean.Level.Total.size_getLevelOffset}
 \leanok
 \srcloc{Lean4Lean/Verify/Axioms.lean}{133}
-\texttt{Lean.Level.normalize} and four helpers are \texttt{partial def}s and therefore opaque. The
-\texttt{Total} namespace is a clause-by-clause copy under the same names with termination proofs
-supplied, using \texttt{size} as the primary and a private \texttt{tag} as the secondary measure.
-The section docstring pins the exact upstream file and line range (v4.33.0-rc2,
-\texttt{Lean/Level.lean} lines 319 to 404) and points at a finite-corpus test; this is the model
-of how such an assumption should be presented.
+
+\lead{In short} \texttt{Lean.Level.normalize} and four helpers are opaque
+\texttt{partial def}s; \texttt{Total} \hl{reproduces them, terminating}, by \texttt{size}
+then a private \texttt{tag}. Pinned to v4.33.0-rc2 \texttt{Lean/Level.lean}:319--404,
+checked against a finite-corpus test.
 \end{definition}
 
 \begin{definition}[Level normalization and level data]
@@ -1804,11 +1581,11 @@ of how such an assumption should be presented.
 \leanok
 \uses{family:level-total}
 \srcloc{Lean4Lean/Verify/Axioms.lean}{177}
-Eight axioms identifying the opaque \texttt{partial} level functions with their total copies, the
-bit-packed \texttt{hasParam} and \texttt{hasMVar} accessors with structural definitions, the
-C++-implemented \texttt{BEq Level} with a lawful instance, and a workaround for a known
-\texttt{mkLevelIMaxCore} elaboration issue.
-\thesisref{unique.tex and axioms.tex: the level inequality algorithm}
+\thesisref{unique.tex and axioms.tex: the level inequality algorithm.}
+
+\lead{In short} Eight axioms \hl{identifying opaque level operations} with \texttt{Total},
+bit-packed accessors with structural definitions, C++ \texttt{BEq Level} with a lawful
+instance, and an elaboration workaround for \texttt{mkLevelIMaxCore}.
 \end{definition}
 
 \begin{definition}[The C++-implemented \texttt{Expr} primitives]
@@ -1816,166 +1593,25 @@ C++-implemented \texttt{BEq Level} with a lawful instance, and a workaround for 
 \lean{Lean.Expr.looseBVarRange_eq, Lean.Expr.replace_eq, Lean.Expr.liftLooseBVars_eq, Lean.Expr.lowerLooseBVars_eq, Lean.Expr.instantiate1_eq, Lean.Expr.instantiate_eq, Lean.Expr.instantiateRev_eq, Lean.Expr.instantiateRange_eq, Lean.Expr.instantiateRevRange_eq, Lean.Expr.abstract_eq, Lean.Expr.abstractRange_eq, Lean.Expr.hasLooseBVar_eq, Lean.Expr.eqv_eq, Lean.Expr.equal_eq}
 \leanok
 \srcloc{Lean4Lean/Verify/Axioms.lean}{360}
-Fourteen axioms identifying Lean's C++ implementations of de Bruijn lifting, lowering,
-instantiation, abstraction, loose-bvar queries and structural equality with reference Lean
-definitions (\texttt{liftLooseBVars'}, \texttt{instantiate1'}, \texttt{abstractList},
-\texttt{eqv'} and so on). Most are annotated as candidates for \texttt{@[implemented\_by]}, that
-is, performance shims rather than genuine gaps.
-\reviewnote{This is the largest single trust assumption of the project: every kernel-level theorem
-about \texttt{Expr} manipulation rests on it. The identifications are shallow and syntactic, but
-nothing in the repository checks them beyond inspection.}
+
+\lead{In short} Fourteen axioms identifying Lean's \hl{C++ implementations} of de Bruijn
+manipulation with reference Lean definitions. Most are \texttt{@[implemented\_by]}
+candidates: performance shims, not genuine gaps.
 \end{definition}
 
-\section{Contribution summary}
-
-The \texttt{iota} branch contributed the inductive-block half of this layer. On master
-\texttt{AddInduct} was a \texttt{Prop} with no constructors, documented as ``essentially a
-\texttt{sorry}'': the \texttt{induct} step of \ref{ind:tr-env} could never fire, so every
-environment containing an inductive type lay outside the verified relation, and every consequence
-of $\mathtt{TrEnv}'$ was silently restricted to inductive-free environments. The branch replaced it
-with a real witness (\ref{struct:add-induct}) recording the kernel data, the four stages of
-\texttt{VEnv.addInduct}, a \ref{struct:tr-ind-type} per type former and a \ref{struct:tr-recursor}
-per recursor, freshness of every inserted name, and the kernel's actual insertion order as a
-permutation of the model's stage order (\ref{def:add-induct-consts}). Supporting it is the
-\texttt{insertConsts} map calculus (\ref{def:insert-consts}, \ref{family:insert-consts-lemmas}).
-From the witness the branch \emph{derives} the block's bookkeeping instead of assuming it as
-further fields: stage recomposition (\ref{family:add-induct-stages}), membership by kind and
-absence of $\delta$-values (\ref{family:add-induct-membership}), agreement of the kernel names with
-the model's together with their distinctness (\ref{family:add-induct-names}), map well-formedness
-(\ref{thm:add-induct-wf}) and two-way lookup transport (\ref{family:add-induct-find}).
-
-The three interface theorems \ref{thm:add-induct-rec-find}, \ref{thm:add-induct-rec-reg} and
-\ref{thm:add-induct-ctor-find} are what the rest of the chapter consumes. They feed, on the
-alignment side, \ref{thm:aligned-add-rules} and \ref{thm:aligned-add-induct}, which replace
-master's one-line \texttt{nomatch} for the \texttt{induct} case and isolate the whole
-kernel-order-versus-model-order difficulty in a single permutation argument; and, on the reduction
-side, \ref{thm:tr-env-pats-iota}, which says every kernel recursor rule is a registered $\iota$
-pattern of the model, and its composition \ref{thm:tr-env-iota-rec} with
-\ref{thm:tr-env-iota-defeq}. A second, unplanned consequence is the whole of
-\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1}: on master \texttt{checkEqType.WF} proved
-\texttt{False}, because a \texttt{TrEnv} could not contain the inductive \texttt{Eq}, so quotient
-initialization was well-formed by vacuity. Once \texttt{AddInduct} became inhabitable that argument
-evaporated and the branch had to prove it for real, which is \ref{thm:with-local-decl-run} through
-\ref{thm:add-quot-wf}: a symbolic replay of the kernel's expression builder
-(\ref{def:quot-telescope-data}, \ref{family:quot-telescope-find}, \ref{def:quot-tactics}), the
-evaluation of the four \texttt{mkForall} telescopes (\ref{family:quot-type-eqs},
-\ref{thm:add-quot-eq}), the analysis of \texttt{checkEqType} (\ref{def:check-eq-type-shape},
-\ref{thm:environment-get-ok}, \ref{thm:check-eq-type-ok}), explicit translations of the four
-quotient types (\ref{family:quot-type-tr}, \ref{thm:quot-ready}), and the assembly
-\ref{thm:exists-add-quot}, \ref{thm:add-quot-wf}. That last theorem discharges the
-\texttt{quotDecl} case of \ref{thm:add-decl-wf} for real.
-
-The \texttt{trproj} branch contributed the structure-likeness and projection half. Its additions to
-the inductive-block vocabulary are the parameters and the \texttt{all}, \texttt{numParams},
-\texttt{numIndices} and arity fields of \ref{struct:tr-ind-type} and the \texttt{name\_major} field
-of \ref{struct:tr-recursor}. On them rest \ref{thm:aligned-constants-pull},
-\ref{thm:tr-env-ctor-arity} (a constructor's model type has $\Pi$-arity
-$numParams + numFields$) and \ref{thm:tr-env-structure-rec}, which takes exactly the three tests
-the kernel's \texttt{inferProj} and \texttt{reduceProjCore} perform before accepting a projection
-and returns the recursor's telescope split and the constructor's parameter count. The branch then
-built the inverse of the $\iota$ interface: \ref{struct:iota-rule} bundles the kernel data behind
-one registered pattern together with its model-side shape, \ref{thm:iota-rule-step} transports it
-along the non-\texttt{induct} steps, and \ref{thm:pats-iota-inv-shape} (restated at the kernel
-environment level as \ref{thm:tr-env-pats-iota-inv-shape}) recovers a kernel rule from a registered
-pattern. With the $\beta$-telescope calculus \ref{family:beta-telescope} these combine into
-\ref{thm:tr-env-proj-defeq}: the recursor expansion of the $i$-th projection of a value
-definitionally equal to a saturated constructor spine is definitionally equal to the $i$-th field.
-The architecture is the right one, in that the projection computation rule is derived from the
-registered $\iota$ rule rather than postulated alongside it.
-
-Connection to the rest of the blueprint. The $\iota$ interface reaches the kernel model at exactly
-one point, \ref{thm:vtc-iota-reduce-core}, which has no \texttt{sorry} of its own; the projection work reaches it at one
-point through \ref{thm:tr-expr-mk-app-list}, and otherwise not at all. Upstream, the two branches
-depend on the inductive-specification lemmas of Chapter~\ref{chap:inductive} and on the projection
-translation \ref{struct:trprojctor} of Chapter~\ref{chap:trexpr}; downstream, the intended
-consumers are \ref{thm:vtc-reduceprojcore} and \ref{thm:vtc-inferproj-struct} in
-Chapter~\ref{chap:typechecker}.
-
-What remains open. Nothing in the repository constructs an \texttt{AddInduct} witness from
-\texttt{Environment.addInductive}, and the \texttt{inductDecl} case of \ref{thm:add-decl-wf} is
-still \texttt{sorry}, so every theorem above is conditional on a hypothesis that is never
-discharged: the branches moved the \texttt{sorry} from ``\texttt{AddInduct} is empty'' to
-``\texttt{AddInduct} has no producer''. \ref{thm:tr-env-proj-defeq} has no consumer outside
-\ref{test:projinhabit-axioms}, because \ref{thm:vtc-reduceprojcore}, \ref{thm:vtc-inferproj-struct}
-and \ref{thm:vtc-inferproj} are \texttt{sorry} (\ref{thm:vtc-reduceproj}, which delegates to the
-first of these, is itself proved) and its premise \texttt{TrProjCtor} is so far inhabited
-only by hand in the tests. Finally both \ref{family:beta-telescope} and
-\ref{thm:tr-env-proj-defeq} inherit \texttt{sorryAx} through unique typing
-(\texttt{VEnv.WF.orderedStrong}, \texttt{VEnv.WF.patsStrong}), which is outside this group but on
-the critical path of its headline result.
-
-\section{Review notes}
-
+\section*{Caveats}
 \begin{itemize}
-\item \textbf{High.} The \texttt{inductDecl} case of \texttt{addDecl.WF} is still \texttt{sorry}
-(\srcloc{Lean4Lean/Verify/Environment.lean}{208}) and nothing anywhere constructs an
-\texttt{AddInduct} witness from \texttt{Environment.addInductive}. The entire inductive-block
-apparatus of both branches (\ref{struct:add-induct}, \ref{struct:tr-ind-type},
-\ref{struct:tr-recursor}, \ref{thm:aligned-add-induct}, \ref{thm:tr-env-pats-iota},
-\ref{thm:pats-iota-inv-shape}) is conditional on that hypothesis. The theorems are correct but in
-the end-to-end sense currently vacuous.
-\item \textbf{High.} \texttt{TrEnv.proj\_defeq} is orphaned
-(\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}): its only consumer in the repository is
-the \texttt{\#print axioms} check at \srcloc{Lean4Lean/Tests/ProjInhabit.lean}{595}.
-\texttt{reduceProjCore.WF} (\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143}),
-\texttt{inferProj.WF\_struct} (\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{392}) and
-\texttt{inferProj.WF} (\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{407}) remain
-\texttt{sorry}, so the strongest \texttt{trproj} theorem does not yet connect to the kernel
-model. Its premise \texttt{TrProjCtor}
-is likewise only ever inhabited by hand in tests, the general construction
-\texttt{inferProj.WF\_struct} being itself \texttt{sorry}.
-\item \textbf{Medium.} \texttt{TrEnv.pats\_iota\_inv\_shape}
-(\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{903}) is redundant: its proof is literally
-\texttt{TrEnv'.pats\_iota\_inv\_shape H hp}, the two statements being definitionally equal, and
-unlike its sibling \texttt{TrEnv.pats\_iota'} it does not convert \texttt{SMap.find?} into
-\texttt{Environment.find?}. Its docstring claims otherwise, and \texttt{proj\_defeq} still performs
-the conversions by hand at \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1060} and
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1072}.
-\item \textbf{Medium.} \texttt{TrRecursor.all}
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240}) and \texttt{TrRecursor.k}
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{245}) are never used anywhere in the repository.
-They are extra proof obligations on a producer of \texttt{AddInduct} that buy nothing; \texttt{k}
-in particular records the K-like reduction flag, for which the model has no corresponding rule.
-\item \textbf{Medium.} \texttt{insertConsts\_find?\_none}
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{165}) is dead code: apart from its own statement,
-its only occurrence is its own recursive call.
-\item \textbf{Medium.} \texttt{AddInduct} is declared without a \texttt{: Prop} ascription
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{272}), so it is a \texttt{Type}-valued structure
-and the \texttt{induct} constructor of $\mathtt{TrEnv}'$ carries data. This is necessary, since the
-derived lemmas project the fields \texttt{ivals}, \texttt{envR} and \texttt{order}, and harmless
-for the present consumers, which all eliminate into \texttt{Prop}; but it is a real change to the
-shape of the project's central invariant relative to master's
-\texttt{inductive AddInduct ... : Prop} and it is nowhere documented. (It does not, as one might
-read it, cost $\mathtt{TrEnv}'$ large elimination: with nine constructors it never had any.)
-\item \textbf{Medium.} Misfiled material. The $\beta$-telescope family
-(\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{959}) is pure \texttt{VExpr} metatheory with no
-environment-translation content and belongs in \texttt{Theory/Typing/Lemmas.lean}; the same holds
-for \texttt{TrExpr.mkAppList} (\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1166}), which is
-\texttt{TrExpr} rebuilding rather than environment bookkeeping. Both live here only because
-\texttt{proj\_defeq} needs them.
-\item \textbf{Medium.} \texttt{TrEnv.iota\_defeq}
-(\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{917}) is a three-line wrapper over
-\texttt{VEnv.IsDefEq.pat} with no \texttt{TrEnv} hypothesis at all, yet is named as if it had one.
-\item \textbf{Medium.} Brittleness in \texttt{Quot.lean}: \texttt{AddQuotAux}
-(\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{27}) hand-replays the binder names, binder infos
-and \texttt{withLocalDecl} order of \texttt{Lean4Lean/Quot.lean}, with nothing linking the two
-beyond the proofs breaking, and the \texttt{T\ldots\_tr} derivations
-(\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{331}) are sixty lines of hand-built
-\texttt{TrExprS} trees. Correct, but expensive to maintain.
-\item \textbf{Low.} \texttt{addQuot.WF} extracts the four \texttt{checkName} results with four
-near-identical seven-line blocks (\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{521}) and
-rebuilds the \texttt{safePrimitives} field with a 22-line hand-nested chain of
-\texttt{Environment.find?\_add\_of\_ne} (\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{584});
-both are mechanical repetition that a single auxiliary lemma would remove. Also
-\texttt{Lean4Lean.withLocalDecl\_run} (\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{20}) and
-\texttt{Lean4Lean.AddQuotAux.Environment.get\_ok}
-(\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{244}) are generally useful lemmas placed in,
-respectively, the root namespace and a private auxiliary namespace.
-\item \textbf{Low (reviewer caveat, not a defect).} Some lines the per-line attribution marks as
-contributed are master code relocated by the refactor commits:
-\texttt{TrConstant.sf\_mono}/\texttt{mono}, \texttt{TrConstVal.mono} and \texttt{TrDefVal.mono}
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{34}, moved from \texttt{Lemmas.lean}) and
-\texttt{insertDefs\_wf} (\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{211}, moved from
-\texttt{Extension.lean}). Sixteen of the 398 \texttt{iota} lines in \texttt{Basic.lean} are of
-this kind, so the raw line counts overstate the branch slightly.
+\item The \texttt{inductDecl} case of \ref{thm:add-decl-wf} is \texttt{sorry}, and nothing
+builds an \texttt{AddInduct} witness from \texttt{Environment.addInductive}: the whole
+inductive-block apparatus is conditional on that hypothesis.
+\item \ref{thm:tr-env-proj-defeq} has no non-test consumer: \texttt{reduceProjCore.WF},
+\texttt{inferProj.WF\_struct} and \texttt{inferProj.WF} are still \texttt{sorry}, and its
+premise \texttt{TrProjCtor} is inhabited only by hand in tests.
+\item \ref{family:beta-telescope} and \ref{thm:tr-env-proj-defeq} inherit
+\texttt{sorryAx} through unique typing (\texttt{VEnv.WF.orderedStrong},
+\texttt{VEnv.WF.patsStrong}).
+\item The \ref{family:persistent-hash-map-axioms} axioms sit on \ref{thm:tr-env-proj-defeq}'s
+critical path, alongside \texttt{propext}, \texttt{Classical.choice}, \texttt{Quot.sound}.
+\item The \ref{family:expr-axioms} axioms are the project's largest trust assumption:
+every kernel-level \texttt{Expr} theorem rests on them, checked only by inspection.
 \end{itemize}

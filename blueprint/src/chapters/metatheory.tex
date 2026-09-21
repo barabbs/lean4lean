@@ -1,728 +1,672 @@
 \chapter{Metatheory: strong typing, uniqueness, Church--Rosser}
 \label{chap:metatheory}
 
-This chapter covers the four files that carry the syntactic metatheory of the idealised
-theory: \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1} (1308 lines),
-\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{1} (279 lines),
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1} (1394 lines) and
-\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{1} (696 lines). Together they take the
-single declarative judgment \texttt{VEnv.IsDefEq} of Chapter~\ref{chap:typing} and prove
-about it the four things the rest of the development needs: regularity (made structural by
-an annotated copy of the judgment), unique typing, confluence modulo proof irrelevance, and
-a syntax-directed reading of typing that the verified type checker can be compared against.
-The files are read in import order, which is also dependency order:
-\texttt{Strong} $\to$ \texttt{UniqueTyping} $\to$ \texttt{ChurchRosser} $\to$
-\texttt{HeadReduction}.
+\section*{At a glance}
+\begin{itemize}
+\item \lead{Goal} The metatheory of \texttt{VEnv.IsDefEq}: regularity, unique typing,
+      confluence, syntax-directed typing.
+\item \lead{Main results} Theorem~\ref{thm:unique-typing} (unique typing);
+      Theorem~\ref{thm:parreds-church-rosser} (Church--Rosser); Theorem~\ref{thm:parreds-standard}
+      (standardization); Theorem~\ref{thm:infertype-exists} (inference completeness).
+\item \lead{Status} \stSorry{} Theorem~\ref{thm:isdefequ-weakn-iff},
+      Theorem~\ref{thm:normaleq-parred}; \stTainted{} unique typing, Church--Rosser,
+      standardization, inference; \stProved{} \texttt{Strong.lean}, taking
+      \texttt{OrderedStrong} as a hypothesis rather than deriving it.
+\item \lead{Contribution} \texttt{iota}: the strong $\iota$ rule
+      (Definition~\ref{inductive:isdefeqstrong-pat}); a \texttt{pat} case in eleven inductions
+      of \texttt{Strong.lean}; \texttt{OrderedStrong}
+      (Definition~\ref{struct:orderedstrong}); one class field/rule case in
+      \texttt{ChurchRosser.lean}.
+\item \lead{Lean files} \texttt{Lean4Lean/Theory/Typing/\{Strong,UniqueTyping,ChurchRosser,HeadReduction\}.lean}.
+\item \lead{Thesis} typesys.tex, unique.tex; standardization: Kashima (2000).
+\end{itemize}
 
 \begin{remark}
-Notation used throughout. $\Gamma \vdash e_1 \equiv e_2 : A$ is \texttt{VEnv.IsDefEq},
-$\Gamma \vdash e : A$ is \texttt{VEnv.HasType} (the diagonal of the former), and
-$\Gamma \vdash e_1 \equiv e_2$ is the untyped \texttt{VEnv.IsDefEqU}. The strong
-(fully annotated) judgments are written $\Gamma \Vdash e_1 \equiv e_2 : A$
-(\texttt{IsDefEqStrong}) and $\Gamma \Vdash e : A$ / $\Gamma \Vdash e :!\, A$
-(\texttt{HasTypeStrong}, with and without the conversion rule);
-$\Gamma \vdash_n e : A$ is the stratified judgment. The reduction relations are
-$\equiv_p$ (normal equality), $\gg$ (parallel reduction), $\ggg$ (complete parallel
-reduction), $\gg^*$ (its iteration), $\gg\ll$ (Church--Rosser equality),
-$\rightsquigarrow$ and $\rightsquigarrow^*$ (weak head reduction),
-$\rightsquigarrow_<$ (standard reduction), $\triangleright$ and $\triangleright^*$
-(type inference). All of them live under a fixed environment and universe count taken
-from the class \texttt{Params} (Definition~\ref{class:cr-params}) in the last two files.
+\lead{Notation} In \texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}, the reduction
+relations below fix an environment/universe count from class \texttt{Params}
+(Definition~\ref{class:cr-params}).
+\par\smallskip\noindent
+\begin{tabular}{p{0.31\linewidth}p{0.62\linewidth}}
+\toprule
+Notation & Meaning \\
+\midrule
+$\Gamma \vdash e_1 \equiv e_2 : A$, $\Gamma \vdash e : A$ & \texttt{IsDefEq}, its diagonal
+\texttt{HasType} \\
+$\Gamma \vdash e_1 \equiv e_2$ & untyped \texttt{IsDefEqU} \\
+$\Gamma \Vdash e_1 \equiv e_2 : A$ & \texttt{IsDefEqStrong}, fully annotated \\
+$\Gamma \Vdash e : A$, $\Gamma \Vdash e :!\,A$ & \texttt{HasTypeStrong}, with/without conversion \\
+$\Gamma \vdash_n e : A$ & stratified judgment \\
+$\equiv_p$, $\gg$, $\ggg$, $\gg^*$, $\gg\ll$ & normal equality; parallel, complete, iterated
+parallel reduction; Church--Rosser equality \\
+$\rightsquigarrow$, $\rightsquigarrow^*$, $\rightsquigarrow_<$ & weak head reduction, iterated,
+standard \\
+$\triangleright$, $\triangleright^*$ & type inference, up to head reduction \\
+\bottomrule
+\end{tabular}\par\smallskip
 \end{remark}
-
-Against the thesis, \texttt{Strong.lean} is Lemma \texttt{thm:reg} (Regularity) of
-\texttt{typesys.tex} turned into a structural property, \texttt{UniqueTyping.lean} is
-Theorem \texttt{thm:utype} of \texttt{unique.tex}, and \texttt{ChurchRosser.lean} is
-\texttt{unique.tex} \texttt{\S sec:church\_rosser} almost verbatim: \texttt{NormalEq} is
-$\equiv_p$, \texttt{ParRed} is $\gg_\kappa$, \texttt{ParRed.triangle} is
-\texttt{thm:tri}, \texttt{NormalEq.parRed} is \texttt{thm:gg\_compat},
-\texttt{ParRedS.church\_rosser} is \texttt{thm:church\_rosser} and
-\texttt{IsDefEq.church\_rosser} is the forward half of \texttt{thm:ckappa}.
-\texttt{HeadReduction.lean} has no thesis counterpart for its core: standardization is
-taken from Kashima (2000), cited in the file header, and used together with confluence to
-get the inversions ($\rightsquigarrow$ to a sort, $\rightsquigarrow$ to a $\Pi$) that the
-algorithmic layer needs.
-
-Of the 3677 lines, 173 come from the \texttt{iota} branch: 164 in \texttt{Strong.lean} and
-9 in \texttt{ChurchRosser.lean}. \texttt{UniqueTyping.lean} and \texttt{HeadReduction.lean}
-are byte-identical to master. In \texttt{Strong.lean} the \texttt{iota} work is of three
-kinds: one new constructor \texttt{IsDefEqStrong.pat} carrying the typing of the $\iota$
-reduct; a \texttt{pat} case in each of the eleven structural inductions over the strong
-judgment, each following the same recipe (commute the operation with
-\texttt{Pattern.RHS.apply}, transport the match and the realizer, map the check triples); and
-the new environment hypothesis
-\texttt{PatStrong}/\texttt{PatsStrongOn}/\texttt{OrderedStrong} with the refactoring of
-master's \texttt{Ordered.strong} into reusable pieces. In \texttt{ChurchRosser.lean} it is one
-class field and one five-line proof case.
-
-The design is good and defended in docstrings a reviewer can check: annotating the strong
-rule with the reduct's typing is load-bearing in five later proofs, and isolating the
-resulting obligation per rule (rather than per environment) is the granularity a rule-by-rule
-discharge needs. Nothing added here is dead. The cost is large and must be stated with every
-claim about this chapter: on master \texttt{IsDefEq.strong} needed only \texttt{Ordered env},
-which was a proved consequence of well-formedness; on this branch it needs
-\texttt{OrderedStrong env}, obtainable from \texttt{VEnv.WF} only through
-\texttt{VEnv.WF.orderedStrong} (\ref{thm:wf-orderedstrong}), whose \texttt{patsStrong}
-component is admitted (\ref{thm:wf-patsstrong}). Every consumer of the strong system, which
-includes all of \texttt{UniqueTyping.lean} and through it most of the other two files,
-is therefore conditional on that admission. The declarations of \texttt{Strong.lean} itself
-stay free of \texttt{sorryAx}, since they take \texttt{OrderedStrong} as a hypothesis rather
-than derive it; the taint enters at the first call site that discharges it from
-\texttt{VEnv.WF}, which is every theorem of \texttt{UniqueTyping.lean}. Independently of the
-branches, master leaves two \texttt{sorry}s in \texttt{NormalEq.parRed} and one in
-\texttt{IsDefEqU.weakN\_iff}, so Church--Rosser and everything it feeds is unproved today; and
-the \texttt{Params} class has a single construction, which applies only to environments built
-from axioms and inductives.
 
 \section{The strong judgments}
 
-\begin{definition}[The strengthened definitional equality \texttt{IsDefEqStrong}]
+\begin{definition}[Strong def-eq \texttt{IsDefEqStrong}]
 \label{def:isdefeqstrong}
 \lean{Lean4Lean.VEnv.IsDefEqStrong}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{18}
-A copy of \texttt{IsDefEq} in which every rule additionally carries the typing derivations
-its statement implicitly needs: \texttt{bvar} carries a sort derivation for the looked-up
-type, \texttt{appDF} the types of domain, codomain and instantiated codomain, \texttt{beta}
-the typing of the reduct $e[e']$, \texttt{eta} the lifted typings, and \texttt{extra} both
-sides of the axiom in the empty \emph{and} the current context. Every invariant that
-regularity would have to re-derive can then be read off a derivation.
-The \texttt{iota} branch adds exactly one constructor, \texttt{pat}
-(Definition~\ref{inductive:isdefeqstrong-pat}).
 \uses{def:isdefeq, def:lookup, struct:venv, def:pattern-check-realizes}
-\thesisref{typesys.tex Lemma thm:reg (Regularity), made structural}
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{18}
+\thesisref{typesys.tex thm:reg}
+
+\lead{In short} A copy of \texttt{IsDefEq} where every rule carries \hl{the typing derivations
+its statement needs}.
+\begin{itemize}
+\item \texttt{bvar}: a sort derivation for the looked-up type;
+\item \texttt{appDF}: types of domain, codomain, instantiated codomain;
+\item \texttt{beta}: typing of the reduct $e[e']$; \texttt{eta}: the lifted typings;
+\item \texttt{extra}: both sides of the axiom, empty and current context;
+\item \texttt{iota} adds one constructor, \texttt{pat}
+      (Definition~\ref{inductive:isdefeqstrong-pat}).
+\end{itemize}
 \end{definition}
 
-\begin{definition}[Strong $\iota$ rule, annotated with the reduct's typing]
+\begin{definition}[Strong $\iota$ rule]
 \label{inductive:isdefeqstrong-pat}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.pat}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{89}
-The rule reads: if $env.pats\;p\;r$, the pattern $p$ matches $e$ with level assignment $m_1$
-and subterm assignment $m_2$, $\Gamma \Vdash e : A$, $\Gamma \Vdash r_1.apply\;m_1\;m_2 : A$,
-the list $chk$ realizes the side conditions $r_2$ at $m_1, m_2$, and every triple
-$t \in chk$ satisfies $\Gamma \Vdash t_1 \equiv t_{2.1} : t_{2.2}$, then
-$\Gamma \Vdash e \equiv r_1.apply\;m_1\;m_2 : A$. Relative to \texttt{IsDefEq.pat}
-(\ref{rule:isdefeq-pat}) the single extra premise is the typing of the \emph{reduct}: subject
-reduction for the rule, recorded as an annotation instead of proved later. The choice is
-parallel to master's \texttt{beta} (which carries $e[e']$) and \texttt{extra} (which carries
-both sides), and it is the premise that lets the \texttt{pat} case of
-\ref{thm:strong-foralle-inv}, \ref{thm:strong-hastype-prime}, \ref{def:equptolevels},
-\ref{thm:equptolevels-defeq} and \ref{thm:strong-substeq} close: each of those needs an
-induction hypothesis for the right-hand side.
 \uses{rule:isdefeq-pat, def:isdefeqstrong, def:pattern-check-realizes, def:patstrong}
-\thesisref{typesys.tex ``Regularity continued'' item:red\_equiv, subject reduction for $\rightsquigarrow$}
-\reviewnote{the check list is specified by \texttt{Pattern.Check.Realizes}, which constrains
-only the two term components of each triple and leaves the type component free; the rule then
-asks for a typed equality at that free type. Sound, but $chk$ is not determined by
-$(p, r, m_1, m_2)$, so two derivations of the same rule instance may carry different $chk$.}
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{89}
+\thesisref{typesys.tex item:red\_equiv}
+
+\lead{In short} Strengthens \texttt{IsDefEq.pat} with \hl{one extra premise: the reduct is
+itself well typed}.
+\begin{itemize}
+\item \lead{Given} $env.pats\;p\;r$, $p$ matches $e$ at $m_1, m_2$, $\Gamma \Vdash e : A$,
+      $\Gamma \Vdash r_1.apply\;m_1\;m_2 : A$, and a check list $chk$ realizing $r_2$ with
+      $\Gamma \Vdash t_1 \equiv t_{2.1} : t_{2.2}$ for every $t \in chk$;
+\item \lead{Then} $\Gamma \Vdash e \equiv r_1.apply\;m_1\;m_2 : A$.
+\end{itemize}
+The recorded reduct typing lets five later \texttt{pat} cases close.
 \end{definition}
 
-\begin{definition}[The strengthened typing judgment \texttt{HasTypeStrong}]
+\begin{definition}[Strong typing \texttt{HasTypeStrong}]
 \label{def:hastypestrong}
 \lean{Lean4Lean.VEnv.HasTypeStrong}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{108}
-A Boolean-indexed judgment, $\Gamma \Vdash e :!\, A$ at index \texttt{false} for the
-structural rules and $\Gamma \Vdash e : A$ at index \texttt{true} after \texttt{base} or
-\texttt{defeq}. Separating the conversion rule by an index makes inversion on a structural
-rule a one-line \texttt{cases}. It has no $\iota$ rule and needs none: it is a typing, not
-an equality, judgment.
 \uses{def:isdefeqstrong}
+\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{108}
+
+\lead{In short} $\Gamma \Vdash e :!\,A$ for the structural rules, $\Gamma \Vdash e : A$ after
+\texttt{base}/\texttt{defeq}, \hl{indexed by a Boolean so inversion on a structural rule is one
+\texttt{cases}}. No $\iota$ rule: it types, it does not equate.
 \end{definition}
 
-\begin{lemma}[Basic operations on the strong judgment]
+\begin{lemma}[Basic strong operations]
 \label{fam:strong-basic}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.hasType,Lean4Lean.VEnv.IsDefEqStrong.weak0,Lean4Lean.VEnv.IsDefEqStrong.defeqDF_l,Lean4Lean.VEnv.IsDefEqStrong.instDF}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{147}
-Reflexivity of both sides of a strong equality (\texttt{hasType}); weakening a closed strong
-judgment into any context (\texttt{weak0}); retyping along a definitionally equal context head
-(\texttt{defeqDF\_l}); and the substitution congruence
-$\Gamma \Vdash f[a] \equiv f'[a'] : B[a]$ from
-$A :: \Gamma \Vdash f \equiv f' : B$ and $\Gamma \Vdash a \equiv a' : A$ (\texttt{instDF}).
+
+\lead{In short} Basic closure properties.
+\begin{itemize}
+\item reflexivity of both sides; weaken a closed judgment into any context;
+\item retype along a definitionally equal context head;
+\item substitution congruence: $A::\Gamma \Vdash f\equiv f':B$ and $\Gamma\Vdash a\equiv a':A$
+      give $\Gamma\Vdash f[a]\equiv f'[a']:B[a]$.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeqstrong, thm:strong-instn, thm:strong-weakn}
 \leanok
-\texttt{hasType} is $H.trans\;H.symm$ and $H.symm.trans\;H$; \texttt{weak0} lifts from the
-empty context using closedness; \texttt{instDF} builds a $\beta$ redex and contracts it,
-applying the rule twice, once at $B$ and once at $\mathsf{sort}\;v$.
+\lead{Idea} \texttt{hasType} is $H.trans\,H.symm$; \texttt{weak0} lifts from the empty context;
+\texttt{instDF} builds and contracts a $\beta$ redex, applying the rule at $B$ and at
+$\mathsf{sort}\,v$.
 \end{proof}
 
-\begin{lemma}[Weakening for the strong judgment]
+\begin{lemma}[Weakening, strong judgment]
 \label{thm:strong-weakn}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.weakN}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{153}
-For an ordered environment and a context lifting $W : \mathtt{Ctx.LiftN}\;n\;k\;\Gamma\;\Gamma'$,
-$\Gamma \Vdash e_1 \equiv e_2 : A$ gives
-$\Gamma' \Vdash e_1{\uparrow} \equiv e_2{\uparrow} : A{\uparrow}$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{153}
+
+\lead{In short} For ordered $env$ and $W:\mathtt{Ctx.LiftN}\,n\,k\,\Gamma\,\Gamma'$,
+$\Gamma \Vdash e_1\equiv e_2:A$ gives
+$\Gamma'\Vdash e_1{\uparrow}\equiv e_2{\uparrow}:A{\uparrow}$.
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeqstrong, family:pattern-transport-master, family:pattern-transport-iota}
 \leanok
-Induction on the derivation. The \texttt{iota} branch adds the \texttt{pat} case (193--199):
-rewrite with \texttt{Pattern.RHS.liftN\_apply} so the lifted reduct is again a reduct, lift
-the match with \texttt{Pattern.matches\_liftN} and the realizer with
-\texttt{Realizes.map\_liftN}, then lift each check triple pointwise.
-\thesisref{typesys.tex Lemma thm:weak}
+\lead{Idea} Induction; the \texttt{iota} case rewrites with \texttt{Pattern.RHS.liftN\_apply},
+lifts the match and realizer, and lifts each check triple pointwise.
+\thesisref{typesys.tex thm:weak}
 \end{proof}
 
-\begin{theorem}[The strong judgment implies the ordinary one]
+\begin{theorem}[Strong implies ordinary]
 \label{thm:strong-defeq}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.defeq}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{201}
-$\Gamma \Vdash e_1 \equiv e_2 : A$ implies $\Gamma \vdash e_1 \equiv e_2 : A$: forgetting the
-annotations is sound.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{201}
+
+\lead{In short} $\Gamma\Vdash e_1\equiv e_2:A$ implies $\Gamma\vdash e_1\equiv e_2:A$:
+\hl{forgetting the annotations is sound}.
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeq, def:isdefeqstrong, rule:isdefeq-pat}
 \leanok
-Induction, applying the corresponding \texttt{IsDefEq} constructor in each case. The
-\texttt{pat} case (216) is one line and simply drops the reduct-typing annotation, which
-confirms that \texttt{IsDefEqStrong.pat} is a faithful strengthening of
-\texttt{IsDefEq.pat}.
-\thesisref{no thesis counterpart; the annotated judgment is a Lean device}
+\lead{Idea} Induction, applying the matching \texttt{IsDefEq} constructor each time; the
+\texttt{pat} case drops the reduct-typing annotation.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{lemma}[Monotonicity of the strong judgment in the environment]
+\begin{lemma}[Monotonicity in environment]
 \label{thm:strong-mono}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.mono}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{219}
-If $env \le env'$ then $\Gamma \Vdash e_1 \equiv e_2 : A$ over $env$ holds over $env'$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{219}
+
+\lead{In short} $env\le env'$ carries $\Gamma\Vdash e_1\equiv e_2:A$ over $env$ to over $env'$.
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeqstrong, struct:venv-le}
 \leanok
-Induction; \texttt{constDF} and \texttt{extra} use the first two components of the ordering
-and the \texttt{pat} case uses the third, monotonicity of \texttt{pats}, which was added to
-\texttt{VEnv.LE} on the \texttt{iota} branch.
+\lead{Idea} Induction; \texttt{constDF}/\texttt{extra} use the first two components of the
+ordering, the \texttt{pat} case the third, monotonicity of \texttt{pats}.
 \thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{definition}[Equality up to universe levels]
+\begin{definition}[Equality up to levels]
 \label{def:equptolevels}
 \lean{Lean4Lean.VEnv.EqUpToLevels,Lean4Lean.VEnv.EqUpToLevels.instL,Lean4Lean.VEnv.EqUpToLevels.refl,Lean4Lean.VEnv.EqUpToLevels.weakN,Lean4Lean.VEnv.EqUpToLevels.instN}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{246}
-A structural relation on terms that differ only in equivalent universe levels (congruence for
-every term former; \texttt{const} compares level lists and \texttt{sort} single levels up to
-$\approx$). The
-accompanying lemmas say that two level instantiations of a strongly typed term are related
-(\texttt{instL}), that such a term is related to itself (\texttt{refl}), and that the relation
-survives weakening and substitution.
 \uses{def:isdefeqstrong, ind:vlevel}
-\thesisref{no thesis counterpart; a Lean device for the level-instantiation clause of \texttt{EnvStrong}}
-\reviewnote{only \texttt{EqUpToLevels.instL} was touched on the \texttt{iota} branch, by a
-one-line \texttt{pat} case at 278 taking the left components of the two induction
-hypotheses.}
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{246}
+\thesisref{no thesis counterpart}
+
+\lead{In short} Structural congruence relating terms that differ only in \hl{equivalent
+universe levels} ($\approx$ on \texttt{const} level lists and \texttt{sort}).
+\begin{itemize}
+\item two level instantiations of a strongly typed term are related;
+\item such a term relates to itself; the relation survives weakening and substitution.
+\end{itemize}
 \end{definition}
 
-\begin{definition}[The strong invariant on a closed declaration \texttt{EnvStrong}]
+\begin{definition}[Strong invariant \texttt{EnvStrong}]
 \label{def:envstrong}
 \lean{Lean4Lean.VEnv.EnvStrong}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{309}
-$EnvStrong\;env\;U\;e\;A$ is the conjunction of four things: $[\,] \Vdash e \equiv e : A$;
-$A$ is strongly a type in the empty context; any two equivalent level instantiations of $e$
-are strongly equal at $A$ instantiated on the left; and if $e$ is $\Pi A'.\,B'$ then $A'$ is
-strongly a type and $B'$ is strongly a type in $[A']$.
 \uses{def:isdefeqstrong}
+\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{309}
+
+\lead{In short} $EnvStrong\;env\;U\;e\;A$: \hl{the four invariants regularity needs} about a
+closed, well-typed declaration.
+\begin{itemize}
+\item $[\,]\Vdash e\equiv e:A$;
+\item $A$ is strongly a type in the empty context;
+\item equivalent level instantiations of $e$ are strongly equal at $A$, left-instantiated;
+\item if $e=\Pi A'.B'$ then $A'$ is strongly a type and $B'$ is strongly a type in $[A']$.
+\end{itemize}
 \end{definition}
 
-\begin{lemma}[\texttt{EnvStrong} is monotone in the environment]
+\begin{lemma}[\texttt{EnvStrong} is monotone]
 \label{thm:envstrong-mono}
 \lean{Lean4Lean.VEnv.EnvStrong.mono}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{319}
-If $env \le env'$ and $EnvStrong\;env\;U\;e\;A$ then $EnvStrong\;env'\;U\;e\;A$.
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{319}
+
+\lead{In short} $env\le env'$ carries $EnvStrong\;env\;U\;e\;A$ to $env'$.
 \end{lemma}
 \begin{proof}
 \uses{thm:strong-mono, def:envstrong}
 \leanok
-Componentwise, by \texttt{IsDefEqStrong.mono} on each of the four conjuncts. The statement is
-extracted from the anonymous lambda inside master's \texttt{Ordered.strong}; it is consumed
-three times in this file (\texttt{OnTypes.addConst}, \texttt{addDefEq}, \texttt{addPat}) and
-twice more in \texttt{VEnv.addDefEqs\_strong}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{171}). A factoring, not new mathematics.
+\lead{Idea} Componentwise, by \texttt{IsDefEqStrong.mono} on each of the four conjuncts.
 \thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{lemma}[Level instantiation for the strong judgment]
+\begin{lemma}[Level instantiation, strong]
 \label{thm:strong-instl}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.instL}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{326}
-For a list of levels well formed in $U'$, $\Gamma \Vdash e_1 \equiv e_2 : A$ over $U$ gives
-$\Gamma[ls] \Vdash e_1[ls] \equiv e_2[ls] : A[ls]$ over $U'$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{326}
+
+\lead{In short} For levels $ls$ well formed in $U'$: $\Gamma\Vdash e_1\equiv e_2:A$ over $U$
+gives $\Gamma[ls]\Vdash e_1[ls]\equiv e_2[ls]:A[ls]$ over $U'$.
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeqstrong, family:pattern-transport-iota}
 \leanok
-Induction. The \texttt{pat} case (362--367) rewrites with
-\texttt{Pattern.RHS.instL\_apply}, transports the match by \texttt{Pattern.matches\_instL} and
-the realizer by \texttt{Realizes.map\_instL}, and instantiates each check triple.
-\thesisref{no thesis counterpart; level instantiation for the annotated judgment}
+\lead{Idea} Induction; the \texttt{pat} case rewrites with \texttt{Pattern.RHS.instL\_apply},
+transports the match and realizer, instantiates each check triple.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{definition}[Strongly well-formed context \texttt{CtxStrong}]
+\begin{definition}[Strong context \texttt{CtxStrong}]
 \label{def:ctxstrong}
 \lean{Lean4Lean.VEnv.CtxStrong,Lean4Lean.VEnv.CtxStrong.lookup,Lean4Lean.VEnv.CtxStrong.defeq,Lean4Lean.VEnv.CtxStrong.levelWF}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{369}
-$CtxStrong\;env\;U\;\Gamma$ says every entry of $\Gamma$ is strongly a sort in its own prefix.
-From it one reads off the (lifted) type of a de Bruijn lookup, ordinary well-formedness
-$OnCtx\;\Gamma\;(env.IsType\;U)$, and level well-formedness of the entries.
 \uses{def:isdefeqstrong, def:onctx}
+\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{369}
+
+\lead{In short} $CtxStrong\;env\;U\;\Gamma$: \hl{every entry of $\Gamma$ is strongly a sort in
+its own prefix}. Gives the lifted type of a de~Bruijn lookup, ordinary well-formedness
+$OnCtx\;\Gamma\;(env.IsType\;U)$, and level well-formedness of the entries.
 \end{definition}
 
-\begin{theorem}[Single-variable substitution for the strong judgment]
+\begin{theorem}[Substitution, strong judgment]
 \label{thm:strong-instn}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.instN}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{385}
-Given $\Gamma_0 \Vdash e_0 \equiv e_0 : A_0$ with $\Gamma_0$ strong, a cut
-$W : \mathtt{Ctx.InstN}\;\Gamma_0\;e_0\;A_0\;k\;\Gamma_1\;\Gamma$ and a strong $\Gamma$,
-$\Gamma_1 \Vdash e_1 \equiv e_2 : A$ gives
-$\Gamma \Vdash e_1[e_0]_k \equiv e_2[e_0]_k : A[e_0]_k$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{385}
+
+\lead{In short} For a strong $\Gamma_0\Vdash e_0\equiv e_0:A_0$, a cut
+$W:\mathtt{Ctx.InstN}\,\Gamma_0\,e_0\,A_0\,k\,\Gamma_1\,\Gamma$ and strong $\Gamma$:
+$\Gamma_1\Vdash e_1\equiv e_2:A$ gives
+$\Gamma\Vdash e_1[e_0]_k\equiv e_2[e_0]_k:A[e_0]_k$.
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeqstrong, family:pattern-transport-master, family:pattern-transport-iota}
 \leanok
-Induction on the derivation, with an inner induction on $W$ in the \texttt{bvar} case. The
-\texttt{iota} case (453--459) mirrors the weakening case with
-\texttt{Pattern.RHS.instN\_apply}, \texttt{Pattern.matches\_instN} and
-\texttt{Realizes.map\_instN}.
-\thesisref{typesys.tex Lemma thm:subst item:subst\_ty}
+\lead{Idea} Induction on the derivation, inner induction on $W$ at \texttt{bvar}; the
+\texttt{iota} case mirrors weakening with \texttt{Pattern.RHS.instN\_apply},
+\texttt{Pattern.matches\_instN}, \texttt{Realizes.map\_instN}.
+\thesisref{typesys.tex thm:subst}
 \end{proof}
 
 \section{Regularity, read off the annotations}
 
-\begin{theorem}[Inversion of a $\Pi$ type in the strong judgment]
+\begin{theorem}[$\Pi$-inversion, strong]
 \label{thm:strong-foralle-inv}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.forallE_inv'}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{472}
-Over an ordered environment whose constants and axioms satisfy \texttt{EnvStrong} and a strong
-context, if $\Gamma \Vdash e_1 \equiv e_2 : V$ and \emph{either} side equals
-$\Pi A.\,B$, then $A$ is strongly a type in $\Gamma$ and $B$ is strongly a type in
-$A :: \Gamma$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{472}
+
+\lead{In short} Over an ordered environment strong on constants/axioms and a strong context: if
+$\Gamma\Vdash e_1\equiv e_2:V$ and \hl{either side is $\Pi A.B$}, then $A$ is strongly a type in
+$\Gamma$ and $B$ is strongly a type in $A::\Gamma$.
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeqstrong, def:envstrong, thm:strong-instn}
 \leanok
-Induction on the derivation with the equation carried as a disjunction over the two sides;
-\texttt{beta} inspects the shape of the body, \texttt{extra} reads the $\Pi$ components out
-of the environment invariant. The \texttt{iota} case (518--521) is four lines: whichever side
-is the $\Pi$, recurse into the corresponding annotation, the redex's typing or the reduct's
-typing. This case is the clearest evidence that the reduct annotation of
-\texttt{IsDefEqStrong.pat} is necessary; without it there is no induction hypothesis for the
-right-hand side.
-\thesisref{typesys.tex Lemma thm:reg, the $\Pi$ components}
+\lead{Idea} Induction, carrying the equation as a disjunction over the two sides; the
+\texttt{iota} case recurses into whichever annotation (redex or reduct) matches the $\Pi$ side.
+\thesisref{typesys.tex thm:reg}
 \end{proof}
 
-\begin{theorem}[Regularity for the strong judgment]
+\begin{theorem}[Regularity, strong judgment]
 \label{thm:strong-istype}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.isType'}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{525}
-Under the same hypotheses, $\Gamma \Vdash e_1 \equiv e_2 : A$ implies that $A$ is strongly a
-type: $\exists u,\ \Gamma \Vdash A \equiv A : \mathsf{sort}\;u$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{525}
+
+\lead{In short} Under the same hypotheses, $\Gamma\Vdash e_1\equiv e_2:A$ implies $A$ is
+strongly a type: $\exists u,\ \Gamma\Vdash A\equiv A:\mathsf{sort}\,u$.
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeqstrong, def:envstrong, def:ctxstrong, thm:strong-foralle-inv}
 \leanok
-Induction, reading the annotation off each rule; \texttt{appDF} and \texttt{beta} substitute
-the codomain annotation with \texttt{instN}, \texttt{constDF} and \texttt{extra} use the
-environment invariant. The \texttt{pat} case (548) is one line: return the induction
-hypothesis of the redex's typing annotation.
-\thesisref{typesys.tex Lemma thm:reg (4)}
+\lead{Idea} Induction, reading the annotation off each rule; \texttt{appDF}/\texttt{beta}
+substitute the codomain with \texttt{instN}, \texttt{constDF}/\texttt{extra} use the
+environment invariant, and the \texttt{pat} case returns the redex's typing annotation.
+\thesisref{typesys.tex thm:reg}
 \end{proof}
 
-\begin{lemma}[Replacing both sides of a strong equality by level-equal terms]
+\begin{lemma}[Level-equal replacement]
 \label{thm:equptolevels-defeq}
 \lean{Lean4Lean.VEnv.EqUpToLevels.defeq}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{577}
-Over an ordered environment whose constants and axioms satisfy \texttt{EnvStrong} and a strong
-context: if $\Gamma \Vdash e_1 \equiv e_2 : A$ and $e_1$ is level-equal to $e_1'$ and $e_2$ to
-$e_2'$, then $\Gamma \Vdash e_1' \equiv e_2' : A$. It is a transport lemma, not a statement
-that level-equal terms are equal on their own.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{577}
+
+\lead{In short} Under the same environment/context hypotheses: if $\Gamma\Vdash e_1\equiv e_2:A$
+and $e_1$ is level-equal to $e_1'$, $e_2$ to $e_2'$, then $\Gamma\Vdash e_1'\equiv e_2':A$.
+\hl{A transport lemma, not a claim that level-equal terms are equal on their own.}
 \end{lemma}
 \begin{proof}
 \uses{def:equptolevels, def:isdefeqstrong}
 \leanok
-Induction on the strong derivation with inversion on the two level-equalities; the
-\texttt{trans} case inserts a reflexive level-equality at the midpoint. The \texttt{iota}
-case (654--657) sandwiches the unchanged rule instance
-\texttt{IsDefEqStrong.pat hp hm he hred hr hall} between the two induction hypotheses by
-transitivity.
+\lead{Idea} Induction with inversion on the two level-equalities; the \texttt{iota} case
+sandwiches the unchanged rule instance between the two induction hypotheses by transitivity.
 \thesisref{no thesis counterpart}
-\reviewnote{the \texttt{pat} case rebuilds the same rule instance rather than transporting
-it. That is correct here because only the two endpoints move, but it does rely on the rule's
-own components being untouched by the level change.}
 \end{proof}
 
 \section{The environment hypothesis and strengthening}
 
-\begin{definition}[Subject reduction of one reduction rule \texttt{PatStrong}]
+\begin{definition}[\texttt{PatStrong}]
 \label{def:patstrong}
 \lean{Lean4Lean.VEnv.PatStrong}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{663}
-$PatStrong\;env\;p\;r$ says: for every $U$, every strong context $\Gamma$, every $e$ matching
-$p$ with assignments $m_1, m_2$ such that $\Gamma \Vdash e \equiv e : A$, every realizer
-$chk$ of $r_2$ and every proof that each triple of $chk$ is a strong equality, the reduct
-satisfies $\Gamma \Vdash r_1.apply\;m_1\;m_2 \equiv r_1.apply\;m_1\;m_2 : A$.
-The granularity is per rule, so the obligation can be discharged rule by rule; all five
-premises are consumed at the single use site (\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{747}).
 \uses{def:isdefeqstrong, def:ctxstrong, def:pattern-check-realizes}
-\thesisref{typesys.tex ``Regularity continued'' item:red\_equiv; unique.tex ``Regularity of reductions'' (1)}
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{663}
+\thesisref{typesys.tex item:red\_equiv; unique.tex (1)}
+
+\lead{In short} $PatStrong\;env\;p\;r$: \hl{subject reduction for one rule}, so the obligation
+can be discharged rule by rule.
+\begin{itemize}
+\item \lead{Given} every $U$, strong $\Gamma$, $e$ matching $p$ at $m_1,m_2$ with
+      $\Gamma\Vdash e\equiv e:A$, a realizer $chk$ of $r_2$, each triple of $chk$ a strong
+      equality;
+\item \lead{Then} $\Gamma\Vdash r_1.apply\;m_1\;m_2\equiv r_1.apply\;m_1\;m_2:A$.
+\end{itemize}
+Used once, at \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{747}.
 \end{definition}
 
-\begin{definition}[Subject reduction of all registered rules \texttt{PatsStrongOn}]
+\begin{definition}[\texttt{PatsStrongOn}]
 \label{def:patsstrongon}
 \lean{Lean4Lean.VEnv.PatsStrongOn}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{672}
-$PatsStrongOn\;env$: every $(p, r)$ with $env.pats\;p\;r$ satisfies $PatStrong\;env\;p\;r$.
-The docstring records, correctly, why this is not a consequence of \texttt{Ordered}:
-\texttt{Ordered} admits arbitrary well-typed definitional axioms, and under such an axiom an
-$\iota$ redex can be well typed while its reduct is not. The concrete counterexample is not
-here but in the docstring of \texttt{VEnv.WF.patsStrong}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{327}): under an axiom identifying
-\texttt{List Nat} with \texttt{List Bool}, the redex
-\texttt{List.rec Nat m n c (List.cons Bool true tl)} is well typed and its reduct is not.
 \uses{def:patstrong, struct:venv, def:venv-addpat}
-\thesisref{unique.tex ``Regularity of reductions'' (1)}
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{672}
+\thesisref{unique.tex (1)}
+
+\lead{In short} $PatsStrongOn\;env$: every registered rule $(p,r)\in env.pats$ satisfies
+$PatStrong\;env\;p\;r$.
+\lead{Why} Not a consequence of \texttt{Ordered}, which allows arbitrary well-typed
+definitional axioms: under one, an $\iota$ redex can \hl{be well typed while its reduct is
+not} (concrete counterexample: \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{327}).
 \end{definition}
 
-\begin{definition}[Environment hypothesis of the strong system \texttt{OrderedStrong}]
+\begin{definition}[\texttt{OrderedStrong}]
 \label{struct:orderedstrong}
 \lean{Lean4Lean.VEnv.OrderedStrong,Lean4Lean.VEnv.OrderedStrong.ordered,Lean4Lean.VEnv.OrderedStrong.strong,Lean4Lean.VEnv.OrderedStrong.pats}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{679}
-A structure bundling $Ordered\;env$, $OnTypes\;env\;(EnvStrong\;env)$ (every constant type and
-every side of every definitional axiom is strongly typed) and $PatsStrongOn\;env$. It is the
-hypothesis under which an arbitrary \texttt{IsDefEq} derivation can be strengthened.
 \uses{def:ordered, def:envstrong, def:patsstrongon, def:ontypes}
-\thesisref{no direct thesis counterpart; it plays the role of the environment
-well-formedness assumed in the thesis' Regularity, plus the new $\iota$ obligation}
-\reviewnote{this replaces master's situation, where
-\texttt{Ordered.strong : Ordered env} $\to$ \texttt{OnTypes env (EnvStrong env)} was a proved
-theorem and \texttt{IsDefEq.strong} needed only \texttt{Ordered env}. Here
-\texttt{OrderedStrong} is reachable from \texttt{VEnv.WF} only through
-\texttt{VEnv.WF.orderedStrong} (\ref{thm:wf-orderedstrong}), whose \texttt{patsStrong}
-component is admitted (\ref{thm:wf-patsstrong}). The change is forced by adding $\iota$ to
-\texttt{IsDefEq} and it is documented, but it is the single largest liability of the
-contribution.}
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{679}
+\thesisref{no thesis counterpart}
+
+\lead{In short} Bundles $Ordered\;env$, $OnTypes\;env\;(EnvStrong\;env)$ (every constant type
+and both sides of every axiom strongly typed) and $PatsStrongOn\;env$ -- \hl{the hypothesis
+under which any \texttt{IsDefEq} derivation strengthens}.
+\lead{Caveat} Reachable from \texttt{VEnv.WF} only through a \stSorry{} obligation
+(Theorem~\ref{thm:wf-patsstrong}, \S Caveats): the chapter's main liability.
 \end{definition}
 
-\begin{definition}[\texttt{OrderedStrong} coerces to \texttt{Ordered}]
+\begin{definition}[\texttt{OrderedStrong} to \texttt{Ordered}]
 \label{instance:coeout-orderedstrong}
 \lean{Lean4Lean.VEnv.instCoeOutOrderedStrongOrdered}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{684}
-An anonymous \texttt{CoeOut} instance letting an \texttt{OrderedStrong} hypothesis stand where
-an \texttt{Ordered} one is expected.
 \uses{struct:orderedstrong, def:ordered}
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{684}
 \thesisref{no thesis counterpart}
-\reviewnote{combined with the sibling instance \texttt{CoeOut (VEnv.WF env) env.OrderedStrong}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{343}) this makes the new, admitted hypothesis
-invisible at use sites: \texttt{UniqueTyping.lean} is byte-identical to master yet changed
-from \texttt{Ordered}-dependent to \texttt{patsStrong}-dependent. Convenient, but it hides a
-proof obligation.}
+
+\lead{In short} An anonymous \texttt{CoeOut} instance letting an \texttt{OrderedStrong}
+hypothesis stand where \texttt{Ordered} is expected.
+\lead{Caveat} With its sibling \texttt{CoeOut (VEnv.WF env) env.OrderedStrong}
+(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{343}), this hides the \stSorry{}-backed
+hypothesis at call sites.
 \end{definition}
 
-\begin{theorem}[Strengthening, parameterized version]
+\begin{theorem}[Strengthening, parameterized]
 \label{thm:isdefeq-strong-prime}
 \lean{Lean4Lean.VEnv.IsDefEq.strong'}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{688}
-For $henv : Ordered\;env$, $envIH : OnTypes\;env\;(EnvStrong\;env)$,
-$hpats : PatsStrongOn\;env$ and a strong context $\Gamma$, every
-$\Gamma \vdash e_1 \equiv e_2 : A$ has a strong derivation
-$\Gamma \Vdash e_1 \equiv e_2 : A$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{688}
+
+\lead{In short} For $henv:Ordered\;env$, $envIH:OnTypes\;env\;(EnvStrong\;env)$,
+$hpats:PatsStrongOn\;env$ and a strong $\Gamma$: every $\Gamma\vdash e_1\equiv e_2:A$ has a
+strong derivation $\Gamma\Vdash e_1\equiv e_2:A$.
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeqstrong, def:patsstrongon, thm:strong-istype, thm:strong-foralle-inv, fam:strong-basic}
 \leanok
-Induction on the \texttt{IsDefEq} derivation, reconstructing each missing annotation with
-\texttt{isType'}, \texttt{forallE\_inv'}, \texttt{instDF} and the environment hypotheses. The
-\texttt{iota} case (744--747) strengthens the redex typing and the check triples by the
-induction hypotheses and then obtains the reduct typing by applying $hpats$ to them; this is
-the only place a \texttt{PatsStrongOn} hypothesis is ever applied, everywhere else it is only
-threaded through.
-\thesisref{typesys.tex Lemma thm:reg}
+\lead{Idea} Induction, reconstructing each missing annotation; the \texttt{iota} case
+strengthens the redex typing and check triples, then applies $hpats$ for the reduct typing.
+\thesisref{typesys.tex thm:reg}
 \end{proof}
 
-\begin{lemma}[A well-formed context is strongly well-formed]
+\begin{lemma}[Context strongly well-formed]
 \label{thm:ctxstrong-strong-prime}
 \lean{Lean4Lean.VEnv.CtxStrong.strong'}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{749}
-Under the same three environment hypotheses, $OnCtx\;\Gamma\;(env.IsType\;U)$ implies
-$CtxStrong\;env\;U\;\Gamma$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{749}
+
+\lead{In short} Under the same three environment hypotheses,
+$OnCtx\;\Gamma\;(env.IsType\;U)$ implies $CtxStrong\;env\;U\;\Gamma$: \hl{the context half of
+Regularity}.
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefeq-strong-prime, def:ctxstrong}
 \leanok
-Induction on the context, strengthening each entry with \texttt{IsDefEq.strong'} in its own
-prefix. Only the signature and the threading of the new \texttt{hpats} parameter changed on the
-branch (lines 750, 753--754).
-\thesisref{no thesis counterpart; the context half of Regularity}
+\lead{Idea} Induction on the context, strengthening each entry with \texttt{IsDefEq.strong'} in
+its own prefix.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{theorem}[A closed judgment of a strong environment satisfies \texttt{EnvStrong}]
+\begin{theorem}[Closed judgment satisfies \texttt{EnvStrong}]
 \label{thm:envstrong-of-hastype}
 \lean{Lean4Lean.VEnv.EnvStrong.of_hasType}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{759}
-If $env$ is ordered, all its constants and axioms are strongly typed and its registered rules
-satisfy subject reduction, then $env \vdash e : A$ in the empty context gives
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{759}
+
+\lead{In short} If $env$ is ordered, all constants/axioms are strongly typed and every
+registered rule has subject reduction, then $env\vdash e:A$ in the empty context gives
 $EnvStrong\;env\;U\;e\;A$.
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-strong-prime, thm:strong-istype, thm:equptolevels-defeq, thm:strong-foralle-inv, def:envstrong}
 \leanok
-Assemble the four components: \texttt{IsDefEq.strong'} for the judgment itself,
-\texttt{isType'} for its type, \texttt{EqUpToLevels.defeq} together with
-\texttt{EqUpToLevels.instL} for the level instantiations, and \texttt{forallE\_inv'} for the
-two components of a $\Pi$. This is literally master's inner branch of \texttt{Ordered.strong},
-extracted so that the induction over the environment construction can move to
-\texttt{EnvLemmas.lean}, where \texttt{pats} is under control.
-\thesisref{no thesis counterpart; bookkeeping for the environment induction}
+\lead{Idea} Assemble the four \texttt{EnvStrong} components: \texttt{IsDefEq.strong'},
+\texttt{isType'}, \texttt{EqUpToLevels.defeq}+\texttt{instL}, \texttt{forallE\_inv'}.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{lemma}[Adding a constant preserves strong typing of the environment]
+\begin{lemma}[Adding a constant]
 \label{thm:ontypes-addconst}
 \lean{Lean4Lean.VEnv.OnTypes.addConst}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{770}
-If $env$ is ordered, strong and has subject reduction for its rules, $ci$ is well formed and
-$env.addConst\;n\;ci = \mathsf{some}\;env'$, then $OnTypes\;env'\;(EnvStrong\;env')$.
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{770}
+
+\lead{In short} If $env$ is ordered, strong and has subject reduction, $ci$ is well formed and
+$env.addConst\;n\;ci=\mathsf{some}\;env'$, then $OnTypes\;env'\;(EnvStrong\;env')$.
 \end{lemma}
 \begin{proof}
 \uses{thm:envstrong-of-hastype, thm:envstrong-mono, def:venv-basic}
 \leanok
-Transport the old invariant along \texttt{addConst\_le} with \texttt{EnvStrong.mono}, then
-discharge the one new constant with \texttt{EnvStrong.of\_hasType}.
-\thesisref{no thesis counterpart; environment-construction bookkeeping}
+\lead{Idea} Transport the old invariant along \texttt{addConst\_le} with
+\texttt{EnvStrong.mono}, then discharge the new constant with \texttt{EnvStrong.of\_hasType}.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{lemma}[Adding a definitional axiom preserves strong typing]
+\begin{lemma}[Adding an axiom]
 \label{thm:ontypes-adddefeq}
 \lean{Lean4Lean.VEnv.OnTypes.addDefEq}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{785}
-If the environment is strong and both sides of $df$ already satisfy \texttt{EnvStrong}, then
-$env.addDefEq\;df$ is again strong.
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{785}
+
+\lead{In short} If $env$ is strong and both sides of $df$ satisfy \texttt{EnvStrong}, so does
+$env.addDefEq\;df$.
 \end{lemma}
 \begin{proof}
 \uses{thm:envstrong-mono, def:venv-basic}
 \leanok
-Monotonicity along \texttt{addDefEq\_le}, then a case split on whether the axiom under
-consideration is the new one.
-\thesisref{no thesis counterpart; environment-construction bookkeeping}
+\lead{Idea} Monotonicity along \texttt{addDefEq\_le}, then case split on whether the axiom is
+the new one.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{lemma}[Registering a reduction rule preserves strong typing]
+\begin{lemma}[Registering a rule]
 \label{thm:ontypes-addpat}
 \lean{Lean4Lean.VEnv.OnTypes.addPat}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{797}
-$env.addPat\;p\;r$ is strong whenever $env$ is: registering a rule adds neither a constant nor
-a definitional axiom.
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{797}
+
+\lead{In short} $env.addPat\;p\;r$ is strong whenever $env$ is: registering a rule adds neither
+a constant nor an axiom.
 \end{lemma}
 \begin{proof}
 \uses{thm:envstrong-mono, fam:addpat, def:venv-addpat}
 \leanok
-Three lines: monotonicity of \texttt{EnvStrong} along \texttt{addPat\_le}. Note what it does
-not say: nothing about subject reduction of the newly registered rule, which is exactly the
-deferred \texttt{patsStrong} obligation.
-\thesisref{no thesis counterpart; environment-construction bookkeeping}
+\lead{Idea} Monotonicity of \texttt{EnvStrong} along \texttt{addPat\_le}.
+\lead{Caveat} Says nothing about subject reduction of the new rule -- the deferred
+\texttt{patsStrong} obligation.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{theorem}[Strengthening over a strong environment]
+\begin{theorem}[Strengthening, strong environment]
 \label{thm:isdefeq-strong}
 \lean{Lean4Lean.VEnv.IsDefEq.strong,Lean4Lean.VEnv.CtxStrong.strong}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{805}
-For $OrderedStrong\;env$ and $OnCtx\;\Gamma\;(env.IsType\;U)$: every
-$\Gamma \vdash e_1 \equiv e_2 : A$ has a strong derivation, and every well-formed context is
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{805}
+
+\lead{In short} For $OrderedStrong\;env$ and $OnCtx\;\Gamma\;(env.IsType\;U)$: \hl{every
+$\Gamma\vdash e_1\equiv e_2:A$ has a strong derivation}, and every well-formed context is
 strongly well formed.
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-strong-prime, thm:ctxstrong-strong-prime, struct:orderedstrong}
 \leanok
-Specialise \texttt{IsDefEq.strong'} and \texttt{CtxStrong.strong'} to the three components of
-\texttt{OrderedStrong}. The hypothesis changed from \texttt{Ordered env} on master; this is
-the choke point through which the admitted \texttt{patsStrong} reaches
+\lead{Idea} Specialise \texttt{IsDefEq.strong'}/\texttt{CtxStrong.strong'} to the three
+components of \texttt{OrderedStrong}.
+\lead{Caveat} The choke point through which \stSorry{} \texttt{patsStrong} reaches
 \texttt{UniqueTyping.lean}, \texttt{ChurchRosser.lean}, \texttt{HeadReduction.lean} and the
-whole \texttt{Verify} layer.
-\thesisref{typesys.tex Lemma thm:reg (Regularity)}
+Verify chapters.
+\thesisref{typesys.tex thm:reg}
 \end{proof}
 
-\begin{lemma}[Level transport for the ordinary judgment]
+\begin{lemma}[Level transport, ordinary]
 \label{fam:isdefeq-levels}
 \lean{Lean4Lean.VEnv.IsDefEq.eqUpToLevels,Lean4Lean.VEnv.IsDefEq.instL_r}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{810}
-The right-hand side of a definitional equality may be replaced by a term equal up to levels
-(\texttt{eqUpToLevels}); and instantiating the two sides with pointwise equivalent level
-lists preserves definitional equality (\texttt{instL\_r}).
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{810}
+
+\lead{In short} The right side of a definitional equality may be replaced by a level-equal
+term; instantiating both sides with pointwise level-equivalent lists preserves it too.
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefeq-strong, thm:equptolevels-defeq, def:equptolevels}
 \leanok
-Strengthen, apply \texttt{EqUpToLevels.defeq} (resp. \texttt{instL} followed by it), forget
-the annotations. Only the signature changed on the branch, from \texttt{Ordered} to
-\texttt{OrderedStrong}.
+\lead{Idea} Strengthen, apply \texttt{EqUpToLevels.defeq} (resp.\ \texttt{instL} then it),
+forget the annotations.
 \thesisref{no thesis counterpart}
 \end{proof}
 
 \section{Typing inversions and stratified typing}
 
-\begin{theorem}[Both sides of a strong equality are strongly typed]
+\begin{theorem}[Both sides strongly typed]
 \label{thm:strong-hastype-prime}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.hasType'}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{825}
-$\Gamma \Vdash e_1 \equiv e_2 : A$ implies $\Gamma \Vdash e_1 : A$ and
-$\Gamma \Vdash e_2 : A$ in the syntax-directed judgment \texttt{HasTypeStrong}.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{825}
+
+\lead{In short} $\Gamma\Vdash e_1\equiv e_2:A$ implies $\Gamma\Vdash e_1:A$ and
+$\Gamma\Vdash e_2:A$ in the syntax-directed \texttt{HasTypeStrong}.
 \end{theorem}
 \begin{proof}
 \uses{def:hastypestrong, def:isdefeqstrong}
 \leanok
-Induction, rebuilding a \texttt{HasTypeStrong} derivation for each side; the asymmetric rules
-(\texttt{constDF}, \texttt{appDF}, \texttt{lamDF}) retype the right-hand side through
-\texttt{HasTypeStrong.defeq}. The \texttt{pat} case (863) is one line, taking the left
-components of the redex and reduct annotations: another place where the reduct annotation
-pays for itself.
-\thesisref{no thesis counterpart; the annotated judgment is a Lean device}
+\lead{Idea} Induction, rebuilding a \texttt{HasTypeStrong} derivation per side; asymmetric
+rules retype the right side via \texttt{HasTypeStrong.defeq}.
+\thesisref{no thesis counterpart}
 \end{proof}
 
-\begin{lemma}[From strong typing back to equality]
+\begin{lemma}[Strong typing to equality]
 \label{fam:hastypestrong-basic}
 \lean{Lean4Lean.VEnv.HasTypeStrong.refl,Lean4Lean.VEnv.HasTypeStrong.hasType}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{865}
-A \texttt{HasTypeStrong} derivation yields the reflexive strong equality
-$\Gamma \Vdash e \equiv e : A$, and hence an ordinary $\Gamma \vdash e : A$.
+
+\lead{In short} A \texttt{HasTypeStrong} derivation gives the reflexive strong equality
+$\Gamma\Vdash e\equiv e:A$, hence an ordinary $\Gamma\vdash e:A$.
 \end{lemma}
 \begin{proof}
 \uses{def:hastypestrong, def:isdefeqstrong}
 \leanok
-Induction, mapping each structural rule to the corresponding \texttt{IsDefEqStrong}
-congruence; \texttt{hasType} is \texttt{refl} followed by \texttt{defeq}.
+\lead{Idea} Induction, mapping each structural rule to the matching \texttt{IsDefEqStrong}
+congruence; \texttt{hasType} is \texttt{refl} then \texttt{defeq}.
 \end{proof}
 
 \begin{theorem}[Typing inversion lemmas]
 \label{fam:strong-inversions}
 \lean{Lean4Lean.VEnv.HasType.app_inv,Lean4Lean.VExpr.WF.app_inv,Lean4Lean.VEnv.HasType.lam_inv,Lean4Lean.VExpr.WF.lam_inv,Lean4Lean.VEnv.HasType.const_inv,Lean4Lean.VExpr.WF.const_inv,Lean4Lean.VEnv.HasType.bvar_inv}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{886}
-From $\Gamma \vdash f\;a : V$ one recovers $A, B$ with $\Gamma \vdash f : \Pi A.\,B$ and
-$\Gamma \vdash a : A$; from $\Gamma \vdash \lambda A.\,body : V$ that $A$ is a type and
-$body$ is well typed in $A :: \Gamma$; from $\Gamma \vdash \mathsf{const}\;c\;ls : V$ that
-$c$ exists with matching level arity; and from $\Gamma \vdash \mathsf{bvar}\;i : V$ that $i$
-is in scope. The first three have a \texttt{VExpr.WF} variant; \texttt{bvar\_inv} does not.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{886}
+
+\lead{In short} Typing inversion, one lemma per head shape (\hl{the first three also have a
+\texttt{VExpr.WF} variant}; \texttt{bvar\_inv} does not).
+\begin{itemize}
+\item $f\;a:V$ recovers $A,B$ with $f:\Pi A.B$ and $a:A$;
+\item $\lambda A.body:V$ recovers $A$ a type and $body:B$-typed in $A::\Gamma$;
+\item $\mathsf{const}\;c\;ls:V$ recovers $c$ existing with matching level arity;
+\item $\mathsf{bvar}\;i:V$ recovers $i$ in scope.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-strong, thm:strong-hastype-prime, def:hastypestrong}
 \leanok
-Strengthen the hypothesis, project to \texttt{HasTypeStrong}, then generalise the term and
-induct: only \texttt{defeq} and \texttt{base} can apply, and \texttt{base} exposes the
-structural rule. All seven had their environment hypothesis changed from \texttt{Ordered} to
-\texttt{OrderedStrong} on the \texttt{iota} branch (one-line \texttt{variable!} edits at 885,
-895, 900, 909, 914, 923, 928). The change is forced, since the proofs route through
-\texttt{IsDefEq.strong}; since these lemmas are used pervasively in \texttt{ChurchRosser.lean}
-and \texttt{HeadReduction.lean}, this is how those files inherit the \texttt{patsStrong}
-dependency.
-\thesisref{typesys.tex Lemma thm:reg}
+\lead{Idea} Strengthen, project to \texttt{HasTypeStrong}, generalise the term and induct: only
+\texttt{defeq}/\texttt{base} apply, \texttt{base} exposes the structural rule.
+\lead{Caveat} All seven inherit \stSorry{} \texttt{patsStrong} (Theorem~\ref{thm:isdefeq-strong}).
+\thesisref{typesys.tex thm:reg}
 \end{proof}
 
 \begin{definition}[Stratified typing]
 \label{def:hastypestratified}
 \lean{Lean4Lean.VEnv.HasTypeStratified,Lean4Lean.VEnv.HasTypeStratified.hasType,Lean4Lean.VEnv.HasTypeStratified.mono,Lean4Lean.VEnv.HasTypeStrong.stratify,Lean4Lean.VEnv.HasTypeStratified.to_core,Lean4Lean.VEnv.HasTypeStratified.isType}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{944}
-$\Gamma \vdash_n e : A$: typing in which every premise is derivable at level $< n$, so that
-each use of the conversion rule appeals to a definitional equality whose own typing
-derivations sit strictly lower. It is sound for \texttt{HasType}, monotone in $n$; every
-\texttt{HasTypeStrong} derivation is stratified at some level (\texttt{stratify}); a
-stratified typing has a core (structural) derivation at the same level, though possibly at
-another type; and the type of a term stratified at $n$ is stratified at $n - 1$.
 \uses{def:hastypestrong, def:isdefeq}
-\thesisref{unique.tex \S sec:unique, the judgments $\vdash_n$}
-\reviewnote{no \texttt{pat} handling is needed here: \texttt{HasTypeStratified} mirrors the
-rules of \texttt{HasTypeStrong}, none of which is an $\iota$ rule, and its \texttt{defeq}
-premise carries an \texttt{IsDefEq} derivation that is never analysed.}
+\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{944}
+\thesisref{unique.tex \S sec:unique}
+
+\lead{In short} $\Gamma\vdash_n e:A$: \hl{every premise derivable at level $<n$}.
+\begin{itemize}
+\item sound for \texttt{HasType}, monotone in $n$;
+\item every \texttt{HasTypeStrong} derivation is stratified at some level (\texttt{stratify});
+\item a stratified typing has a core derivation at the same level, possibly another type;
+\item the type of a term stratified at $n$ is stratified at $n-1$.
+\end{itemize}
 \end{definition}
 
 \section{Simultaneous substitution}
 
-\begin{theorem}[Simultaneous substitution into the strong judgment]
+\begin{theorem}[Substitution, strong judgment]
 \label{thm:strong-substeq}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.substEq'}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1044}
-For $OrderedStrong\;env$, strong contexts $\Gamma$ and $\Gamma_0$ and a pointwise equality of
-substitutions $W : \mathtt{Ctx.SubstEq}\;env\;U\;\Gamma_0\;\sigma\;\sigma'\;\Gamma$, a strong
-$\Gamma \Vdash e_1 \equiv e_2 : A$ yields all three of
-$\Gamma_0 \Vdash e_1[\sigma] \equiv e_1[\sigma'] : A[\sigma]$,
-$\Gamma_0 \Vdash e_2[\sigma] \equiv e_2[\sigma'] : A[\sigma]$ and
-$\Gamma_0 \Vdash e_1[\sigma] \equiv e_2[\sigma'] : A[\sigma]$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1044}
+
+\lead{In short} For $OrderedStrong\;env$, strong $\Gamma,\Gamma_0$ and
+$W:\mathtt{Ctx.SubstEq}\,env\,U\,\Gamma_0\,\sigma\,\sigma'\,\Gamma$, a strong
+$\Gamma\Vdash e_1\equiv e_2:A$ yields \hl{all three cross and same-side instances}:
+\begin{itemize}
+\item $\Gamma_0\Vdash e_1[\sigma]\equiv e_1[\sigma']:A[\sigma]$;
+\item $\Gamma_0\Vdash e_2[\sigma]\equiv e_2[\sigma']:A[\sigma]$;
+\item $\Gamma_0\Vdash e_1[\sigma]\equiv e_2[\sigma']:A[\sigma]$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeqstrong, fam:substeq, thm:isdefeq-strong, family:pattern-transport-iota}
 \leanok
-A 225-line induction on the strong derivation; each rule is rebuilt on the substituted
-components, using the annotations to retype and the left/right/cross triple to compose. The
-\texttt{bvar} case is where \texttt{OrderedStrong} is genuinely needed: it strengthens the
-substitution's component judgment with \texttt{IsDefEq.strong} at line 1052. The \texttt{iota}
-case (1259--1269) instantiates the redex and reduct with $\sigma$ and with the pair, rebuilds
-the rule on $\sigma$ using \texttt{Pattern.RHS.subst\_apply}, \texttt{Pattern.matches\_subst}
-and \texttt{Realizes.map\_subst}, and composes it with the reduct's $\sigma$-to-$\sigma'$
-judgment, the left projection of the reduct's induction hypothesis.
-\thesisref{typesys.tex Lemma thm:subst (Properties of substitution)}
+\lead{Idea} Induction, rebuilding each rule on the substituted components and composing the
+left/right/cross triple; \texttt{bvar} is the one case needing \texttt{OrderedStrong}, and
+\texttt{iota} rebuilds the rule via the standard transport lemmas.
+\thesisref{typesys.tex thm:subst}
 \end{proof}
 
-\begin{theorem}[Simultaneous substitution into definitional equality]
+\begin{theorem}[Substitution, definitional equality]
 \label{thm:isdefeq-substdf}
 \lean{Lean4Lean.VEnv.IsDefEqStrong.subst,Lean4Lean.VEnv.IsDefEq.substDF}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1273}
-The cross projection of \texttt{substEq'}, stated first for the strong judgment and then for
-the ordinary one: for $\sigma \equiv \sigma'$ and well-formed $\Gamma$ and $\Gamma_0$,
-$\Gamma \vdash e_1 \equiv e_2 : A$ gives
-$\Gamma_0 \vdash e_1[\sigma] \equiv e_2[\sigma'] : A[\sigma]$.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1273}
+
+\lead{In short} The cross projection of \texttt{substEq'}, strong then ordinary: for
+$\sigma\equiv\sigma'$ and well-formed $\Gamma,\Gamma_0$: $\Gamma\vdash e_1\equiv e_2:A$ gives
+$\Gamma_0\vdash e_1[\sigma]\equiv e_2[\sigma']:A[\sigma]$.
 \end{theorem}
 \begin{proof}
 \uses{thm:strong-substeq, thm:isdefeq-strong}
 \leanok
-Strengthen, apply \texttt{substEq'}, forget the annotations. Signature-only change on the
-branch.
-\thesisref{typesys.tex Lemma thm:subst}
+\lead{Idea} Strengthen, apply \texttt{substEq'}, forget the annotations.
+\thesisref{typesys.tex thm:subst}
 \end{proof}
 
 \begin{lemma}[Substitution corollaries]
 \label{fam:subst-corollaries}
 \lean{Lean4Lean.VEnv.IsDefEq.subst,Lean4Lean.VEnv.HasType.subst,Lean4Lean.VEnv.IsDefEqU.subst,Lean4Lean.VEnv.IsType.subst}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1289}
-The one-substitution specialisations of \texttt{substDF} for typed equality, typing, untyped
-equality and types.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{1289}
+
+\lead{In short} One-substitution specialisations of \texttt{substDF} for typed equality,
+typing, untyped equality and types.
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefeq-substdf, fam:substeq}
 \leanok
-Each is \texttt{substDF} with $\sigma' := \sigma$ and $W.wf$ for the source context.
-Signature-only changes on the branch.
-\thesisref{typesys.tex Lemma thm:subst}
+\lead{Idea} Each is \texttt{substDF} with $\sigma':=\sigma$ and $W.wf$ for the source context.
+\thesisref{typesys.tex thm:subst}
 \end{proof}
 
 \section{Unique typing and its consequences}
@@ -732,270 +676,272 @@ Signature-only changes on the branch.
 \lean{Lean4Lean.VEnv.IsDefEq.uniq}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{13}
-For a well-formed environment and a well-formed context, if
-$\Gamma \vdash e_1 \equiv e_2 : A$ and $\Gamma \vdash e_2 \equiv e_3 : B$ then
-$\exists u,\ \Gamma \vdash A \equiv B : \mathsf{sort}\;u$. In particular a term has at most
-one type up to definitional equality.
+
+\lead{In short} \hl{A term has at most one type up to definitional equality}: for a well-formed
+environment and context, $\Gamma\vdash e_1\equiv e_2:A$ and $\Gamma\vdash e_2\equiv e_3:B$ give
+$\exists u,\ \Gamma\vdash A\equiv B:\mathsf{sort}\;u$. \stTainted{}
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-strong, thm:strong-hastype-prime, def:hastypestratified, thm:injectivity-open}
 \leanok
-Both sides are strengthened (\texttt{IsDefEq.strong}), projected to \texttt{HasTypeStrong}
-(\texttt{hasType'}) and stratified (\texttt{stratify}); the generalised statement is proved by
-well-founded induction on the maximum of the two levels, with an inner induction on the first
-stratified derivation. The application case, and only it (line 43), appeals to definitional
-inversion at level $n$, \texttt{IsDefEqU.forallE\_inv\_stratified}, which is one of the three
-open \texttt{sorry}s of \texttt{Injectivity.lean}.
-\thesisref{unique.tex Theorem thm:unique and thm:utype}
+\lead{Idea} Strengthen, project, stratify; well-founded induction on the max of the two levels.
+The application case alone appeals to \texttt{IsDefEqU.forallE\_inv\_stratified}, one of the
+three open \stSorry{} lemmas of Theorem~\ref{thm:injectivity-open}.
+\thesisref{unique.tex thm:unique, thm:utype}
 \axfoot{sorryAx via IsDefEqU.forallE\_inv\_stratified (Injectivity.lean:21) and via VEnv.WF.patsStrong (EnvLemmas.lean:334)}
-\reviewnote{textually untouched by the branches, but its \texttt{henv : VEnv.WF} is now
-coerced to \texttt{OrderedStrong}, so it silently acquired the \texttt{patsStrong}
-dependency; on master it was \texttt{Ordered}-dependent only.}
 \end{proof}
 
-\begin{theorem}[Typed and untyped definitional equality agree]
+\begin{theorem}[Typed and untyped agree]
 \label{thm:isdefeq-iff}
 \lean{Lean4Lean.VEnv.IsDefEq.uniqU,Lean4Lean.VEnv.isDefEq_iff}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{113}
-\texttt{uniqU} is the untyped form of unique typing ($\Gamma \vdash A \equiv B$), and
-\texttt{isDefEq\_iff} states $\Gamma \vdash e_1 \equiv e_2 : A$ iff both sides have type $A$
-and $\Gamma \vdash e_1 \equiv e_2$ untypedly.
+
+\lead{In short} \texttt{uniqU}: the untyped form of unique typing, $\Gamma\vdash A\equiv B$.
+\texttt{isDefEq\_iff}: $\Gamma\vdash e_1\equiv e_2:A$ iff both sides have type $A$ and
+$\Gamma\vdash e_1\equiv e_2$ untypedly.
 \end{theorem}
 \begin{proof}
 \uses{thm:unique-typing}
 \leanok
-Forwards is projection; backwards, \texttt{uniq} relates the two types and \texttt{defeqDF}
-transports.
+\lead{Idea} Forwards is projection; backwards, \texttt{uniq} relates the two types and
+\texttt{defeqDF} transports.
 \axfoot{sorryAx via IsDefEq.uniq}
 \end{proof}
 
-\begin{lemma}[Transitivity at mixed types]
+\begin{lemma}[Transitivity, mixed types]
 \label{fam:defeq-mixing}
 \lean{Lean4Lean.VEnv.IsDefEq.trans_r,Lean4Lean.VEnv.IsDefEq.trans_l,Lean4Lean.VEnv.IsDefEq.transU_r,Lean4Lean.VEnv.IsDefEq.transU_l,Lean4Lean.VEnv.IsDefEqU.defeqDF,Lean4Lean.VEnv.IsDefEqU.of_l,Lean4Lean.VEnv.IsDefEqU.of_r,Lean4Lean.VEnv.HasType.defeqU_l,Lean4Lean.VEnv.HasType.defeqU_r,Lean4Lean.VEnv.IsType.defeqU_l,Lean4Lean.VEnv.IsDefEqU.trans}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{124}
-The everyday toolkit that unique typing unlocks: two equalities stated at different types can
-be composed keeping either type (\texttt{trans\_l}, \texttt{trans\_r}), a mixed typed/untyped
-pair can be composed (\texttt{transU\_l}, \texttt{transU\_r}), an untyped equality can be typed
-from either side (\texttt{of\_l}, \texttt{of\_r}), types can be transported along an untyped
-equality (\texttt{defeqU\_l}, \texttt{defeqU\_r}), and $\vdash e_1 \equiv e_2$ is transitive.
+
+\lead{In short} \hl{Composing equalities stated at different types}.
+\begin{itemize}
+\item compose two equalities keeping either type, or a mixed typed/untyped pair;
+\item type an untyped equality from either side, or transport types along one;
+\item $\vdash e_1\equiv e_2$ is transitive.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{thm:unique-typing}
 \leanok
-Each is one line: \texttt{uniq} produces the equality between the two types and
-\texttt{defeqDF} moves a derivation across it. These are the workhorses used throughout
-\texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}.
-\thesisref{typesys.tex Lemma ``Regularity continued'' (1)}
+\lead{Idea} Each is one line: \texttt{uniq} gives the equality of the two types,
+\texttt{defeqDF} moves a derivation across it.
+\thesisref{typesys.tex (1)}
 \axfoot{sorryAx via IsDefEq.uniq}
 \end{proof}
 
-\begin{theorem}[Weakening is conservative for untyped definitional equality]
+\begin{theorem}[Weakening is conservative]
 \label{thm:isdefequ-weakn-iff}
 \lean{Lean4Lean.VEnv.IsDefEqU.weakN_iff}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{172}
-For a well-formed $\Gamma'$ obtained from $\Gamma$ by inserting $n$ entries at $k$:
-$\Gamma' \vdash e_1{\uparrow} \equiv e_2{\uparrow}$ iff $\Gamma \vdash e_1 \equiv e_2$.
+
+\lead{In short} For well-formed $\Gamma'$ from $\Gamma$ by inserting $n$ entries at $k$:
+\hl{$\Gamma'\vdash e_1{\uparrow}\equiv e_2{\uparrow}$ iff $\Gamma\vdash e_1\equiv e_2$}.
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-weakn}
-\textbf{Not proved in Lean.} The right-to-left direction is \texttt{IsDefEq.weakN}; the
-left-to-right direction, that is, strengthening or thinning, is a literal \texttt{sorry} at
-\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{174} (master). This is the most widely
-used gap in the chapter: \texttt{NormalEq.weakN\_inv\_DFC}, \texttt{ParRed.weakN\_inv},
-\texttt{hasType\_app\_bvar0}, \texttt{IsDefEq.skips}, \texttt{OnCtx.weakN\_inv} and the whole
-\texttt{weakN\_iff}/\texttt{weak'\_iff} family rest on it, hence most of
-\texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}.
-\thesisref{typesys.tex Lemma thm:weak (3,4)}
+\stSorry{} \lead{Missing} Left-to-right (strengthening): \texttt{sorry} at
+\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{174} (upstream). Right-to-left is
+\texttt{IsDefEq.weakN}.
+\lead{Caveat} The most widely used gap in the chapter: the whole
+\texttt{weakN\_iff}/\texttt{weak'\_iff} family, hence most of \texttt{ChurchRosser.lean} and
+\texttt{HeadReduction.lean}, rests on it.
+\thesisref{typesys.tex thm:weak}
 \end{proof}
 
-\begin{lemma}[Conservativity of weakening, in all its forms]
+\begin{lemma}[Conservativity of weakening]
 \label{fam:weakening-iff}
 \lean{Lean4Lean.VExpr.WF.weakN_iff,Lean4Lean.VEnv.IsDefEq.skips,Lean4Lean.VEnv.IsDefEq.weakN_iff',Lean4Lean.OnCtx.weakN_inv,Lean4Lean.VEnv.IsDefEq.weakN_iff,Lean4Lean.VEnv.HasType.weakN_iff,Lean4Lean.VEnv.IsType.weakN_iff,Lean4Lean.VEnv.HasType.skips,Lean4Lean.VEnv.IsDefEqU.weak'_iff,Lean4Lean.VEnv.IsDefEq.weak'_iff,Lean4Lean.VEnv.HasType.weak'_iff,Lean4Lean.VEnv.IsType.weak'_iff,Lean4Lean.VExpr.WF.weak'_iff,Lean4Lean.OnCtx.weak'_inv}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{177}
-The typed, untyped and general-renaming (\texttt{lift'}) forms of ``weakening is an
-equivalence'', inversion of context well-formedness under a lifting, and the \texttt{Skips}
-variants: a judgment whose two sides do not mention the inserted variables can be restated at
-a type that also skips them.
+
+\lead{In short} Typed, untyped and general-renaming forms of \hl{weakening as an equivalence},
+context-well-formedness inversion, and \texttt{Skips} (a judgment skipping the inserted
+variables restates at a type that also skips them).
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefequ-weakn-iff, thm:isdefeq-iff}
 \leanok
-Each direction is either \texttt{weakN} or \texttt{IsDefEqU.weakN\_iff} followed by
-\texttt{uniqU} to recover the type; \texttt{OnCtx.weakN\_inv} inducts on the lifting.
-\thesisref{typesys.tex Lemma thm:weak}
+\lead{Idea} Each direction is \texttt{weakN} or \texttt{IsDefEqU.weakN\_iff} followed by
+\texttt{uniqU}; \texttt{OnCtx.weakN\_inv} inducts on the lifting.
+\thesisref{typesys.tex thm:weak}
 \axfoot{sorryAx via IsDefEqU.weakN\_iff (UniqueTyping.lean:174)}
 \end{proof}
 
 \section{Church--Rosser: the abstract family of reduction rules}
 
-\begin{definition}[Abstract parameters of the Church--Rosser development]
+\begin{definition}[Church--Rosser parameters]
 \label{class:cr-params}
 \lean{Lean4Lean.VEnv.Params}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{12}
-A type class fixing an environment $env$ with $env.WF$, a universe count $univs$, and an
-abstract family $Pat\;p\;r$ of reduction rules on patterns, together with the coherence
-conditions the confluence proof needs: each rule's redex is a \texttt{SimplePattern}
-(\texttt{pat\_simple}); overlapping rules coincide (\texttt{pat\_uniq}); a rule's reduct is
-definitionally equal to its redex when the side conditions hold (\texttt{pat\_wf}); the
-application structure of distinct rules does not interfere (\texttt{pat\_app\_l},
-\texttt{pat\_app\_l\_uniq}, \texttt{pat\_app\_uniq}); every definitional axiom of $env$ is
-realised by a rule (\texttt{extra\_pat}); and every rule registered in $env.pats$ is a rule
-(\texttt{pat\_env}, added on the \texttt{iota} branch).
 \uses{inductive:pattern-core, inductive:simple-pattern, inductive:pattern-rhs, struct:venv, def:venv-wf}
-\thesisref{unique.tex \S sec:kappa, the $\kappa$ reduction rules, abstracted}
-\reviewnote{the class has exactly one construction, \texttt{VEnv.toParams}
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}), and its specialisation
-\texttt{inductParams} (line 420); both are \texttt{@[reducible] def}s rather than
-\texttt{instance}s, so a \texttt{Params} has to be supplied by hand at every use.
-\texttt{toParams} takes its \texttt{extra\_pat} as the hypothesis \texttt{DefEqsAsPats};
-that hypothesis fails as soon as the
-environment contains a \texttt{def} or the quotient rule, because those live in
-\texttt{defeqs} and not in \texttt{pats}. So the whole Church--Rosser development, and with it
-the standardization and inference results of the next section, currently applies only to
-environments built from axioms and inductives.}
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{12}
+\thesisref{unique.tex \S sec:kappa}
+
+\lead{In short} Fixes $env$, $env.WF$, $univs$, and an \hl{abstract family $Pat\;p\;r$ of
+reduction rules} with confluence's coherence conditions.
+\par\smallskip\noindent
+\begin{tabular}{p{0.44\linewidth}p{0.49\linewidth}}
+\toprule
+Field & Meaning \\
+\midrule
+\texttt{pat\_simple} & redex is a \texttt{SimplePattern} \\
+\texttt{pat\_uniq} & overlapping rules coincide \\
+\texttt{pat\_wf} & reduct equals redex under the side conditions \\
+\texttt{pat\_app\_l}, \texttt{pat\_app\_l\_uniq}, \texttt{pat\_app\_uniq} & rules do not
+interfere as applications \\
+\texttt{extra\_pat} & every axiom is realised by a rule \\
+\texttt{pat\_env} & every registered rule is a rule (\texttt{iota}) \\
+\bottomrule
+\end{tabular}\par\smallskip
+\lead{Caveat} The one instance, \texttt{VEnv.toParams}
+(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}), needs \texttt{DefEqsAsPats}: fails
+for a \texttt{def} or the quotient rule, so this applies only to axiom-and-inductive
+environments.
 \end{definition}
 
-\begin{definition}[Registered $\iota$ rules are \texttt{Pat} rules]
+\begin{definition}[$\iota$ rules are \texttt{Pat}]
 \label{axiom:cr-params-pat-env}
 \lean{Lean4Lean.VEnv.Params.pat_env}
 \leanok
-\contrib{iota} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{32}
-The class field $env.pats\;p\;r \to Pat\;p\;r$. It is the bridge that lets the Church--Rosser
-development see the rules that \texttt{IsDefEq.pat} reduces by, and it is what the new
-\texttt{pat} case of \texttt{IsDefEq.church\_rosser} needs. In the only instance it is
-discharged by \texttt{pat\_env := id}, since there $Pat := env.pats$, so the field costs that
-instance nothing.
 \uses{class:cr-params, struct:venv, rule:isdefeq-pat}
-\thesisref{no thesis counterpart; the thesis fixes the $\kappa$ rules concretely rather than through a class}
-\reviewnote{the docstring at \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{30} justifies
-the field by \texttt{extra\_pat} (``as every definitional axiom is realised by one''), but the
-two fields are logically independent: \texttt{extra\_pat} is about \texttt{env.defeqs},
-\texttt{pat\_env} about \texttt{env.pats}, and neither implies the other. The comment reads as
-if \texttt{pat\_env} were derivable.}
+\contrib{iota}\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{32}
+\thesisref{no thesis counterpart}
+
+\lead{In short} Class field $env.pats\;p\;r\to Pat\;p\;r$: \hl{the bridge letting
+Church--Rosser see the rules \texttt{IsDefEq.pat} reduces by}. In the only instance,
+\texttt{pat\_env := id} costs nothing since there $Pat:=env.pats$.
+\lead{Caveat} The docstring at \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{30} justifies
+this by \texttt{extra\_pat}, but the two fields (\texttt{env.defeqs} vs.\ \texttt{env.pats}) are
+independent.
 \end{definition}
 
-\begin{lemma}[Plumbing for pattern matches and rule right-hand sides]
+\begin{lemma}[Pattern plumbing]
 \label{fam:cr-pattern-plumbing}
 \lean{Lean4Lean.Pattern.Check.OK.weakN,Lean4Lean.Pattern.Check.OK.instN,Lean4Lean.Pattern.Matches.hasType,Lean4Lean.VEnv.HasType.matches_inv,Lean4Lean.Pattern.RHS.apply_lift',Lean4Lean.Pattern.RHS.apply_liftN,Lean4Lean.VEnv.IsDefEq.apply_pat,Lean4Lean.VEnv.NormalEq.apply_pat,Lean4Lean.VEnv.ParRed.apply_pat,Lean4Lean.VEnv.Params.pat_not_var}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{43}
-Routine lemmas transporting a rule's side conditions and reduct under weakening and
-instantiation (\texttt{OK.weakN}, \texttt{OK.instN}, \texttt{RHS.apply\_lift'},
-\texttt{RHS.apply\_liftN}); extracting the typing of a matched subterm
-(\texttt{Matches.hasType}, \texttt{HasType.matches\_inv}); congruence of $r.apply$ in the
-matched subterms for each of the three relations (\texttt{IsDefEq.apply\_pat},
-\texttt{NormalEq.apply\_pat}, \texttt{ParRed.apply\_pat}); and the observation that a bare
-variable is never a rule redex (\texttt{pat\_not\_var}, immediate from \texttt{pat\_simple}).
+
+\lead{In short} Routine transport/congruence lemmas for rule matches and right-hand sides.
+\begin{itemize}
+\item transport side conditions/reduct under weakening/instantiation;
+\item type a matched subterm;
+\item congruence of $r.apply$ in the matched subterms, per relation;
+\item a bare variable is never a rule redex.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{class:cr-params, inductive:pattern-matches, fam:strong-inversions, fam:defeq-mixing}
 \leanok
-The transport lemmas are inductions on the right-hand side or maps over
-\texttt{Check.OK}; the congruences induct on the \texttt{RHS} and split the application
-spine with \texttt{HasType.app\_inv}.
+\lead{Idea} Transport lemmas induct on the right-hand side or map over \texttt{Check.OK};
+congruences induct on the \texttt{RHS} and split the spine with \texttt{HasType.app\_inv}.
 \axfoot{sorryAx via HasType.app\_inv (VEnv.WF.patsStrong) and IsDefEq.uniq}
 \end{proof}
 
 \section{Normal equality}
 
-\begin{definition}[Normal equality, the proof-irrelevance relation]
+\begin{definition}[Normal equality]
 \label{def:normaleq}
 \lean{Lean4Lean.VEnv.NormalEq}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{84}
-$\Gamma \vdash e_1 \equiv_p e_2$ absorbs everything $\kappa$ reduction cannot make unique:
-reflexivity at a type, level equivalence on sorts and constants, congruence for application
-(with both sides typed at a common $\Pi$), lambda and $\Pi$, the two directed $\eta$ rules
-\texttt{etaL} and \texttt{etaR}, and proof irrelevance. It deliberately has no rule for the
-reduction rules themselves; all $\iota$ and $\delta$ content lives in \texttt{ParRed}.
 \uses{def:isdefeq, def:hastype-istype}
-\thesisref{unique.tex \S sec:kappa, the boxed rules for $\Gamma \vdash e \equiv_p e'$}
+\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{84}
+\thesisref{unique.tex \S sec:kappa}
+
+\lead{In short} $\Gamma\vdash e_1\equiv_p e_2$: \hl{everything $\kappa$ reduction cannot make
+unique}. No rule for the reduction rules themselves; all $\iota$/$\delta$ content lives in
+\texttt{ParRed}.
+\par\smallskip\noindent
+\begin{tabular}{p{0.27\linewidth}p{0.65\linewidth}}
+\toprule
+Rule & Meaning \\
+\midrule
+reflexivity & at a type \\
+level equivalence & on sorts and constants \\
+congruence & application (both sides typed at a common $\Pi$), lambda, $\Pi$ \\
+\texttt{etaL}, \texttt{etaR} & the two directed $\eta$ rules \\
+proof irrelevance & -- \\
+\bottomrule
+\end{tabular}\par\smallskip
 \end{definition}
 
-\begin{lemma}[Normal equality implies definitional equality]
+\begin{lemma}[Normal equality to def-eq]
 \label{thm:normaleq-defeq}
 \lean{Lean4Lean.VEnv.NormalEq.defeq}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{120}
-Over a well-formed context, $\Gamma \vdash e_1 \equiv_p e_2$ implies the untyped
-$\Gamma \vdash e_1 \equiv e_2$.
+
+\lead{In short} Over a well-formed context, $\Gamma\vdash e_1\equiv_p e_2$ implies the untyped
+$\Gamma\vdash e_1\equiv e_2$.
 \end{lemma}
 \begin{proof}
 \uses{def:normaleq, fam:defeq-mixing, def:isdefeq}
 \leanok
-Induction on the derivation; the lambda and $\Pi$ cases retype the body along the two domain
-equations, the $\eta$ cases invoke the \texttt{IsDefEq.eta} rule and proof irrelevance is a
-rule of \texttt{IsDefEq}.
-\thesisref{unique.tex Lemma ``Regularity of reductions'' (3)}
+\lead{Idea} Induction; lambda/$\Pi$ retype the body, $\eta$ invokes \texttt{IsDefEq.eta}, proof
+irrelevance is a rule of \texttt{IsDefEq}.
+\thesisref{unique.tex (3)}
 \axfoot{sorryAx via IsDefEq.uniq}
 \end{proof}
 
-\begin{lemma}[Symmetry of normal equality]
+\begin{lemma}[Symmetry, normal equality]
 \label{thm:normaleq-symm}
 \lean{Lean4Lean.VEnv.NormalEq.symm}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{147}
-Over a well-formed context, $\Gamma \vdash e_1 \equiv_p e_2$ implies
-$\Gamma \vdash e_2 \equiv_p e_1$; \texttt{etaL} and \texttt{etaR} swap.
+
+\lead{In short} Over a well-formed context, $\Gamma\vdash e_1\equiv_p e_2$ implies
+$\Gamma\vdash e_2\equiv_p e_1$; \texttt{etaL}/\texttt{etaR} swap.
 \end{lemma}
 \begin{proof}
 \uses{def:normaleq, thm:normaleq-defeq}
 \leanok
-Direct induction, using \texttt{NormalEq.defeq} to retype the sides in the congruence cases
+\lead{Idea} Direct induction, using \texttt{NormalEq.defeq} to retype in the congruence cases
 and \texttt{forallE\_inv} to extend the context in the $\eta$ cases.
-\thesisref{unique.tex Lemma ``Regularity of reductions'' (2)}
+\thesisref{unique.tex (2)}
 \axfoot{sorryAx via NormalEq.defeq}
 \end{proof}
 
-\begin{lemma}[Structural properties of normal equality]
+\begin{lemma}[Structural properties, normal eq]
 \label{fam:normaleq-struct}
 \lean{Lean4Lean.VEnv.NormalEq.weakN,Lean4Lean.VEnv.NormalEq.instN,Lean4Lean.VEnv.NormalEq.instN_r,Lean4Lean.VEnv.NormalEq.defeqDFC,Lean4Lean.VEnv.NormalEq.defeq_l,Lean4Lean.VEnv.NormalEq.weakN_inv_DFC,Lean4Lean.VEnv.NormalEq.weakN_iff}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{167}
-Normal equality is stable under weakening and under substitution on either side
-(\texttt{instN} substitutes into the related pair, \texttt{instN\_r} relates the two
-substitution instances of one term), it transports along a definitionally equal context
-(\texttt{defeqDFC}, \texttt{defeq\_l}), and weakening is an equivalence:
-$\Gamma' \vdash e_1{\uparrow} \equiv_p e_2{\uparrow}$ iff
-$\Gamma \vdash e_1 \equiv_p e_2$ (\texttt{weakN\_iff}, from the stronger
-\texttt{weakN\_inv\_DFC}).
+
+\lead{In short} Normal equality is \hl{stable under weakening, substitution, context
+conversion; weakening is an equivalence}.
+\begin{itemize}
+\item stable under weakening and substitution;
+\item transport along a definitionally equal context;
+\item weakening is an equivalence.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:normaleq, thm:isdefequ-weakn-iff, fam:weakening-iff, fam:defeqdfc}
 \leanok
-Inductions on the derivation; \texttt{instN\_r} inducts on the term instead.
-\texttt{weakN\_inv\_DFC} (line 280) is a 100-line inversion that also transports across a
-context conversion, and it consumes the admitted \texttt{IsDefEqU.weakN\_iff} in almost every
-case.
-\thesisref{unique.tex Lemma ``Regularity of reductions'' item:p\_subst; typesys.tex Lemma thm:weak}
+\lead{Idea} Inductions on the derivation; \texttt{weakN\_inv\_DFC} consumes \stSorry{}
+\texttt{IsDefEqU.weakN\_iff} in almost every case.
+\thesisref{unique.tex item:p\_subst}
 \axfoot{sorryAx via IsDefEqU.weakN\_iff}
 \end{proof}
 
-\begin{theorem}[Transitivity of normal equality]
+\begin{theorem}[Transitivity, normal equality]
 \label{thm:normaleq-trans}
 \lean{Lean4Lean.VEnv.NormalEq.trans}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{400}
-Over a well-formed context, $\Gamma \vdash e_1 \equiv_p e_2$ and
-$\Gamma \vdash e_2 \equiv_p e_3$ give $\Gamma \vdash e_1 \equiv_p e_3$; with reflexivity and
-symmetry this makes $\equiv_p$ an equivalence relation on well-typed terms.
+
+\lead{In short} Over a well-formed context, $\equiv_p$ is transitive; with reflexivity and
+symmetry, \hl{$\equiv_p$ is an equivalence relation} on well-typed terms.
 \end{theorem}
 \begin{proof}
 \uses{def:normaleq, fam:normaleq-struct, thm:isdefeq-iff}
 \leanok
-Well-founded recursion on a syntactic measure \texttt{meas} of the three terms, with lambdas
-weighted $3$ so that the $\eta$/lambda interaction decreases, and an exhaustive analysis of
-the pairs of rules. The hardest case, \texttt{etaR} against \texttt{etaL}, is closed by
-inverting the resulting relation under a lifted context with \texttt{weakN\_iff}.
-\thesisref{unique.tex Lemma ``Regularity of reductions'' (2)}
+\lead{Idea} Well-founded recursion on a measure, case analysis on the pairs of rules;
+\texttt{etaR}/\texttt{etaL} inverts under a lifted context via \texttt{weakN\_iff}.
+\thesisref{unique.tex (2)}
 \axfoot{sorryAx via NormalEq.weakN\_iff and IsDefEq.uniqU}
-\reviewnote{\texttt{meas}, \texttt{meas\_liftN} and \texttt{meas\_lift} are \texttt{private}
-(line 389), so the measure cannot be reused from outside the file.}
 \end{proof}
 
 \section{Parallel reduction and confluence}
@@ -1004,70 +950,71 @@ inverting the resulting relation under a lifted context with \texttt{weakN\_iff}
 \label{def:parred}
 \lean{Lean4Lean.VEnv.ParRed}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{473}
-$\Gamma \vdash e \gg e'$: Tait--Martin-L\"of parallel reduction, with a congruence rule for
-every term former, the $\beta$ rule, and one rule \texttt{extra} for the abstract family: if
-$Pat\;p\;r$, $p$ matches $e$ with $m_1, m_2$, the side conditions $r_2$ hold as
-\texttt{Check.OK}, and every matched subterm reduces $m_2\;a \gg m_2'\;a$, then
-$e \gg r_1.apply\;m_1\;m_2'$.
 \uses{class:cr-params, inductive:pattern-matches, inductive:pattern-rhs}
-\thesisref{unique.tex \S sec:church\_rosser, the relation $\gg_\kappa$}
+\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{473}
+\thesisref{unique.tex \S sec:church\_rosser}
+
+\lead{In short} $\Gamma\vdash e\gg e'$: \hl{Tait--Martin-L\"of parallel reduction} -- a
+congruence rule per term former, $\beta$, and one \texttt{extra} rule for the abstract family.
+\begin{itemize}
+\item \lead{Given} $Pat\;p\;r$, $p$ matches $e$ at $m_1,m_2$, side conditions $r_2$ hold as
+      \texttt{Check.OK}, every matched subterm $m_2\;a\gg m_2'\;a$;
+\item \lead{Then} $e\gg r_1.apply\;m_1\;m_2'$.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Complete parallel reduction]
 \label{def:cparred}
 \lean{Lean4Lean.VEnv.CParRed,Lean4Lean.VEnv.NonNeutral}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{488}
-$\Gamma \vdash e \ggg e'$ has the same rules as $\gg$ except that the congruence rules for
-constants and applications fire only when the term is neutral, that is
-$\lnot NonNeutral\;\Gamma\;e$, where $NonNeutral$ says that $e$ is a $\beta$ redex or matches
-some rule with satisfied side conditions. Forcing every available redex to be contracted makes
-the reduct essentially unique, which is what lets $\ggg$ serve as the apex of the triangle
-lemma.
 \uses{def:parred, class:cr-params}
-\thesisref{unique.tex \S sec:church\_rosser, the complete reduction $\ggg_\kappa$}
+\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{488}
+\thesisref{unique.tex \S sec:church\_rosser}
+
+\lead{In short} $\Gamma\vdash e\ggg e'$: as $\gg$, but \texttt{const}/application congruences
+fire only when $e$ is neutral (not a $\beta$ redex, matching no rule with satisfied side
+conditions). \hl{Forces every available redex, making the reduct essentially unique.}
 \end{definition}
 
-\begin{lemma}[Basic properties of parallel reduction]
+\begin{lemma}[Basic properties of $\gg$]
 \label{fam:parred-struct}
 \lean{Lean4Lean.VEnv.ParRed.rfl,Lean4Lean.VEnv.ParRed.weakN,Lean4Lean.VEnv.ParRed.instN,Lean4Lean.VEnv.ParRed.defeq,Lean4Lean.VEnv.ParRed.hasType,Lean4Lean.VEnv.ParRed.defeqDFC,Lean4Lean.VEnv.ParRed.weakN_inv,Lean4Lean.VEnv.CParRed.toParRed}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{499}
-Reflexivity; stability under weakening and under simultaneous substitution
-($e_1 \gg e_2$ and $a_1 \gg a_2$ give $e_1[a_1] \gg e_2[a_2]$); soundness
-$\Gamma \vdash e \equiv e' : A$ and subject reduction; transport along a definitionally equal
-context; inversion of weakening; and $\ggg\ \subseteq\ \gg$.
+
+\lead{In short} Basic properties of $\gg$.
+\begin{itemize}
+\item reflexivity, weakening, $e_1\gg e_2 \wedge a_1\gg a_2 \Rightarrow e_1[a_1]\gg e_2[a_2]$;
+\item soundness ($\Gamma\vdash e\equiv e':A$) and subject reduction;
+\item transport along a definitionally equal context, inversion of weakening, $\ggg\subseteq\gg$.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:parred, def:cparred, class:cr-params, fam:cr-pattern-plumbing, fam:strong-inversions}
 \leanok
-Inductions on the reduction. \texttt{ParRed.defeq} (line 549) is where \texttt{Params.pat\_wf}
-is consumed: soundness of the abstract rules is an assumption of the class, not something
-proved here; the matched-subterm congruence goes through \texttt{IsDefEq.apply\_pat}.
-\thesisref{unique.tex Lemma thm:gg\_prop items 1 and item:gg\_subst}
+\lead{Idea} Inductions on the reduction, via \texttt{Params.pat\_wf} and
+\texttt{IsDefEq.apply\_pat} for the matched-subterm congruence.
+\thesisref{unique.tex thm:gg\_prop}
 \axfoot{sorryAx via HasType.app\_inv and IsDefEq.uniq}
 \end{proof}
 
-\begin{theorem}[Existence of a complete parallel reduct]
+\begin{theorem}[Complete reduct exists]
 \label{thm:cparred-exists}
 \lean{Lean4Lean.VEnv.CParRed.exists}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{717}
-If $\Gamma \vdash e : A$ over a well-formed context, then $\Gamma \vdash e \ggg e'$ for some
-$e'$.
+
+\lead{In short} If $\Gamma\vdash e:A$ over a well-formed context, \hl{a complete parallel
+reduct exists}: $\Gamma\vdash e\ggg e'$ for some $e'$.
 \end{theorem}
 \begin{proof}
 \uses{def:cparred, fam:strong-inversions}
 \leanok
-Structural recursion on $e$ with \texttt{VExpr.brecOn}. At a constant or an application, the
-only two shapes that can be a redex head, one decides classically whether the term is
-\texttt{NonNeutral}; if it is, the $\beta$ or rule case is built by recursing into the matched
-subterms along the pattern, otherwise the congruence rule applies.
-\thesisref{unique.tex Lemma thm:gg\_prop item:ggg\_ex}
+\lead{Idea} Structural recursion; classically decide \texttt{NonNeutral} to pick the
+$\beta$/rule case or the congruence rule.
+\lead{Caveat} Uses \texttt{Classical.byCases}, making confluence classical.
+\thesisref{unique.tex thm:gg\_prop}
 \axfoot{sorryAx via HasType.app\_inv and HasType.lam\_inv}
-\reviewnote{the case split uses \texttt{Classical.byCases}; harmless, but it makes the
-confluence development classical.}
 \end{proof}
 
 \begin{theorem}[Triangle lemma]
@@ -1075,55 +1022,54 @@ confluence development classical.}
 \lean{Lean4Lean.VEnv.ParRed.triangle}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{766}
-If $\Gamma \vdash e : A$, $\Gamma \vdash e \gg e'$ and $\Gamma \vdash e \ggg o$, then there is
-$o'$ with $\Gamma \vdash e' \gg o'$ and $\Gamma \vdash o' \equiv_p o$.
+
+\lead{In short} If $\Gamma\vdash e:A$, $\Gamma\vdash e\gg e'$ and $\Gamma\vdash e\ggg o$, there
+is $o'$ with $\Gamma\vdash e'\gg o'$ and $\Gamma\vdash o'\equiv_p o$. \hl{The technical core of
+confluence.}
 \end{theorem}
 \begin{proof}
 \uses{def:cparred, def:parred, def:normaleq, class:cr-params, fam:normaleq-struct}
 \leanok
-Nested induction: outer structural recursion on $e$, inner induction on the complete
-reduction, inverting the parallel reduction in each case. The rule case uses
-\texttt{pat\_uniq} (line 892), the only \texttt{Params} field this proof consumes, to show that
-two matching rules must coincide, and the $\beta$/$\eta$ interaction is closed with the
-\texttt{NormalEq}
-congruences. About 150 lines; the technical core of confluence.
-\thesisref{unique.tex Lemma thm:tri (Triangle lemma)}
+\lead{Idea} Nested induction, inverting the parallel reduction; the rule case uses
+\texttt{pat\_uniq} to show two matching rules coincide, and $\beta$/$\eta$ closes with the
+\texttt{NormalEq} congruences.
+\thesisref{unique.tex thm:tri}
 \axfoot{sorryAx via NormalEq and the inversion lemmas}
 \end{proof}
 
-\begin{theorem}[One-step confluence of parallel reduction]
+\begin{theorem}[One-step confluence]
 \label{thm:parred-church-rosser}
 \lean{Lean4Lean.VEnv.ParRed.church_rosser}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{916}
-If $\Gamma \vdash e : A$, $e \gg e_1$ and $e \gg e_2$, then there are $e_1', e_2'$ with
-$e_1 \gg e_1'$, $e_2 \gg e_2'$ and $\Gamma \vdash e_1' \equiv_p e_2'$.
+
+\lead{In short} $\Gamma\vdash e:A$, $e\gg e_1$, $e\gg e_2$ give $e_1',e_2'$ with
+$e_1\gg e_1'$, $e_2\gg e_2'$ and $\Gamma\vdash e_1'\equiv_p e_2'$.
 \end{theorem}
 \begin{proof}
 \uses{thm:parred-triangle, thm:cparred-exists, thm:normaleq-trans, thm:normaleq-symm}
 \leanok
-Take the complete reduct of $e$ by \texttt{CParRed.exists}, apply the triangle lemma to both
-sides, and glue the two normal equalities with \texttt{NormalEq.trans} and \texttt{symm}.
-\thesisref{unique.tex, proof of thm:church\_rosser, step (1)}
+\lead{Idea} Take $e$'s complete reduct, apply the triangle lemma to both sides, glue the two
+normal equalities with \texttt{trans}/\texttt{symm}.
+\thesisref{unique.tex thm:church\_rosser}
 \axfoot{sorryAx via ParRed.triangle and NormalEq.trans}
 \end{proof}
 
-\begin{lemma}[Iterated parallel reduction and its closure properties]
+\begin{lemma}[Iterated parallel reduction]
 \label{def:parreds}
 \lean{Lean4Lean.VEnv.ParRedS,Lean4Lean.VEnv.ParRedS.hasType,Lean4Lean.VEnv.ParRedS.defeq,Lean4Lean.VEnv.ParRedS.defeqDFC,Lean4Lean.VEnv.ParRedS.app,Lean4Lean.VEnv.ParRedS.lam,Lean4Lean.VEnv.ParRedS.forallE,Lean4Lean.VEnv.ParRedS.inst,Lean4Lean.VEnv.ParRedS.weakN}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{924}
-$\Gamma \vdash e \gg^* e'$ is the reflexive-transitive closure of $\gg$ (as
-\texttt{ReflTransGen}). It preserves typing, implies $\Gamma \vdash e \equiv e' : A$, and is
-closed under the congruences for application, lambda and $\Pi$, under substitution and under
-weakening.
+
+\lead{In short} $\Gamma\vdash e\gg^* e'$: \hl{the reflexive-transitive closure of $\gg$}.
+Preserves typing, implies $\Gamma\vdash e\equiv e':A$, closed under the congruences,
+substitution and weakening.
 \end{lemma}
 \begin{proof}
 \uses{def:parred, fam:parred-struct}
 \leanok
-Each property is an induction along the closure, applying the corresponding one-step lemma at
-every step.
-\thesisref{unique.tex \S sec:church\_rosser, $\gg_\kappa^*$}
+\lead{Idea} Induction along the closure, applying the one-step lemma at each step.
+\thesisref{unique.tex \S sec:church\_rosser}
 \axfoot{sorryAx via ParRed.defeq and ParRed.hasType}
 \end{proof}
 
@@ -1132,98 +1078,97 @@ every step.
 \lean{Lean4Lean.VEnv.ParRedExt,Lean4Lean.VEnv.ParRedExt.depth,Lean4Lean.VEnv.ParRedExt.apply,Lean4Lean.VEnv.ParRedExt.meas,Lean4Lean.VEnv.IsApp,Lean4Lean.VEnv.ParRedExt.isApp,Lean4Lean.VEnv.hasType_app_bvar0}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{998}
-A three-constructor datatype of contexts built from \texttt{lift} and
-``lift then apply to $\mathsf{bvar}\;0$'' steps, with its depth, its action on a term and a
-measure; it generalises the induction in \texttt{parRed\_beta} over a stack of $\eta$
-expansions. \texttt{isApp} says such a context never turns an application into a
-non-application, and \texttt{hasType\_app\_bvar0} inverts the typing of
-$e{\uparrow}\;(\mathsf{bvar}\;0)$ into a $\Pi$ typing of $e$.
+
+\lead{In short} A context built from \texttt{lift} and ``lift then apply to
+$\mathsf{bvar}\;0$'' steps -- \hl{generalises the induction over a stack of $\eta$ expansions}.
+\begin{itemize}
+\item \texttt{isApp}: such a context never turns an application into a non-application;
+\item \texttt{hasType\_app\_bvar0}: inverts $\Gamma\vdash e{\uparrow}\;(\mathsf{bvar}\;0):V$
+      into a $\Pi$ typing of $e$.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:normaleq, thm:isdefequ-weakn-iff, fam:strong-inversions}
 \leanok
-\texttt{isApp} is an induction on the context. \texttt{hasType\_app\_bvar0} inverts the
-application, retypes the function with unique typing, applies the $\eta$ rule and strips the
-lift with \texttt{IsDefEqU.weakN\_iff}.
+\lead{Idea} \texttt{isApp} inducts on the context; \texttt{hasType\_app\_bvar0} inverts the
+application, retypes by unique typing, applies $\eta$, strips the lift.
 \axfoot{sorryAx via IsDefEqU.weakN\_iff}
-\reviewnote{not in the thesis; a Lean-specific device for handling the $\eta$ rules inside the
-confluence proof.}
 \end{proof}
 
-\begin{lemma}[Normal equality with a lambda absorbs a beta step]
+\begin{lemma}[Beta absorbed by $\equiv_p$]
 \label{thm:parredext-parred-beta}
 \lean{Lean4Lean.VEnv.ParRedExt.parRed_beta}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1045}
-If $\Gamma \vdash f \equiv_p \lambda A.\,e'$ and $\Gamma \vdash f\;a : B$, then
-$\Gamma \vdash f\;a \gg^* e$ for some $e$ with $\Gamma \vdash e \equiv_p e'[a]$.
+
+\lead{In short} If $\Gamma\vdash f\equiv_p\lambda A.e'$ and $\Gamma\vdash f\,a:B$, then
+$\Gamma\vdash f\,a\gg^* e$ for some $e$ with $\Gamma\vdash e\equiv_p e'[a]$.
 \end{lemma}
 \begin{proof}
 \uses{def:normaleq, def:parredext, def:parreds}
 \leanok
-Structural recursion on $f$ with \texttt{VExpr.brecOn}, proved simultaneously with a version
-generalised over an $\eta$-expansion context of bounded depth; case analysis on the
-\texttt{NormalEq} derivation, with the \texttt{etaL} case recursing through the context stack.
-\thesisref{unique.tex, the $\lambda$/$\eta$ cases in the proof of thm:gg\_compat}
+\lead{Idea} Structural recursion on $f$, generalised over a bounded-depth $\eta$-expansion
+context; the \texttt{etaL} case recurses through the context stack.
+\thesisref{unique.tex thm:gg\_compat}
 \axfoot{sorryAx via NormalEq and hasType\_app\_bvar0}
 \end{proof}
 
-\begin{theorem}[Compatibility of parallel reduction with normal equality]
+\begin{theorem}[Compatibility with $\gg$]
 \label{thm:normaleq-parred}
 \lean{Lean4Lean.VEnv.NormalEq.parRed}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1181}
-If $\Gamma \vdash e_1 \equiv_p e_2$ and $\Gamma \vdash e_2 \gg e_2'$, then there is $e_1'$
-with $\Gamma \vdash e_1 \gg^* e_1'$ and $\Gamma \vdash e_1' \equiv_p e_2'$.
+
+\lead{In short} If $\Gamma\vdash e_1\equiv_p e_2$ and $\Gamma\vdash e_2\gg e_2'$, there is
+\hl{$e_1'$ with $\Gamma\vdash e_1\gg^* e_1'$ and $\Gamma\vdash e_1'\equiv_p e_2'$}.
 \end{theorem}
 \begin{proof}
 \uses{def:normaleq, def:parred, thm:parredext-parred-beta, fam:normaleq-struct}
-\textbf{Not proved in Lean.} Two literal \texttt{sorry}s remain, at
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193} and
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1212} (both master), in exactly the cases
-where the reduction step is an \texttt{extra} (rule, that is $\iota$ or $\delta$) step meeting
-a \texttt{constDF} respectively an \texttt{appDF} normal equality. Those are the cases the
-thesis settles by unique typing and smallness of the eliminator. The rest of the proof is an
-induction on the normal equality with inversion on the parallel reduction: the $\beta$ case
-goes through \texttt{ParRedExt.parRed\_beta}, the $\eta$ and congruence cases through the
-\texttt{NormalEq} closure lemmas. Because this lemma is load-bearing, the whole
-Church--Rosser chain below is unproved.
-\thesisref{unique.tex Lemma thm:gg\_compat}
+\stSorry{} \lead{Missing} Two upstream \texttt{sorry}s
+(\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193} and
+\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1212}), where a rule step meets a
+\texttt{constDF} resp.\ \texttt{appDF} normal equality -- cases the thesis settles by unique
+typing and smallness of the eliminator.
+\lead{Idea} Otherwise induction on the normal equality with inversion on the parallel
+reduction; $\beta$ via \texttt{ParRedExt.parRed\_beta}, $\eta$/congruence via the
+\texttt{NormalEq} closure lemmas.
+\thesisref{unique.tex thm:gg\_compat}
 \end{proof}
 
-\begin{lemma}[Compatibility with iterated parallel reduction]
+\begin{lemma}[Compatibility, iterated]
 \label{thm:normaleq-parreds}
 \lean{Lean4Lean.VEnv.NormalEq.parRedS}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1286}
-The iterated form: $\Gamma \vdash e_1 \equiv_p e_2$ and $e_2 \gg^* e_2'$ give
-$e_1 \gg^* e_1'$ with $\Gamma \vdash e_1' \equiv_p e_2'$.
+
+\lead{In short} Iterated form: $\Gamma\vdash e_1\equiv_p e_2$ and $e_2\gg^* e_2'$ give
+$e_1\gg^* e_1'$ with $\Gamma\vdash e_1'\equiv_p e_2'$.
 \end{lemma}
 \begin{proof}
 \uses{thm:normaleq-parred}
 \leanok
-Induction on the reduction sequence, applying \texttt{NormalEq.parRed} at each step.
+\lead{Idea} Induction on the reduction sequence, applying \texttt{NormalEq.parRed} at each
+step.
 \axfoot{sorryAx via NormalEq.parRed (ChurchRosser.lean:1193, 1212)}
 \end{proof}
 
-\begin{lemma}[Church--Rosser definitional equality]
+\begin{lemma}[Church--Rosser def-eq]
 \label{def:crdefeq}
 \lean{Lean4Lean.VEnv.CRDefEq,Lean4Lean.VEnv.CRDefEq.normalEq,Lean4Lean.VEnv.CRDefEq.refl,Lean4Lean.VEnv.CRDefEq.defeq,Lean4Lean.VEnv.CRDefEq.symm,Lean4Lean.VEnv.CRDefEq.trans}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1297}
-$\Gamma \vdash e_1 \gg\ll e_2$ holds when both sides are typed and there are $e_1', e_2'$ with
-$e_1 \gg^* e_1'$, $e_2 \gg^* e_2'$ and $\Gamma \vdash e_1' \equiv_p e_2'$. It contains
-$\equiv_p$, is reflexive, symmetric and transitive, and implies
-$\Gamma \vdash e_1 \equiv e_2$.
+
+\lead{In short} $\Gamma\vdash e_1\gg\ll e_2$: both sides typed and there are $e_1',e_2'$ with
+$e_1\gg^* e_1'$, $e_2\gg^* e_2'$, $\Gamma\vdash e_1'\equiv_p e_2'$. \hl{Contains $\equiv_p$, is
+an equivalence relation, and implies $\Gamma\vdash e_1\equiv e_2$.}
 \end{lemma}
 \begin{proof}
 \uses{def:parreds, def:normaleq, thm:normaleq-parreds, fam:defeq-mixing}
 \leanok
-All the closure properties are immediate from the definition except transitivity, which runs
-confluence (\ref{thm:parreds-church-rosser}) on the two middle reducts and then re-attaches the
-outer normal equalities with \texttt{NormalEq.parRedS}. The confluence theorem's own statement
-is phrased in terms of this relation, so the dependency is recorded only in that direction.
-\thesisref{unique.tex, the relation $\equiv_\kappa$ defined after thm:church\_rosser}
+\lead{Idea} Immediate except transitivity, which runs confluence
+(Theorem~\ref{thm:parreds-church-rosser}) on the two middle reducts and re-attaches the outer
+equalities.
+\thesisref{unique.tex thm:church\_rosser}
 \axfoot{sorryAx via NormalEq.parRedS (CRDefEq.trans) and IsDefEq.uniq}
 \end{proof}
 
@@ -1232,131 +1177,127 @@ is phrased in terms of this relation, so the dependency is recorded only in that
 \lean{Lean4Lean.VEnv.ParRedS.church_rosser}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1302}
-If $\Gamma \vdash e : A$ and $e \gg^* e_1$, $e \gg^* e_2$, then
-$\Gamma \vdash e_1 \gg\ll e_2$: the two reducts converge up to normal equality.
+
+\lead{In short} \hl{Church--Rosser theorem}: if $\Gamma\vdash e:A$ and $e\gg^* e_1$,
+$e\gg^* e_2$, then $\Gamma\vdash e_1\gg\ll e_2$ -- the two reducts converge up to normal
+equality. \stTainted{}
 \end{theorem}
 \begin{proof}
 \uses{thm:parred-church-rosser, thm:normaleq-parred, def:crdefeq}
 \leanok
-Double induction on the two reduction sequences, gluing one-step confluence with
-compatibility at each step, exactly as in the thesis' steps (2) and (3).
-\thesisref{unique.tex Theorem thm:church\_rosser}
+\lead{Idea} Double induction on the two reduction sequences, gluing one-step confluence with
+compatibility at each step.
+\thesisref{unique.tex thm:church\_rosser}
 \axfoot{sorryAx via NormalEq.parRed}
 \end{proof}
 
-\begin{theorem}[Completeness of kappa reduction]
+\begin{theorem}[Completeness of $\kappa$]
 \label{thm:isdefeq-church-rosser}
 \lean{Lean4Lean.VEnv.IsDefEq.church_rosser}
 \leanok
-\contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1347}
-Every definitional equality is a Church--Rosser equality:
-$\Gamma \vdash e_1 \equiv e_2 : A$ implies $\Gamma \vdash e_1 \gg\ll e_2$. This is the bridge
-from the declarative equality to reduction plus proof irrelevance.
+\contrib{mixed}\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1347}
+
+\lead{In short} $\Gamma\vdash e_1\equiv e_2:A$ implies $\Gamma\vdash e_1\gg\ll e_2$ -- \hl{the
+bridge from declarative equality to reduction plus proof irrelevance}.
 \end{theorem}
 \begin{proof}
 \uses{def:crdefeq, def:parreds, axiom:cr-params-pat-env, thm:pattern-realizes-took, class:cr-params, rule:isdefeq-pat}
 \leanok
-Induction on the \texttt{IsDefEq} derivation: the equivalence rules use the corresponding
-\texttt{CRDefEq} closure lemmas, the congruences use the \texttt{ParRedS} congruences, and
-$\beta$ and \texttt{extra} each take one reduction step (\texttt{extra} through
-\texttt{Params.extra\_pat}). The \texttt{pat} case added on the \texttt{iota} branch
-(1390--1394) converts the constructor's \texttt{Realizes} witness into a \texttt{Check.OK} by
-\texttt{Realizes.toOK}, then takes a single \texttt{ParRed.extra} step, seeing the registered
-rule as a \texttt{Pat} rule through \texttt{Params.pat\_env}. Five lines, exactly parallel to
-the pre-existing \texttt{extra} case.
-\thesisref{unique.tex Theorem thm:ckappa (Completeness of the $\kappa$ reduction), forward direction}
+\lead{Idea} Induction: equivalence rules use the \texttt{CRDefEq} closure lemmas, congruences
+the \texttt{ParRedS} congruences, $\beta$/\texttt{extra} each take one step. \texttt{iota}
+converts the \texttt{Realizes} witness to \texttt{Check.OK} and takes one
+\texttt{ParRed.extra} step via \texttt{Params.pat\_env}.
+\thesisref{unique.tex thm:ckappa}
 \axfoot{sorryAx via CRDefEq.trans and ParRedS.church\_rosser, hence NormalEq.parRed}
 \end{proof}
 
 \section{Weak head reduction, standardization and inference}
 
-\begin{lemma}[Shape of simple pattern redexes]
+\begin{lemma}[Simple pattern shape]
 \label{fam:hr-pattern-shape}
 \lean{Lean4Lean.VEnv.Subpattern.varN_const,Lean4Lean.VEnv.Params.simple_app}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{29}
-A subpattern of $\mathtt{varN}\;(\mathsf{const}\;c)\;n$ is again of that form; consequently,
-for a rule pattern $p$, any application subpattern of $p$ is $p$ itself.
+
+\lead{In short} A subpattern of $\mathtt{varN}\;(\mathsf{const}\;c)\;n$ is again of that form;
+hence any application subpattern of a rule pattern $p$ is $p$ itself.
 \end{lemma}
 \begin{proof}
 \uses{inductive:pattern-core, class:cr-params}
 \leanok
-The first is an induction on the subpattern relation after generalising $n$; the second cases
-on \texttt{pat\_simple} and applies the first.
-\reviewnote{both are declared inside \texttt{namespace Lean4Lean.VEnv}. That is right for
-\texttt{Params.simple\_app}, since \texttt{Params} is \texttt{Lean4Lean.VEnv.Params}, but not
-for the first: \texttt{Subpattern} lives at \texttt{Lean4Lean.Subpattern} while the lemma is
-\texttt{Lean4Lean.VEnv.Subpattern.varN\_const}, so dot notation on a \texttt{Subpattern}
-hypothesis will not find it.}
+\lead{Idea} The first is induction on the subpattern relation after generalising $n$; the
+second cases on \texttt{pat\_simple} and applies the first.
 \end{proof}
 
-\begin{definition}[Major premise of a reduction rule]
+\begin{definition}[Major premise]
 \label{def:ismajorpremise}
 \lean{Lean4Lean.VEnv.IsMajorPremise,Lean4Lean.VEnv.IsMajorPremise.lift',Lean4Lean.VEnv.IsMajorPremise.instN,Lean4Lean.VEnv.IsMajorPremise.lam}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{43}
-$IsMajorPremise\;e$ says that $e$ is matched by the function part $p_1$ of some application
-subpattern $p_1\;p_2$ of some rule pattern: $e$ is the spine of a potential redex still
-waiting for its major premise. It is stable under general renamings and under substitution,
-and a lambda is never one.
 \uses{class:cr-params, inductive:pattern-matches}
-\thesisref{axioms.tex, the whnf/head-reduction discussion}
+\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{43}
+\thesisref{axioms.tex}
+
+\lead{In short} $IsMajorPremise\;e$: $e$ is matched by the function part $p_1$ of some
+application subpattern $p_1\,p_2$ of a rule pattern -- \hl{the spine of a potential redex still
+waiting for its major premise}. Stable under renaming and substitution; a lambda is never one.
 \end{definition}
 
 \begin{definition}[Weak head reduction]
 \label{def:whred}
 \lean{Lean4Lean.VEnv.WHRed,Lean4Lean.VEnv.WHRed.defeqDFC,Lean4Lean.VEnv.WHRed.weak',Lean4Lean.VEnv.WHRed.weakN,Lean4Lean.VEnv.WHRed.weakU_inv,Lean4Lean.VEnv.WHRed.parRed,Lean4Lean.VEnv.WHRed.defeq,Lean4Lean.VEnv.WHRed.hasType,Lean4Lean.VEnv.WHRed.instN}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{59}
-$\Gamma \vdash e \rightsquigarrow e'$: reduce in the head of an application (\texttt{app}),
-reduce the argument when the head is a major premise (\texttt{major}), contract a $\beta$
-redex, or fire a rule whose side conditions hold (\texttt{extra}). It is contained in
-parallel reduction, hence sound for definitional equality and type-preserving, and it is
-stable under weakening, renaming, substitution and context conversion.
 \uses{def:ismajorpremise, def:parred, class:cr-params}
-\thesisref{axioms.tex, the head reduction relation $e \rightsquigarrow^* k$}
+\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{59}
+\thesisref{axioms.tex}
+
+\lead{In short} $\Gamma\vdash e\rightsquigarrow e'$: \hl{reduce the head of an application, the
+argument once the head is a major premise, or contract a $\beta$/rule redex}
+(\texttt{app}, \texttt{major}, \texttt{extra}). Contained in $\gg$, hence sound and
+type-preserving; stable under weakening, renaming, substitution and context conversion.
 \end{definition}
 
 \begin{definition}[Weak head normal form]
 \label{def:whnf}
 \lean{Lean4Lean.VEnv.WHNF,Lean4Lean.VEnv.WHNF.bvar,Lean4Lean.VEnv.WHNF.lam,Lean4Lean.VEnv.WHNF.sort,Lean4Lean.VEnv.WHNF.forallE}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{132}
-$WHNF\;\Gamma\;e$ means that no weak head reduction applies to $e$. Variables, lambdas, sorts
-and $\Pi$ types are always in weak head normal form.
 \uses{def:whred}
+\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{132}
+
+\lead{In short} $WHNF\;\Gamma\;e$: no weak head reduction applies to $e$. Variables, lambdas,
+sorts and $\Pi$ types always are.
 \end{definition}
 
-\begin{lemma}[Partial matches are already in normal form]
+\begin{lemma}[Partial matches normal]
 \label{thm:whnf-subpattern}
 \lean{Lean4Lean.VEnv.WHNF.subpattern,Lean4Lean.VEnv.IsMajorPremise.whnf}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{139}
-If $p_1$ is a subpattern of a rule pattern $p$ with $p_1 \ne p$ and $p_1$ matches $e$, then
-$e$ is in weak head normal form; in particular a major premise spine is.
+
+\lead{In short} If a proper subpattern $p_1\ne p$ of a rule pattern matches $e$, then $e$ is in
+weak head normal form; \hl{in particular, a major premise spine is}.
 \end{lemma}
 \begin{proof}
 \uses{def:whnf, class:cr-params, fam:hr-pattern-shape, inductive:pattern-matches}
 \leanok
-A proper subpattern must be of the form $\mathtt{varN}\;(\mathsf{const}\;c)\;n$; then one
-induction on the putative head reduction, discharging each case with the rule-coherence
-conditions \texttt{pat\_uniq}, \texttt{pat\_app\_l\_uniq} and \texttt{pat\_app\_uniq}.
+\lead{Idea} A proper subpattern must be $\mathtt{varN}\;(\mathsf{const}\;c)\;n$; induct on the
+putative head reduction, discharging cases with the \texttt{pat\_uniq} family.
 \end{proof}
 
-\begin{theorem}[Weak head reduction is deterministic]
+\begin{theorem}[Weak head determinism]
 \label{thm:whred-determ}
 \lean{Lean4Lean.VEnv.WHRed.determ}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{174}
-$\Gamma \vdash e \rightsquigarrow e_1$ and $\Gamma \vdash e \rightsquigarrow e_2$ imply
-$e_1 = e_2$.
+
+\lead{In short} $\Gamma\vdash e\rightsquigarrow e_1$ and $\Gamma\vdash e\rightsquigarrow e_2$
+imply $e_1=e_2$.
 \end{theorem}
 \begin{proof}
 \uses{def:whred, thm:whnf-subpattern, inductive:pattern-matches, class:cr-params}
 \leanok
-Induction on the first reduction with inversion on the second. Overlapping rule redexes are
-excluded by \texttt{pat\_uniq} together with \texttt{Pattern.matches\_determ}, and
-head/argument overlaps by \texttt{WHNF.subpattern}.
+\lead{Idea} Induction on the first reduction, inversion on the second; overlapping rule redexes
+excluded by \texttt{pat\_uniq} with \texttt{Pattern.matches\_determ}, head/argument overlaps by
+\texttt{WHNF.subpattern}.
 \end{proof}
 
 \begin{lemma}[Iterated weak head reduction]
@@ -1364,15 +1305,14 @@ head/argument overlaps by \texttt{WHNF.subpattern}.
 \lean{Lean4Lean.VEnv.WHRedS,Lean4Lean.VEnv.WHRedS.defeqDFC,Lean4Lean.VEnv.WHRedS.parRedS,Lean4Lean.VEnv.WHRedS.app,Lean4Lean.VEnv.WHRedS.major,Lean4Lean.VEnv.WHRedS.defeq,Lean4Lean.VEnv.WHRedS.hasType,Lean4Lean.VEnv.WHRedS.weak',Lean4Lean.VEnv.WHRedS.weakN,Lean4Lean.VEnv.WHRedS.instN,Lean4Lean.VEnv.WHNF.whRedS,Lean4Lean.VEnv.WHRedS.determ,Lean4Lean.VEnv.WHRedS.weakU_inv}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{216}
-$\rightsquigarrow^*$ is the reflexive-transitive closure of $\rightsquigarrow$, with the
-expected closure properties, soundness for definitional equality, and determinism up to a
-normal form: a term reduces to at most one weak head normal form.
+
+\lead{In short} $\rightsquigarrow^*$: the closure of $\rightsquigarrow$, sound for definitional
+equality, \hl{deterministic up to a normal form} (a term reduces to at most one WHNF).
 \end{lemma}
 \begin{proof}
 \uses{thm:whred-determ, def:whnf, def:parreds}
 \leanok
-Inductions along the closure; determinism up to a normal form is a head induction using
-\texttt{WHRed.determ} at each step.
+\lead{Idea} Inductions along the closure, applying \texttt{WHRed.determ} at each step.
 \axfoot{sorryAx via WHRed.defeq and WHRed.hasType}
 \end{proof}
 
@@ -1380,32 +1320,31 @@ Inductions along the closure; determinism up to a normal form is a head inductio
 \label{def:stred}
 \lean{Lean4Lean.VEnv.StRed,Lean4Lean.VEnv.StRed.rfl,Lean4Lean.VEnv.StRed.bvar_l,Lean4Lean.VEnv.StRed.sort_l,Lean4Lean.VEnv.StRed.lam_l,Lean4Lean.VEnv.StRed.forallE_l,Lean4Lean.VEnv.StRed.defeqDFC,Lean4Lean.VEnv.StRed.parRedS,Lean4Lean.VEnv.StRed.whRed,Lean4Lean.VEnv.StRed.defeq,Lean4Lean.VEnv.StRed.weak',Lean4Lean.VEnv.StRed.weakN,Lean4Lean.VEnv.StRed.instN,Lean4Lean.VEnv.StRed.apply_pat}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{293}
-$\Gamma \vdash e \rightsquigarrow_< e'$: first weak-head-reduce to a term whose head
-constructor is exposed, then reduce the immediate subterms standardly. It contains the
-identity, is contained in $\gg^*$, is preserved by weakening, renaming, substitution and
-context conversion, absorbs a leading weak head reduction, and the inversion lemmas
-\texttt{bvar\_l}, \texttt{sort\_l}, \texttt{lam\_l}, \texttt{forallE\_l} read the result off
-the head shape.
 \uses{def:whreds, def:parreds}
-\thesisref{no thesis counterpart; standardization is from Kashima (2000), cited in the file header}
+\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{293}
+\thesisref{no thesis counterpart (Kashima 2000)}
+
+\lead{In short} $\Gamma\vdash e\rightsquigarrow_< e'$: \hl{weak-head-reduce first, then reduce
+the immediate subterms standardly}. Contains the identity, is contained in $\gg^*$; preserved
+by weakening, renaming, substitution and context conversion; four inversions read the result
+off the head shape.
 \end{definition}
 
-\begin{theorem}[Standard reduction absorbs a parallel step]
+\begin{theorem}[Standard absorbs parallel step]
 \label{thm:stred-triangle}
 \lean{Lean4Lean.VEnv.StRed.triangle,Lean4Lean.VEnv.StRed.triangleS}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{409}
-For a context conversion $W$ between $\Gamma_1$ and $\Gamma_2$: if $\Gamma_1 \vdash e : A$,
-$\Gamma_1 \vdash e \rightsquigarrow_< e_1$ and $\Gamma_2 \vdash e_1 \gg e_2$, then
-$\Gamma_1 \vdash e \rightsquigarrow_< e_2$; \texttt{triangleS} is the same for $\gg^*$.
+
+\lead{In short} For a context conversion $W:\Gamma_1\to\Gamma_2$: if $\Gamma_1\vdash e:A$,
+$\Gamma_1\vdash e\rightsquigarrow_< e_1$ and $\Gamma_2\vdash e_1\gg e_2$, then
+$\Gamma_1\vdash e\rightsquigarrow_< e_2$ (\texttt{triangleS}: the same for $\gg^*$).
 \end{theorem}
 \begin{proof}
 \uses{def:stred, def:parred, fam:strong-inversions, fam:defeqdfc}
 \leanok
-Induction on the parallel reduction with inversion on the standard reduction; the rule case
-reassembles the redex through the pattern with \texttt{StRed.apply\_pat}, and the congruence
-cases split the typing with \texttt{app\_inv} and \texttt{lam\_inv}.
+\lead{Idea} Induction with inversion on the standard reduction; the rule case reassembles the
+redex via \texttt{StRed.apply\_pat}.
 \axfoot{sorryAx via HasType.app\_inv and HasType.lam\_inv}
 \end{proof}
 
@@ -1414,250 +1353,130 @@ cases split the typing with \texttt{app\_inv} and \texttt{lam\_inv}.
 \lean{Lean4Lean.VEnv.ParRedS.standard}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{466}
-If $\Gamma \vdash e : A$ and $\Gamma \vdash e \gg^* e'$, then
-$\Gamma \vdash e \rightsquigarrow_< e'$: any reduction sequence can be rearranged into a
-standard one.
+
+\lead{In short} If $\Gamma\vdash e:A$ and $\Gamma\vdash e\gg^* e'$, then
+$\Gamma\vdash e\rightsquigarrow_< e'$ -- \hl{any reduction sequence rearranges into a standard
+one}. \stTainted{}
 \end{theorem}
 \begin{proof}
 \uses{thm:stred-triangle, def:stred}
 \leanok
-Immediate from \texttt{StRed.triangleS} started at \texttt{StRed.rfl} with the identity
-context conversion.
+\lead{Idea} Immediate from \texttt{StRed.triangleS} started at \texttt{StRed.rfl} with the
+identity context conversion.
 \thesisref{no thesis counterpart (Kashima 2000)}
 \axfoot{sorryAx via StRed.triangle}
 \end{proof}
 
-\begin{theorem}[A term definitionally equal to a sort head-reduces to a sort]
+\begin{theorem}[Sort head-reduction]
 \label{thm:reduce-sort}
 \lean{Lean4Lean.VEnv.IsDefEq.reduce_sort}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{470}
-If $\Gamma \vdash e \equiv \mathsf{sort}\;u : A$, then
-$\Gamma \vdash e \rightsquigarrow^* \mathsf{sort}\;u'$ for some $u' \approx u$.
+
+\lead{In short} If $\Gamma\vdash e\equiv\mathsf{sort}\;u:A$, then
+$\Gamma\vdash e\rightsquigarrow^*\mathsf{sort}\;u'$ for some $u'\approx u$.
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-church-rosser, thm:parreds-standard, thm:isdefeq-iff, def:normaleq, thm:injectivity-open}
 \leanok
-Church--Rosser gives a common reduct up to normal equality; standardization turns each
-reduction into a standard one, so the right-hand side reduces to a sort; then case analysis
-on the normal equality, using unique typing and \texttt{sort\_forallE\_inv} to kill the $\eta$
-and proof-irrelevance cases, forces the reduct to be a sort.
-\thesisref{unique.tex, consequences of definitional inversion (thm:1dinv)}
+\lead{Idea} Church--Rosser and standardization give a common standard reduct; case analysis on
+the normal equality, using unique typing and \texttt{sort\_forallE\_inv}, forces it to be a
+sort.
+\thesisref{unique.tex thm:1dinv}
 \axfoot{sorryAx via IsDefEq.church\_rosser and IsDefEqU.sort\_inv}
 \end{proof}
 
-\begin{theorem}[A term definitionally equal to a pi head-reduces to a pi]
+\begin{theorem}[Pi head-reduction]
 \label{thm:reduce-foralle}
 \lean{Lean4Lean.VEnv.IsDefEq.reduce_forallE}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{488}
-If $\Gamma \vdash e \equiv \Pi A.\,B : V$ then
-$\Gamma \vdash e \rightsquigarrow^* \Pi A'.\,B'$ for some $A', B'$.
+
+\lead{In short} If $\Gamma\vdash e\equiv\Pi A.B:V$ then
+$\Gamma\vdash e\rightsquigarrow^*\Pi A'.B'$ for some $A',B'$.
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-church-rosser, thm:parreds-standard, thm:foralle-inv-derived, thm:injectivity-open}
 \leanok
-The same shape as \texttt{reduce\_sort}: Church--Rosser, standardization, then inversion on
-the normal equality using unique typing and \texttt{sort\_forallE\_inv}.
-\thesisref{unique.tex, consequences of definitional inversion (thm:1dinv)}
+\lead{Idea} Same shape as \texttt{reduce\_sort}: Church--Rosser, standardization, then
+inversion on the normal equality using unique typing and \texttt{sort\_forallE\_inv}.
+\thesisref{unique.tex thm:1dinv}
 \axfoot{sorryAx via IsDefEq.church\_rosser and IsDefEqU.sort\_forallE\_inv}
 \end{proof}
 
-\begin{definition}[Syntax-directed type inference judgment]
+\begin{definition}[Type inference judgment]
 \label{def:infertype}
 \lean{Lean4Lean.VEnv.InferType,Lean4Lean.VEnv.InferType.hasType,Lean4Lean.VEnv.InferType.determ,Lean4Lean.VEnv.InferType.weak',Lean4Lean.VEnv.InferType.weakN,Lean4Lean.VEnv.InferType.weakU_inv,Lean4Lean.VEnv.InferType.weak'_inv,Lean4Lean.VEnv.InferType.instN,Lean4Lean.VEnv.InferType.inst}
 \leanok
-\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{508}
-$\Gamma \vdash e \triangleright A$: the algorithmic reading of typing. Variables, sorts and
-constants read their type off the context or the environment; the application rule
-weak-head-reduces the function's inferred type to a $\Pi$ and checks the argument against the
-domain; the $\Pi$ rule reduces the inferred types of the two components to sorts. It is sound
-($\Gamma \vdash e : A$), deterministic ($A$ is unique), and stable under renaming, weakening
-and substitution.
 \uses{def:whreds, def:hastype-istype}
-\thesisref{axioms.tex, the algorithmic typing judgment}
+\srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{508}
+\thesisref{axioms.tex}
+
+\lead{In short} $\Gamma\vdash e\triangleright A$: \hl{the algorithmic reading of typing}.
+\begin{itemize}
+\item variables/sorts/constants read their type off the context or environment;
+\item application weak-head-reduces the function's type to a $\Pi$ and checks the argument;
+\item $\Pi$ reduces both components' inferred types to sorts.
+\end{itemize}
+Sound, deterministic, stable under renaming, weakening and substitution.
 \end{definition}
 
-\begin{theorem}[Completeness of type inference]
+\begin{theorem}[Inference completeness]
 \label{thm:infertype-exists}
 \lean{Lean4Lean.VEnv.InferType.exists}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{633}
-If $\Gamma \vdash a : A$ then $\Gamma \vdash a \triangleright A'$ for some $A'$.
+
+\lead{In short} If $\Gamma\vdash a:A$ then $\Gamma\vdash a\triangleright A'$ for some $A'$.
+\stTainted{}
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-strong, thm:strong-hastype-prime, thm:reduce-foralle, thm:reduce-sort, thm:unique-typing}
 \leanok
-Strengthen the typing to \texttt{HasTypeStrong} (\texttt{IsDefEq.strong} then
-\texttt{hasType'}) and induct; the conversion rule disappears into the induction hypothesis.
-The application and $\Pi$ cases compare the inferred with the given type by unique typing and
-then expose the needed head shape with \texttt{reduce\_forallE} and \texttt{reduce\_sort}.
-\thesisref{axioms.tex; typesys.tex Lemma ``Regularity continued'' item:alg\_defn}
+\lead{Idea} Strengthen to \texttt{HasTypeStrong} and induct; the application/$\Pi$ cases
+compare inferred and given type by unique typing, then expose the head shape with
+\texttt{reduce\_forallE}/\texttt{reduce\_sort}.
+\thesisref{axioms.tex; typesys.tex item:alg\_defn}
 \axfoot{sorryAx twice over: via IsDefEq.church\_rosser (reduce\_sort, reduce\_forallE) and via VEnv.WF.patsStrong (IsDefEq.strong)}
 \end{proof}
 
-\begin{lemma}[Inference up to head reduction]
+\begin{lemma}[Inference up to reduction]
 \label{def:infertypes}
 \lean{Lean4Lean.VEnv.InferTypeS,Lean4Lean.VEnv.InferTypeS.hasType,Lean4Lean.VEnv.WHRedS.inferType,Lean4Lean.VEnv.InferTypeS.determ,Lean4Lean.VEnv.InferTypeS.weak',Lean4Lean.VEnv.InferTypeS.weakU_inv}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{659}
-$\Gamma \vdash e \triangleright^* A$ means that $e$ infers some $A'$ with
-$A' \rightsquigarrow^* A$. It is sound for typing, deterministic once the target is a weak
-head normal form, and stable under renaming.
+
+\lead{In short} $\Gamma\vdash e\triangleright^* A$: $e$ infers some $A'$ with
+$A'\rightsquigarrow^* A$. Sound for typing, deterministic once the target is a WHNF, stable
+under renaming.
 \end{lemma}
 \begin{proof}
 \uses{def:infertype, def:whreds}
 \leanok
-Soundness composes \texttt{InferType.hasType} with the conversion supplied by
-\texttt{WHRedS.defeq}; determinism uses \texttt{InferType.determ} followed by
-\texttt{WHRedS.inferType}, which is a head induction on the two reduction sequences.
+\lead{Idea} Soundness composes \texttt{InferType.hasType} with \texttt{WHRedS.defeq};
+determinism is a head induction via \texttt{InferType.determ} and \texttt{WHRedS.inferType}.
 \axfoot{sorryAx via InferType.hasType}
 \end{proof}
 
-\section{Contribution summary}
-
-The \texttt{iota} branch touches two of the four files of this chapter, adding 164 lines to
-\texttt{Strong.lean} and 9 to \texttt{ChurchRosser.lean}; \texttt{UniqueTyping.lean} and
-\texttt{HeadReduction.lean} are byte-identical to master. The work is the downstream half of
-the new \texttt{IsDefEq.pat} rule (\ref{rule:isdefeq-pat}): once $\iota$ reduction is a rule of
-the declarative judgment, the metatheory spine has to be re-proved with it.
-
-What was added, in four pieces. First, the strong rule \ref{inductive:isdefeqstrong-pat},
-which mirrors \ref{rule:isdefeq-pat} and adds one premise, the typing of the reduct. This is a
-design decision, not bookkeeping: it puts subject reduction for the rule into the derivation
-instead of deriving it afterwards, and it is the reason the \texttt{pat} cases of
-\ref{thm:strong-foralle-inv}, \ref{thm:strong-hastype-prime}, \ref{def:equptolevels},
-\ref{thm:equptolevels-defeq} and \ref{thm:strong-substeq} close at all, each in one to four
-lines: those are the five proofs that need an induction hypothesis for the right-hand side.
-\ref{thm:strong-istype}, by contrast, reads its \texttt{pat} case off the redex annotation
-alone. It is exactly parallel to
-the annotations master already carries on \texttt{beta} and \texttt{extra}
-(\ref{def:isdefeqstrong}). Second, a \texttt{pat} case in each of the eleven structural
-inductions over the strong judgment: \ref{thm:strong-weakn}, \ref{thm:strong-defeq},
-\ref{thm:strong-mono}, \ref{def:equptolevels}, \ref{thm:strong-instl},
-\ref{thm:strong-instn}, \ref{thm:strong-foralle-inv}, \ref{thm:strong-istype},
-\ref{thm:equptolevels-defeq}, \ref{thm:strong-hastype-prime} and \ref{thm:strong-substeq}.
-Each follows one recipe, commute the operation with \texttt{Pattern.RHS.apply}, transport the
-match and the realizer, map the check triples, and each rests on the transport lemmas
-\ref{family:pattern-transport-iota}, which live in \texttt{Pattern.lean} where they belong.
-Third, the new environment hypothesis \ref{def:patstrong}, \ref{def:patsstrongon} and
-\ref{struct:orderedstrong}, stated per rule so that the obligation can be discharged rule by
-rule, with the coercion \ref{instance:coeout-orderedstrong} to keep call sites unchanged; and
-with it the decomposition of master's \texttt{Ordered.strong} into \ref{thm:envstrong-mono},
-\ref{thm:envstrong-of-hastype}, \ref{thm:ontypes-addconst}, \ref{thm:ontypes-adddefeq} and
-\ref{thm:ontypes-addpat}, so that the induction over the environment construction can move to
-\texttt{EnvLemmas.lean} (\ref{thm:wf-strong}), where \texttt{pats} is under control. All five
-pieces have consumers there; none is dead. Fourth, in \texttt{ChurchRosser.lean}, the class
-field \ref{axiom:cr-params-pat-env} and the five-line \texttt{pat} case of
-\ref{thm:isdefeq-church-rosser}, which takes one \texttt{ParRed.extra} step after converting
-the rule's \texttt{Realizes} witness to a \texttt{Check.OK}.
-
-How it connects. The choke point is \ref{thm:isdefeq-strong}: on master it needed
-\texttt{Ordered env}, a proved consequence of well-formedness, and on this branch it needs
-\ref{struct:orderedstrong}, which reaches \texttt{VEnv.WF} only through
-\ref{thm:wf-orderedstrong}. Everything in this chapter that routes through the strong system
-inherits that hypothesis: all of \ref{thm:unique-typing} and its corollaries, the inversion
-lemmas \ref{fam:strong-inversions}, the substitution results
-\ref{thm:strong-substeq} and \ref{thm:isdefeq-substdf}, and through those most of
-\texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean}.
-
-What remains open. The \texttt{patsStrong} component of \ref{thm:wf-orderedstrong} is
-\texttt{sorry} (\ref{thm:wf-patsstrong}), so every consequence of \ref{thm:isdefeq-strong} is
-conditional; this is real mathematics, subject reduction for $\iota$, and it cannot be avoided
-once \ref{rule:isdefeq-pat} exists. \ref{axiom:cr-params-pat-env} is discharged only by the
-single \texttt{Params} instance \ref{def:indparams-toparams}, which exists only for
-environments with no \texttt{def} and no quotient rule, so the $\iota$ case of
-\ref{thm:isdefeq-church-rosser} is today exercised on no realistic environment. And
-independently of the branch, the two \texttt{sorry}s in \ref{thm:normaleq-parred} and the one
-in \ref{thm:isdefequ-weakn-iff} are master's, and they leave Church--Rosser, standardization
-and \ref{thm:infertype-exists} unproved.
-
-\section{Review notes}
+\section*{Caveats}
 \label{sec:metatheory-review}
 
 \begin{itemize}
-\item \textbf{High.} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{679}:
-\ref{struct:orderedstrong} makes the environment hypothesis of the strong system
-non-derivable. Master proved \texttt{Ordered.strong : Ordered env} $\to$
-\texttt{OnTypes env (EnvStrong env)} outright; \texttt{OrderedStrong} additionally demands
-\texttt{PatsStrongOn} and is obtained from \texttt{VEnv.WF} only through
-\texttt{VEnv.WF.orderedStrong} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{339}), whose
-\texttt{patsStrong} component is \texttt{sorry}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}). The theorems of \texttt{Strong.lean}
-are themselves still free of \texttt{sorryAx}, because they take \texttt{OrderedStrong} as a
-hypothesis; the taint appears at every call site that discharges it from \texttt{VEnv.WF},
-which is all of \texttt{UniqueTyping.lean} and through it \texttt{ChurchRosser.lean},
-\texttt{HeadReduction.lean} and the \texttt{Verify} layer. Several of those were already
-\texttt{sorry}-dependent through \texttt{Injectivity.lean} on master; what is new is a second,
-independent dependency. The gap is documented and is unavoidable once \texttt{IsDefEq.pat}
-exists, but it must be stated in every claim about what this chapter proves.
-\item \textbf{High.} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193}:
-\texttt{NormalEq.parRed} contains two \texttt{sorry}s (lines 1193 and 1212), both in the case
-where a rule step (\texttt{ParRed.extra}, that is $\iota$ or $\delta$) meets a
-\texttt{constDF} respectively an \texttt{appDF} normal equality. This is the thesis' Lemma
-\texttt{thm:gg\_compat} and the load-bearing step of Church--Rosser, so
-\texttt{ParRedS.church\_rosser}, \texttt{CRDefEq.trans}, \texttt{IsDefEq.church\_rosser},
-\texttt{IsDefEq.reduce\_sort}, \texttt{IsDefEq.reduce\_forallE} and \texttt{InferType.exists}
-are all unproved. The \texttt{sorry}s are master's, but the \texttt{iota} \texttt{pat} rule
-routes more content through them.
-\item \textbf{High.} \srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{174}: the forward
-direction of \texttt{IsDefEqU.weakN\_iff} is \texttt{sorry} (master). It is used by
-\texttt{NormalEq.weakN\_inv\_DFC}, \texttt{ParRed.weakN\_inv}, \texttt{hasType\_app\_bvar0},
-\texttt{IsDefEq.skips}, \texttt{OnCtx.weakN\_inv} and the whole
-\texttt{weakN\_iff}/\texttt{weak'\_iff} family, hence by most of \texttt{ChurchRosser.lean}
-and \texttt{HeadReduction.lean}.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{30}: the docstring
-of \texttt{Params.pat\_env} justifies the field by \texttt{extra\_pat} (``as every
-definitional axiom is realised by one''), but the two fields are logically independent:
-\texttt{extra\_pat} speaks about \texttt{env.defeqs}, \texttt{pat\_env} about
-\texttt{env.pats}, and neither implies the other. The comment reads as if \texttt{pat\_env}
-were derivable.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{12}: the
-\texttt{Params} class has exactly one construction, \texttt{VEnv.toParams}
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}) with its specialisation
-\texttt{inductParams} (line 420), and it requires
-\texttt{DefEqsAsPats} and therefore exists only for environments with no \texttt{def} and no
-quotient rule. The Church--Rosser development, and with it the standardization and inference
-results of \texttt{HeadReduction.lean}, currently applies to no realistic environment. This
-belongs in the blueprint and not only in the \texttt{DefEqsAsPats} docstring.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{684}: the
-\texttt{CoeOut (OrderedStrong env) env.Ordered} instance together with its sibling
-\texttt{CoeOut (VEnv.WF env) env.OrderedStrong}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{343}) makes the new,
-\texttt{sorry}-backed hypothesis invisible at use sites: \texttt{UniqueTyping.lean} is
-byte-identical to master yet changed from \texttt{Ordered}-dependent to
-\texttt{patsStrong}-dependent. Convenient, but it hides a proof obligation.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{672}: the deferred
-obligation is heavier than ``the $\iota$ rules of the final environment preserve types''.
-\texttt{PatsStrongOn} is stated for one environment, while the \texttt{EnvLemmas} side
-\texttt{VEnv.PatsStrong} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{130}) quantifies
-over every well-formed prefix and every constant-only extension of it traversed by the
-strengthening induction. The split is deliberate and documented, but a future proof of
-\texttt{VEnv.WF.patsStrong} has to establish the quantified form.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{89}: the check list of
-\texttt{IsDefEqStrong.pat} is specified by \texttt{Pattern.Check.Realizes}, which constrains
-only the two term components of each triple and leaves the type component arbitrary; the rule
-then demands a typed equality at that arbitrary type. Sound, but $chk$ is only partially
-determined by $(p, r, m_1, m_2)$, so two derivations of the same rule instance can carry
-different check lists.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/HeadReduction.lean}{29}:
-\texttt{Subpattern.varN\_const} is declared inside \texttt{namespace Lean4Lean.VEnv}, so its
-full name is \texttt{Lean4Lean.VEnv.Subpattern.varN\_const} even though \texttt{Subpattern}
-lives at \texttt{Lean4Lean.Subpattern}; dot notation on a \texttt{Subpattern} hypothesis will
-not find the lemma (master). Its neighbour \texttt{Params.simple\_app} is unaffected, since
-\texttt{Params} does live in that namespace.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{22}: the
-\texttt{Params} field \texttt{pat\_app\_l} is never consumed. No proof in
-\texttt{ChurchRosser.lean} or \texttt{HeadReduction.lean} mentions it; its only occurrences
-outside the class are the obligation \texttt{VEnv.WF.pat\_app\_l}
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{297}) and the line of
-\texttt{toParams} that discharges it. The field is master's, but the \texttt{iota} branch pays
-for it, since the instance has to prove it for \texttt{env.pats}.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{632}: a ten-line
-commented-out \texttt{IsDefEqU.applyL} draft (lines 632 to 641) is left in the file (master).
-\item \textbf{Low, documentation.} \srcloc{Lean4Lean/Theory/Typing/Strong.lean}{659}: the new
-declarations are documented unusually well for this codebase, and the docstrings explain why
-rather than restating the statement, but their density of cross-references means a reader has
-to hold \texttt{Strong.lean}, \texttt{EnvLemmas.lean}, \texttt{Pattern.lean} and
-\texttt{InductiveParams.lean} in view at once to check a single claim.
+\item \texttt{OrderedStrong} (Definition~\ref{struct:orderedstrong}) reaches \texttt{VEnv.WF}
+      only through a \stSorry{} obligation; every consequence of
+      Theorem~\ref{thm:isdefeq-strong} is conditional on it.
+\item Two \texttt{sorry}s in \texttt{NormalEq.parRed} (Theorem~\ref{thm:normaleq-parred}) leave
+      Church--Rosser, standardization and inference unproved, independently.
+\item The forward direction of \texttt{IsDefEqU.weakN\_iff}
+      (Theorem~\ref{thm:isdefequ-weakn-iff}) is \texttt{sorry}; most of
+      \texttt{ChurchRosser.lean} and \texttt{HeadReduction.lean} depend on it.
+\item Unique typing (Theorem~\ref{thm:unique-typing}) and the sort/$\Pi$-reduction lemmas
+      depend on Theorem~\ref{thm:injectivity-open}, itself open.
+\item The \texttt{Params} class (Definition~\ref{class:cr-params}) has one instance, for
+      environments with no \texttt{def} and no quotient rule: applies to no realistic
+      environment today.
+\item \texttt{iota}'s \texttt{pat\_env} field (Definition~\ref{axiom:cr-params-pat-env}) is
+      free there, so the \texttt{iota} case of Theorem~\ref{thm:isdefeq-church-rosser} is
+      untested on a realistic environment.
 \end{itemize}
+</content>

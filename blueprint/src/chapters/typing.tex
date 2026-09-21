@@ -1,134 +1,110 @@
 \chapter{Typing and definitional equality}
 \label{chap:typing}
 
-This chapter covers the seven files of \texttt{Lean4Lean/Theory/Typing} that state the
-idealised type theory and prove its structural metatheory.
-\srcloc{Lean4Lean/Theory/Typing/Basic.lean}{1} (105 lines) is the judgment itself;
-\srcloc{Lean4Lean/Theory/Typing/Env.lean}{1} (66 lines) is well-formedness of an environment
-as a sequence of declaration steps;
-\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{1} (1059 lines) is the structural metatheory
-(context liftings, the \texttt{Ordered} environment invariant, weakening, level
-instantiation, substitution, context conversion, regularity, sort and $\Pi$ inversion,
-simultaneous substitution);
-\srcloc{Lean4Lean/Theory/Typing/Meta.lean}{1} (46 lines) is tactic support for closed typing
-goals;
-\srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{1} (60 lines) types the quotient block;
-\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{1} (343 lines) bridges environment
-well-formedness to the invariants the rest of the development consumes;
-and \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{1} (34 lines) states three admitted
-inversion principles and derives one further lemma from them.
-
-Notation. Throughout, $E$ ranges over environments, $U$ over universe arities (the number of
-universe parameters in scope), and $\Gamma$ over de Bruijn contexts. We write
-$\Gamma \vdash e \equiv e' : A$ for \texttt{VEnv.IsDefEq E U $\Gamma$ e e' A} and
-$\Gamma \vdash e : A$ for its diagonal $\Gamma \vdash e \equiv e : A$, which is the Lean
-definition of \texttt{HasType}; $\Gamma \vdash A\ \mathsf{type}$ abbreviates
-$\exists u.\ \Gamma \vdash A : \mathrm{Sort}\ u$ (\texttt{IsType}). $E \le E'$ is the
-environment extension order of Chapter \ref{chap:syntax}: $E'$ has all of $E$'s constants,
-definitional axioms and registered reduction rules.
-
-Thesis correspondence. \texttt{IsDefEq} merges \texttt{axioms.tex} §2.1 (typing) and §2.2
-(definitional equality) into one relation, with the thesis's abbreviation
-$\Gamma \vdash e \equiv e' : \alpha$ taken as primitive and the typing judgment recovered as
-its diagonal. \texttt{Lemmas.lean} reproves the thesis's structural lemmas:
-\texttt{typesys.tex} Weakening (\texttt{thm:weak}), Substitution (\texttt{thm:subst}) and
-Regularity (\texttt{thm:reg}) items 2 and 4. The iota branch's rule \texttt{IsDefEq.pat}
-is \texttt{axioms.tex} §2.6.4, but stated in the shape of the thesis's
-\emph{regularity of reductions} statement (\texttt{typesys.tex}, ``Regularity continued'',
-item \texttt{red\_equiv}; \texttt{unique.tex}, ``Regularity of reductions'' item 1) rather
-than in §2.6.4's own fixed-context form; the difference is the subject of §\ref{sec:typing-basic}
-and of the review notes.
-
-Contributions. No line of this group comes from the \texttt{trproj} branch. The
-\texttt{iota} branch contributes 381 of the group's 1713 lines:
-\texttt{EnvLemmas.lean} 237 of 343, \texttt{Lemmas.lean} 74 of 1059, \texttt{Basic.lean} 29
-of 105, \texttt{QuotLemmas.lean} 27 of 60, \texttt{Env.lean} 14 of 66;
-\texttt{Meta.lean} and \texttt{Injectivity.lean} are untouched master code.
-The contribution has two parts. In \texttt{Basic.lean} and \texttt{Lemmas.lean} it is
-surgical: one new rule, two new predicates, one new \texttt{Ordered} constructor, six new
-lemmas (\texttt{addPat\_le}, \texttt{addPat\_self}, \texttt{PatTyped.mono},
-\texttt{PatWF.mono}, \texttt{Ordered.patWF}, \texttt{Ordered.patHeaded}), a case of one to
-six lines in each of the nine inductions over \texttt{IsDefEq}, and a one-line case in each
-of the three inductions over \texttt{Ordered}. No master lemma gained a hypothesis; the only
-master lines deleted in \texttt{Lemmas.lean} are the two anonymous constructors of
-\texttt{addConst\_le} and \texttt{addDefEq\_le}, which grew a third component.
-In \texttt{Env.lean}, \texttt{QuotLemmas.lean} and \texttt{EnvLemmas.lean} it is a rewrite:
-master's eleven-line entry point into the strong system (\texttt{Ordered.strong}, which on
-master sat in \texttt{Strong.lean} and is deleted here) is replaced by an induction over
-\texttt{VEnv.WF} that threads a new subject-reduction hypothesis through every declaration
-form.
-
-Assessment. The design is sound in the part that carries weight: the side condition
-\texttt{TemplateHeaded} in \texttt{PatWF} (Definition \ref{def:patwf}) is exactly what keeps
-the sort and $\Pi$ inversion lemmas provable with a schematic reduction rule present, and
-keeping \texttt{VEnv.WF.strong} parametric in the ι obligation isolates the gap instead of
-hiding it. Two things a reader must not miss. First, \texttt{IsDefEq.pat} asserts the reduct
-at the redex's type with no typing premise of its own, so the judgment \emph{assumes} subject
-reduction for ι; over a merely \texttt{Ordered} environment that assumption is false, as the
-contribution's own counterexample shows. Second, the statement that repays it,
-\texttt{VEnv.WF.patsStrong}, is \texttt{sorry}, and a \texttt{CoeOut} instance makes every
-\texttt{VEnv.WF} hypothesis coerce silently into the strong-system hypotheses, so the whole
-verified-typechecker layer above this chapter is conditional on it. Master's inductive layer
-was itself two \texttt{sorry}-ed definitions (\texttt{VInductDecl.WF}, \texttt{VEnv.addInduct})
-and a \texttt{sorry}-ed soundness theorem (\texttt{addInduct\_WF}), so this is a real trade
-rather than a regression, but it must be stated rather than left in a trailing comment.
+\section*{At a glance}
+\begin{itemize}
+\item \lead{Goal} State Lean4Lean's typing and definitional equality judgment and prove its
+  structural metatheory.
+\item \lead{Main results} Weakening (\ref{thm:isdefeq-weakn}); Substitution
+  (\ref{thm:isdefeq-instn}); Regularity of types (\ref{thm:isdefeq-istype}); a well-formed
+  environment is ordered (\ref{thm:wf-ordered}) and strongly typed (\ref{thm:wf-strong},
+  \ref{thm:wf-orderedstrong}).
+\item \lead{Status} \stProved{} the judgment and its structural metatheory; \stSorry{}
+  \ref{thm:wf-patsstrong} (subject reduction for $\iota$) and \ref{thm:injectivity-open}
+  (three inversion principles, pre-existing); \stTainted{} \ref{thm:wf-orderedstrong} and
+  \ref{thm:foralle-inv-derived}.
+\item \lead{Contribution} iota: the \texttt{pat} rule and admissibility
+  (\ref{rule:isdefeq-pat}--\ref{def:patwf}); a \texttt{pat} case in twelve inductions; the
+  well-formed-to-strong bootstrap (\ref{def:patsstrong}--\ref{thm:wf-orderedstrong}), open at
+  \ref{thm:wf-patsstrong}. trproj: none.
+\item \lead{Lean files} \texttt{Lean4Lean/Theory/Typing/Basic.lean}, \texttt{Env.lean},
+  \texttt{Lemmas.lean}, \texttt{Meta.lean}, \texttt{QuotLemmas.lean}, \texttt{EnvLemmas.lean},
+  \texttt{Injectivity.lean}.
+\item \lead{Thesis} \texttt{axioms.tex} \S2.1--\S2.2, \S2.5--\S2.7; \texttt{typesys.tex}
+  Weakening, Substitution, Regularity; \texttt{unique.tex} Regularity of reductions and
+  Definitional inversion.
+\end{itemize}
 
 \section{The judgment}
 \label{sec:typing-basic}
 
-\begin{definition}[de Bruijn variable lookup, \texttt{Lookup}]
+\begin{itemize}
+\item $E$: environment; $U$: universe arity; $\Gamma$: de Bruijn context.
+\item $\Gamma \vdash e_1 \equiv e_2 : A$ is \texttt{VEnv.IsDefEq} $E\,U\,\Gamma\,e_1\,e_2\,A$;
+  $\Gamma \vdash e : A$ its diagonal (\texttt{HasType}).
+\item $E \le E'$: the extension order of Chapter~\ref{chap:syntax}.
+\end{itemize}
+
+\begin{definition}[de Bruijn variable lookup]
 \label{def:lookup}
 \lean{Lean4Lean.Lookup}
 \leanok
 \uses{def:liftn}
 \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{6}
-\texttt{Lookup} relates a context, an index and a type: it holds when the $i$-th entry of
-$\Gamma$, lifted over the $i$ binders crossed on the way out, is $A$. The two constructors
-are \texttt{zero} (the head of $A :: \Gamma$ is $A$ lifted once) and \texttt{succ}. This is
-the de Bruijn reading of $(x : \alpha) \in \Gamma$.
-\thesisref{axioms.tex §2.1, the variable rule}
+\thesisref{axioms.tex \S2.1, the variable rule}
+
+\lead{In short} \texttt{Lookup}\,$\Gamma\,i\,A$: the \hl{$i$-th entry of $\Gamma$}, lifted
+over the $i$ binders crossed, is $A$.
+\begin{itemize}
+\item \texttt{zero}: the head of $A :: \Gamma$ is $A$ lifted once; \texttt{succ}: recurse.
+\end{itemize}
 \end{definition}
 
-\begin{definition}[Typing and definitional equality, \texttt{IsDefEq}]
+\begin{definition}[Typing and definitional equality]
 \label{def:isdefeq}
 \contrib{mixed}
 \lean{Lean4Lean.VEnv.IsDefEq}
 \leanok
 \uses{def:lookup, struct:venv, ind:vexpr, def:vlevel-wf, inductive:pattern-matches, def:pattern-check-realizes, inductive:pattern-rhs}
 \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{18}
-One inductive relation $\Gamma \vdash e_1 \equiv e_2 : A$, relative to an environment and a
-universe arity. Master's thirteen rules are \texttt{bvar}, \texttt{symm}, \texttt{trans},
-\texttt{sortDF}, \texttt{constDF}, \texttt{appDF}, \texttt{lamDF}, \texttt{forallEDF},
-\texttt{defeqDF} (conversion), \texttt{beta}, \texttt{eta}, \texttt{proofIrrel} and
-\texttt{extra} (the $\delta$ rule, firing on a registered \texttt{VDefEq} at any level
-instantiation). The \texttt{iota} branch adds a fourteenth, \texttt{pat}
-(Definition \ref{rule:isdefeq-pat}); master's rules are unchanged.
-\thesisref{axioms.tex §2.1 and §2.2 merged into one judgment; §2.6.4 for \texttt{pat}}
+\thesisref{axioms.tex \S2.1 and \S2.2 merged; \S2.6.4 for \texttt{pat}}
+
+\lead{In short} One relation $\Gamma \vdash e_1 \equiv e_2 : A$, merging \hl{typing and
+definitional equality}; every row below is such a judgment in the ambient $\Gamma$.
+\begin{center}
+\begin{tabular}{lp{0.45\linewidth}p{0.35\linewidth}}
+\toprule
+Rule & Premises & Conclusion \\
+\midrule
+\texttt{bvar} & \texttt{Lookup}\,$\Gamma\,i\,A$ & $\mathrm{bvar}\,i\equiv\mathrm{bvar}\,i:A$ \\
+\texttt{symm} & $e\equiv e':A$ & $e'\equiv e:A$ \\
+\texttt{trans} & $e_1\equiv e_2:A$, $e_2\equiv e_3:A$ & $e_1\equiv e_3:A$ \\
+\texttt{sortDF} & $l,l'$ level-wf, $l\approx l'$ & $\mathrm{Sort}\,l\equiv\mathrm{Sort}\,l':\mathrm{Sort}(l{+}1)$ \\
+\texttt{constDF} & $c$ registered, $ls,ls'$ level-wf, pointwise $\approx$ & $\mathrm{const}\,c\,ls\equiv\mathrm{const}\,c\,ls':\tau_c[ls]$ \\
+\texttt{appDF} & $f\equiv f':\forall A.B$, $a\equiv a':A$ & $f\,a\equiv f'\,a':B[a]$ \\
+\texttt{lamDF} & $A\equiv A':\mathrm{Sort}\,u$, $A{::}\Gamma\vdash b\equiv b':B$ & $\lambda A.b\equiv\lambda A'.b':\forall A.B$ \\
+\texttt{forallEDF} & $A\equiv A':\mathrm{Sort}\,u$, $A{::}\Gamma\vdash B\equiv B':\mathrm{Sort}\,v$ & $\forall A.B\equiv\forall A'.B':\mathrm{Sort}(\mathrm{imax}\,uv)$ \\
+\texttt{defeqDF} & $A\equiv B:\mathrm{Sort}\,u$, $e_1\equiv e_2:A$ & $e_1\equiv e_2:B$ \\
+\texttt{beta} & $A{::}\Gamma\vdash e:B$, $a:A$ & $(\lambda A.e)\,a\equiv e[a]:B[a]$ \\
+\texttt{eta} & $e:\forall A.B$ & $e\equiv\lambda A.(e{\uparrow})\,\mathrm{bvar}\,0:\forall A.B$ \\
+\texttt{proofIrrel} & $p:\mathrm{Sort}\,0$, $h,h':p$ & $h\equiv h':p$ \\
+\texttt{extra} & registered $\delta$-axiom, $ls$ level-wf & $e_1[ls]\equiv e_2[ls]:A[ls]$ \\
+\texttt{pat} (iota) & Def.~\ref{rule:isdefeq-pat} & $e\equiv r_1.\mathrm{apply}\,m_1m_2:A$ \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
 \end{definition}
 
-\begin{definition}[The ι rule, \texttt{IsDefEq.pat}]
+\begin{definition}[The $\iota$ rule, \texttt{IsDefEq.pat}]
 \label{rule:isdefeq-pat}
 \contrib{iota}
 \lean{Lean4Lean.VEnv.IsDefEq.pat}
 \leanok
 \uses{def:isdefeq, struct:venv, inductive:pattern-matches, def:pattern-check-realizes, inductive:pattern-rhs, def:venv-addpat}
 \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{60}
-The rule has five premises: $(p, r)$ is registered in the environment's \texttt{pats}
-component; $e$ matches the pattern $p$ with level assignment $m_1$ and hole assignment
-$m_2$; $\Gamma \vdash e : A$; a list \texttt{chk} realizes $r$'s \texttt{Check}
-(\texttt{Pattern.Check.Realizes}); and every triple of \texttt{chk} is a definitional
-equality in $\Gamma$. Its conclusion is
-$\Gamma \vdash e \equiv r_1.\mathrm{apply}\ m_1\ m_2 : A$. The reduct is asserted at the
-\emph{redex's} type, with no typing premise of its own, so together with
-\texttt{IsDefEq.hasType} the rule yields $\Gamma \vdash r_1.\mathrm{apply}\ m_1\ m_2 : A$.
-The strong system's counterpart \texttt{IsDefEqStrong.pat} (Definition
-\ref{inductive:isdefeqstrong-pat}) carries that typing as a premise instead.
-\thesisref{axioms.tex §2.6.4, stated in the form of unique.tex ``Regularity of reductions'' item 1}
-\reviewnote{The rule builds subject reduction for ι into the judgment. It is false over a
-merely \texttt{Ordered} environment (see \ref{thm:wf-patsstrong}), so every lemma of
-\texttt{Lemmas.lean} proved under \texttt{Ordered} describes a relation that may be strictly
-larger than the thesis's. The debt is discharged only by \texttt{VEnv.WF.patsStrong}, which
-is \texttt{sorry}. Honestly documented at \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{57}.}
+\thesisref{axioms.tex \S2.6.4, in the form of unique.tex ``Regularity of reductions'' item 1}
+
+\lead{In short} A registered, matching, typed rule fires, giving \hl{the reduct at the
+redex's own type}.
+\begin{itemize}
+\item \lead{Given} $(p,r)\in E.\texttt{pats}$; $e$ matches $p$ ($m_1,m_2$); $\Gamma\vdash e:A$;
+  \texttt{chk} realizes $r_2$'s \texttt{Check}, each triple a definitional equality.
+\item \lead{Then} $\Gamma \vdash e \equiv r_1.\mathrm{apply}\,m_1\,m_2 : A$.
+\item \lead{Caveat} No premise types the reduct: subject reduction for $\iota$ is assumed,
+  false over a merely \texttt{Ordered} environment (\ref{thm:wf-patsstrong};
+  \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{57}). The strong system's
+  \texttt{IsDefEqStrong.pat} (\ref{inductive:isdefeqstrong-pat}) types the reduct instead.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Derived judgments and well-formedness of environment entries]
@@ -137,13 +113,17 @@ is \texttt{sorry}. Honestly documented at \srcloc{Lean4Lean/Theory/Typing/Basic.
 \leanok
 \uses{def:isdefeq}
 \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{68}
-\texttt{HasType} is the diagonal $\Gamma \vdash e \equiv e : A$; \texttt{IsType} is
-$\exists u.\ \Gamma \vdash A : \mathrm{Sort}\ u$; \texttt{IsDefEqU} forgets the type
-($\exists A.\ \Gamma \vdash e_1 \equiv e_2 : A$); \texttt{VExpr.WF} is \texttt{IsDefEqU} on
-the diagonal. \texttt{VConstant.WF} says a constant's type is a type in the empty context at
-the constant's own universe arity, and \texttt{VDefEq.WF} says both sides of a definitional
-axiom have its declared type there.
-\thesisref{axioms.tex §2.1 ($\Gamma \vdash \alpha\ \mathsf{type}$) and §2.5}
+\thesisref{axioms.tex \S2.1 ($\Gamma \vdash \alpha\ \mathsf{type}$) and \S2.5}
+
+\lead{In short} Five judgments on \texttt{IsDefEq}: typing, being a type, untyped equality,
+\hl{well-formedness of a constant or an axiom}.
+\begin{itemize}
+\item \texttt{HasType}: the diagonal $e\equiv e:A$. \texttt{IsType}: $\exists u.\,A:\mathrm{Sort}\,u$.
+\item \texttt{IsDefEqU}: \texttt{IsDefEq} with the type forgotten; \texttt{VExpr.WF} is its
+  diagonal.
+\item \texttt{VConstant.WF}: the constant's type is a type at its own arity, empty context.
+\item \texttt{VDefEq.WF}: both axiom sides have its declared type there.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Typing of a schematic reduction rule, \texttt{PatTyped}]
@@ -153,20 +133,19 @@ axiom have its declared type there.
 \leanok
 \uses{inductive:pattern-matches, def:pattern-rhs-generic, def:hastype-istype, def:vlevel-inst}
 \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{92}
-A rule $(p, r)$ is typed in $E$ when there exist $U$, $\Gamma$, a redex $e$, a hole
-assignment $m_2$ and a type $B$ such that $e$ matches $p$ at the identity level
-instantiation \texttt{VLevel.params U}, $r_1$ is generic in $m_2$ over $\Gamma$
-(\texttt{Pattern.RHS.Generic}: the holes $r_1$ uses are pairwise distinct variables that
-exhaust $\Gamma$), and both $e$ and $r_1.\mathrm{apply}$ have type $B$ in $\Gamma$. The side
-conditions $r_2$ are not assumed: a rule must be typed without them. This is the
-\texttt{VDefEq.WF} analogue for a schematic rule.
-\thesisref{axioms.tex §2.6.4, the parenthetical about substitution instances}
-\reviewnote{The predicate is existential in $U$, $\Gamma$, $e$, $m_2$ and $B$, and
-\texttt{Generic} constrains only the holes the reduct \emph{uses}; the index arguments and
-the constructor's copy of the parameters may be arbitrary terms over $\Gamma$. So a rule can
-be ``typed'' at one convenient instantiation. The \texttt{Generic} docstring
-(\srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{181}) says so, but the name \texttt{PatWF}
-promises more than the predicate delivers.}
+\thesisref{axioms.tex \S2.6.4, the parenthetical about substitution instances}
+
+\lead{In short} A rule is typed when \hl{some generic instance} of redex and reduct share a
+type.
+\begin{itemize}
+\item \lead{Given} a redex $e$ matching $p$ at \texttt{VLevel.params}\,$U$, $r_1$ generic in
+  $m_2$ over $\Gamma$ (holes are exactly $\Gamma$'s variables), a type $B$.
+\item \lead{Then} $\Gamma \vdash e : B$ and $\Gamma \vdash r_1.\mathrm{apply}(\ldots) : B$;
+  the side conditions $r_2$ are not assumed.
+\item \lead{Caveat} Existential in $U,\Gamma,e,m_2,B$; only the holes the reduct \emph{uses}
+  are constrained (\srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{181}): a rule can be typed
+  at one convenient instantiation.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Admissibility of a reduction rule, \texttt{PatWF}]
@@ -176,17 +155,20 @@ promises more than the predicate delivers.}
 \leanok
 \uses{def:pattyped, inductive:pattern-template-headed}
 \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{104}
-A rule is well-formed when it is typed and it computes: its reduct is a fixed closed
-$\lambda$-term applied to arguments (\texttt{Pattern.RHS.TemplateHeaded}). The shape
-condition is what separates a \texttt{pats} entry from a definitional axiom, whose two sides
-may be arbitrary closed terms: no instance of a template-headed reduct is a sort, a
-$\Pi$-type or a bare hole. It is monotone in the environment
-(\ref{fam:patwf-mono}), which is what makes it a legitimate registration condition
-(\ref{def:ordered}). It does \emph{not} give subject reduction.
-\thesisref{axioms.tex §2.6.4; no thesis counterpart as a separate predicate}
+\thesisref{axioms.tex \S2.6.4; no thesis counterpart as a separate predicate}
+
+\lead{In short} Typed, and its reduct is a \hl{fixed closed $\lambda$-term applied to
+arguments} (\texttt{TemplateHeaded}).
+\begin{itemize}
+\item Separates a \texttt{pats} entry from a definitional axiom: no instance of the reduct
+  is a sort, a $\Pi$-type or a bare hole.
+\item Monotone in the environment (\ref{fam:patwf-mono}); does not give subject reduction.
+\end{itemize}
 \end{definition}
 
 \section{Well-formed environments}
+
+An environment is built by a list of declaration steps, each checked before it is added.
 
 \begin{definition}[Well-formedness of one declaration step, \texttt{VDecl.WF}]
 \label{def:vdecl-wf}
@@ -194,16 +176,26 @@ $\Pi$-type or a bare hole. It is monotone in the environment
 \leanok
 \uses{def:venv-basic, def:venv-addquot, def:ind-add-induct, def:hastype-istype, structure:ind-wf}
 \srcloc{Lean4Lean/Theory/Typing/Env.lean}{18}
-\texttt{VDecl.WF E d E'} says the declaration $d$ may be added to $E$, producing $E'$. The
-seven forms are \texttt{axiom} (a \texttt{VConstVal} whose type is a type, added as a
-constant), \texttt{def} (a \texttt{VDefVal} whose \emph{value} is typed at its declared type,
-\texttt{VDefVal.WF}: the constant is added, then its $\delta$ rule), \texttt{opaque} (the same
-premise as \texttt{def}, but only the constant is added, so the value stays hidden),
-\texttt{example} (the same premise, environment unchanged), \texttt{mutualDef} (the block's
-constant types must be well-formed before it is added with \texttt{addConsts} and its values
-typed in the extended environment, after which \texttt{addDefEqs} adds every $\delta$ rule),
-\texttt{quot} and \texttt{induct}.
-\thesisref{axioms.tex §2.5, §2.6, §2.7.1}
+\thesisref{axioms.tex \S2.5, \S2.6, \S2.7.1}
+
+\lead{In short} \texttt{VDecl.WF E d E'}: $d$ may be \hl{added to $E$}, in one of seven
+forms.
+\begin{center}
+\begin{tabular}{lp{0.83\linewidth}}
+\toprule
+Form & Effect \\
+\midrule
+\texttt{axiom} & type is a type; added as a constant. \\
+\texttt{def} & value typed at the declared type; add constant, then its $\delta$ rule. \\
+\texttt{opaque} & same premise; only the constant is added, value hidden. \\
+\texttt{example} & same premise; environment unchanged. \\
+\texttt{mutualDef} & block types checked, added (\texttt{addConsts}); values typed in the
+  extension; every $\delta$ rule added (\texttt{addDefEqs}). \\
+\texttt{quot} & Definition~\ref{def:venv-addquot}. \\
+\texttt{induct} & Definition~\ref{structure:ind-wf}. \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
 \end{definition}
 
 \begin{definition}[Well-formed environment, \texttt{VEnv.WF}]
@@ -212,10 +204,12 @@ typed in the extended environment, after which \texttt{addDefEqs} adds every $\d
 \leanok
 \uses{def:vdecl-wf, def:venv-basic}
 \srcloc{Lean4Lean/Theory/Typing/Env.lean}{48}
-\texttt{WF' ds E} says $E$ is reached from the empty environment by the declaration list
-\texttt{ds}, each step well-formed; \texttt{VEnv.WF E} is the existential closure over
-\texttt{ds}. This is the formal notion of an environment the kernel could have built, and
-the hypothesis every downstream soundness statement takes.
+
+\lead{In short} \texttt{WF' ds E}: $E$ is reached from empty by \texttt{ds}, each step
+well-formed; \texttt{VEnv.WF E} is its \hl{existential closure}.
+\begin{itemize}
+\item The formal notion of an environment the kernel could have built.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Well-formed prefix, \texttt{WFPrefix}]
@@ -225,12 +219,13 @@ the hypothesis every downstream soundness statement takes.
 \leanok
 \uses{def:vdecl-wf}
 \srcloc{Lean4Lean/Theory/Typing/Env.lean}{57}
-\texttt{E.WFPrefix $E_0$} says $E$ extends $E_0$ by a run of well-formed declaration steps,
-that is, $E_0$ is the environment reached by a prefix of $E$'s declaration list.
-Two constructors: \texttt{rfl} and \texttt{decl}. These environments, and their extensions
-by constants alone, are what the strengthening argument of \ref{thm:wf-strong} walks
-through; the predicate exists to name them.
 \thesisref{no thesis counterpart; bookkeeping for the formal induction}
+
+\lead{In short} \texttt{E.WFPrefix}\,$E_0$: $E$ extends $E_0$ by a run of \hl{well-formed
+steps} (constructors \texttt{rfl}, \texttt{decl}).
+\begin{itemize}
+\item What the strengthening argument of \ref{thm:wf-strong} walks through.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Prefix of a prefix, \texttt{WFPrefix.trans}]
@@ -240,18 +235,21 @@ through; the predicate exists to name them.
 \leanok
 \uses{def:wfprefix}
 \srcloc{Lean4Lean/Theory/Typing/Env.lean}{62}
-If \texttt{E.WFPrefix $E_1$} and \texttt{$E_1$.WFPrefix $E_2$} then \texttt{E.WFPrefix $E_2$}.
 \thesisref{no thesis counterpart}
+
+\lead{In short} \texttt{WFPrefix} is \hl{transitive}: \texttt{E.WFPrefix}\,$E_1$ and $E_1$
+\texttt{.WFPrefix}\,$E_2$ give \texttt{E.WFPrefix}\,$E_2$.
 \end{lemma}
 \begin{proof}
 \uses{def:wfprefix}
 \leanok
-Induction on the first hypothesis: the \texttt{rfl} case returns the second, the
-\texttt{decl} case rebuilds the step around the induction hypothesis. Used once, inside
-\ref{thm:wf-strong}.
+\lead{Idea} Induction: \texttt{rfl} returns the second hypothesis, \texttt{decl} rebuilds
+around it.
 \end{proof}
 
 \section{Contexts and the ordered invariant}
+
+\texttt{Ordered} is the builds-in-order invariant the structural lemmas need.
 
 \begin{lemma}[Context liftings and instantiations]
 \label{fam:ctx-lift}
@@ -259,18 +257,19 @@ Induction on the first hypothesis: the \texttt{rfl} case returns the second, the
 \leanok
 \uses{def:liftn, def:lift-prime, def:inst}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{8}
-The context-level counterparts of the term operations of Chapter \ref{chap:syntax}:
-\texttt{Ctx.LiftN n k $\Gamma$ $\Gamma'$} inserts $n$ fresh entries $k$ binders deep,
-\texttt{Ctx.Lift'} does the same along a general lift word, and
-\texttt{Ctx.InstN $\Gamma_0$ $e_0$ $A_0$ k $\Gamma_1$ $\Gamma$} substitutes $e_0$ for the
-variable $k$ deep. The family adds the one-entry special case, the suffix characterisation,
-composition, the translation between the two lifting presentations, and the fact that a
-closed context can be weakened on the right.
 \thesisref{typesys.tex thm:weak and thm:subst, the context side}
+
+\lead{In short} Context-level \hl{lifting and instantiation}: \texttt{LiftN} inserts $n$
+entries $k$ deep, \texttt{Lift'} along a general lift word, \texttt{InstN} substitutes at
+depth $k$.
+\begin{itemize}
+\item Family: one-entry case, suffix characterisation, composition, the two presentations'
+  equivalence, weakening a closed context on the right.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \leanok
-Routine inductions on the lifting and instantiation relations.
+\lead{Idea} Routine inductions on lifting and instantiation.
 \end{proof}
 
 \begin{lemma}[Structural lemmas for variable lookup]
@@ -279,15 +278,15 @@ Routine inductions on the lifting and instantiation relations.
 \leanok
 \uses{def:lookup, fam:ctx-lift}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{90}
-Lookup is bounded by the context length, total below it, functional, preserved and reflected
-by lifting (in both the \texttt{LiftN} and the \texttt{Lift'} presentation), and commutes
-with universe-level instantiation.
 \thesisref{typesys.tex thm:weak}
+
+\lead{In short} \texttt{Lookup} is \hl{well-behaved}: bounded, total below the context
+length, functional, preserved/reflected by lifting, commutes with level instantiation.
 \end{lemma}
 \begin{proof}
 \uses{fam:ctx-lift}
 \leanok
-Inductions on \texttt{Lookup} and on the lifting relation.
+\lead{Idea} Inductions on \texttt{Lookup} and on lifting.
 \end{proof}
 
 \begin{lemma}[Pointwise predicates on contexts]
@@ -296,17 +295,18 @@ Inductions on \texttt{Lookup} and on the lifting relation.
 \leanok
 \uses{def:lookup}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{152}
-\texttt{OnCtx $\Gamma$ P} asserts $P$ of every entry of $\Gamma$ together with the context to
-its right; \texttt{OnCtx $\Gamma$ (E.IsType U)} is the thesis's
-$\vdash \Gamma\ \mathsf{ok}$. \texttt{CtxClosed} is the specialisation to closedness. The
-lemmas transfer $P$ along \texttt{Lookup} (given that $P$ survives one lift) and along
-implications between predicates.
-\thesisref{axioms.tex §2.1, the judgment $\vdash \Gamma\ \mathsf{ok}$}
+\thesisref{axioms.tex \S2.1, the judgment $\vdash \Gamma\ \mathsf{ok}$}
+
+\lead{In short} \texttt{OnCtx}\,$\Gamma P$: $P$ of \hl{every entry} and the context to its
+right; \texttt{OnCtx}\,$\Gamma$\,(\texttt{IsType}\,$U$) is $\vdash \Gamma\ \mathsf{ok}$.
+\begin{itemize}
+\item \texttt{CtxClosed}: specialised to closedness; transfers $P$ along \texttt{Lookup}.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \leanok
-Structural recursion on the context; \texttt{OnCtx} is a recursive definition, not an
-inductive, so each proof is a two-case \texttt{match}.
+\lead{Idea} Structural recursion; \texttt{OnCtx} is recursive, so each case is a two-way
+\texttt{match}.
 \end{proof}
 
 \begin{lemma}[Registering a rule: basic facts]
@@ -316,18 +316,16 @@ inductive, so each proof is a two-case \texttt{match}.
 \leanok
 \uses{def:venv-addpat, struct:venv-le}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{198}
-Registering a reduction rule only grows the environment ($E \le E.\texttt{addPat}\ p\ r$),
-and the registered rule is present afterwards.
 \thesisref{no thesis counterpart}
+
+\lead{In short} Registering a rule only \hl{grows the environment} ($E \le E.\texttt{addPat}
+\,p\,r$), and the rule is present afterwards.
 \end{lemma}
 \begin{proof}
 \uses{def:venv-addpat, struct:venv-le}
 \leanok
-Both are one-liners from the definitions of \texttt{VEnv.addPat} and \texttt{VEnv.LE}. The
-same change had to add the third component to the neighbouring \texttt{addConst\_le}
-(\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{186}) and \texttt{addDefEq\_le}
-(\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{194}), because \texttt{VEnv.LE} gained a
-\texttt{pats} field.
+\lead{Idea} One-liners from the definitions; the change also gave \texttt{addConst\_le} and
+\texttt{addDefEq\_le} a third component (\texttt{VEnv.LE} gained a \texttt{pats} field).
 \end{proof}
 
 \begin{definition}[Ordered environment, \texttt{Ordered}]
@@ -337,17 +335,16 @@ same change had to add the third component to the neighbouring \texttt{addConst\
 \leanok
 \uses{def:venv-basic, def:venv-addpat, def:hastype-istype, def:patwf}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{257}
-An environment is ordered when it is built from the empty one by steps each checked in the
-environment before it: \texttt{const} (the constant's type is a type), \texttt{defeq} (both
-sides of the axiom are typed) and, added on the \texttt{iota} branch at
-\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{265}, \texttt{pat} (the rule satisfies
-\texttt{PatWF}). This is the weakest environment invariant under which the structural
-lemmas of the file hold.
-\thesisref{no thesis counterpart; the formal stand-in for ``the environment was built in order''}
-\reviewnote{\texttt{Ordered} no longer implies that \texttt{IsDefEq} is a sensible relation:
-\texttt{Ordered.defeq} admits arbitrary well-typed definitional axioms, under which a
-registered ι rule can take a well-typed redex to an ill-typed reduct, while
-\ref{rule:isdefeq-pat} forces the reduct to be typed anyway.}
+\thesisref{no thesis counterpart; the formal stand-in for ``built in order''}
+
+\lead{In short} Built from empty by steps each \hl{checked in the environment before it}.
+\begin{itemize}
+\item \texttt{const}: type is a type. \texttt{defeq}: both axiom sides typed. \texttt{pat}
+  (iota, \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{265}): satisfies \texttt{PatWF}.
+\item \lead{Caveat} Alone, does not make \texttt{IsDefEq} well-behaved: \texttt{defeq} admits
+  any well-typed axiom, letting a registered $\iota$ rule take a well-typed redex to an
+  ill-typed reduct, while \ref{rule:isdefeq-pat} forces the reduct typed regardless.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[A predicate on every constant type and axiom side, \texttt{OnTypes}]
@@ -356,13 +353,14 @@ registered ι rule can take a well-typed redex to an ill-typed reduct, while
 \leanok
 \uses{struct:venv}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{267}
-\texttt{OnTypes E P} holds when every constant of $E$ satisfies $P$ of its type at some sort,
-and both sides of every definitional axiom satisfy $P$ at the axiom's type. It is the shape
-of every ``the environment is good'' statement in the group, antitone in the environment and
-monotone in $P$ (\texttt{OnTypes.mono}).
-\reviewnote{\texttt{OnTypes} deliberately says nothing about \texttt{pats}. This is the
-structural reason the iota branch could not thread its ι obligation through
-\ref{thm:ordered-induction} and had to rebuild the bootstrap of \ref{thm:wf-strong}.}
+
+\lead{In short} Every constant type and axiom side of $E$ satisfies $P$: the shape of every
+\hl{``environment is good''} statement here.
+\begin{itemize}
+\item Antitone in $E$, monotone in $P$.
+\item \lead{Caveat} Says nothing about \texttt{pats}: why the $\iota$ obligation could not
+  ride \ref{thm:ordered-induction}, forcing \ref{thm:wf-strong}'s bootstrap from scratch.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[Induction over an ordered environment]
@@ -372,22 +370,25 @@ structural reason the iota branch could not thread its ι obligation through
 \leanok
 \uses{def:ordered, def:ontypes}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{275}
-To prove \texttt{OnTypes E (motive E)} for an ordered $E$ it suffices that the motive be
-monotone in the environment and that it hold of every closed judgment
-$[\,] \vdash e : A$ typed in an ordered environment whose own constants and axioms already
-satisfy it.
+
+\lead{In short} Proves \hl{\texttt{OnTypes E (motive E)}} of an ordered $E$.
+\begin{itemize}
+\item \lead{Given} the motive is monotone and holds of every closed $[\,] \vdash e : A$ typed
+  where the environment's own entries already satisfy it.
+\item \lead{Then} \texttt{OnTypes E (motive E)}.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{def:ordered, def:ontypes, fam:addpat}
 \leanok
-Induction on \texttt{Ordered}. The \texttt{const} case unfolds \texttt{addConst} and splits
-on the name; the \texttt{defeq} case splits on membership in the extended \texttt{defeqs};
-the \texttt{iota}-added \texttt{pat} case (line 299) is one line, transporting the induction
-hypothesis along \texttt{addPat\_le} because registering a rule contributes nothing to
-\texttt{OnTypes}.
+\lead{Idea} Induction on \texttt{Ordered}: \texttt{const}/\texttt{defeq} unfold and split;
+the \texttt{pat} case (iota) transports along \texttt{addPat\_le}, contributing nothing.
 \end{proof}
 
 \section{Structural metatheory}
+
+The core lemmas, mostly over an ordered environment: regularity, monotonicity, weakening,
+substitution and inversion.
 
 \begin{lemma}[Regularity: free variables are in the context]
 \label{thm:isdefeq-closedn}
@@ -396,20 +397,20 @@ hypothesis along \texttt{addPat\_le} because registering a rule contributes noth
 \leanok
 \uses{def:isdefeq, def:onctx, def:ontypes}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{329}
-If every constant type and axiom side of $E$ is closed and $\Gamma$ is closed, then
-$\Gamma \vdash e_1 \equiv e_2 : A$ implies that $e_1$, $e_2$ and $A$ have no free variable at
-or above $|\Gamma|$. \texttt{Ordered.closed} discharges the environment hypothesis for any
-ordered environment, and \texttt{closedC} specialises it to constant types.
 \thesisref{typesys.tex Lemma (Regularity) thm:reg item 2}
+
+\lead{In short} A closed environment and context keep a derivation's terms \hl{closed below
+$|\Gamma|$}.
+\begin{itemize}
+\item \texttt{Ordered.closed} discharges the environment side; \texttt{closedC} specialises
+  to constant types.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeq, thm:ordered-induction, family:pattern-transport-iota}
 \leanok
-Induction on the derivation, using closedness of substitution and lifting in the
-\texttt{appDF}, \texttt{beta} and \texttt{eta} cases; \texttt{Ordered.closed} is
-\ref{thm:ordered-induction} applied to closedness. The \texttt{iota} \texttt{pat} case
-(lines 369--371) takes the redex's closedness from the induction hypothesis and derives the
-reduct's from \texttt{Pattern.RHS.apply\_closedN} applied to \texttt{Matches.closedN}.
+\lead{Idea} Induction using closedness of substitution/lifting; the \texttt{pat} case (iota)
+gets the reduct's closedness from \texttt{Pattern.RHS.apply\_closedN}.
 \end{proof}
 
 \begin{theorem}[Monotonicity in the environment]
@@ -419,16 +420,15 @@ reduct's from \texttt{Pattern.RHS.apply\_closedN} applied to \texttt{Matches.clo
 \leanok
 \uses{def:isdefeq, struct:venv-le}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{397}
-Every judgment derivable in $E$ is derivable in any $E' \ge E$, and likewise for the derived
-judgments and for well-formedness of constants and definitional axioms.
+
+\lead{In short} Every judgment derivable in $E$ is derivable in any \hl{$E' \ge E$}, and
+likewise for the derived judgments.
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeq, struct:venv-le}
 \leanok
-Induction on the derivation, replaying each rule. The \texttt{constDF}, \texttt{extra} and
-(\texttt{iota}, line 412) \texttt{pat} cases use the first, second and third component of
-\texttt{VEnv.LE} respectively; the \texttt{pat} case is a single line, made possible by the
-new \texttt{pats} component of the order.
+\lead{Idea} Induction replaying each rule; \texttt{constDF}, \texttt{extra}, \texttt{pat}
+(iota) use the three components of \texttt{VEnv.LE}.
 \end{proof}
 
 \begin{lemma}[Entries of an ordered environment are well-formed in it]
@@ -438,15 +438,16 @@ new \texttt{pats} component of the order.
 \leanok
 \uses{def:ordered, def:hastype-istype}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{439}
-Every constant of an ordered environment has a well-formed type there, and every
-definitional axiom has both sides typed there.
+
+\lead{In short} Every constant of an ordered environment has a \hl{well-formed type} there;
+every axiom has both sides typed there.
 \end{lemma}
 \begin{proof}
 \uses{def:ordered, thm:isdefeq-mono, fam:addpat}
 \leanok
-Induction on \texttt{Ordered}, transporting along the \texttt{le} lemma of each step with
-\texttt{VConstant.WF.mono} and \texttt{VDefEq.WF.mono}; the \texttt{iota}-added \texttt{pat}
-cases (lines 449 and 462) transport along \texttt{addPat\_le}.
+\lead{Idea} Induction on \texttt{Ordered}, transporting along each step via
+\texttt{VConstant.WF.mono}/\texttt{VDefEq.WF.mono}; \texttt{pat} (iota) via
+\texttt{addPat\_le}.
 \end{proof}
 
 \begin{lemma}[Rule well-formedness is monotone]
@@ -456,17 +457,15 @@ cases (lines 449 and 462) transport along \texttt{addPat\_le}.
 \leanok
 \uses{def:pattyped, def:patwf, struct:venv-le}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{464}
-\texttt{PatTyped} and \texttt{PatWF} transfer along $E \le E'$.
 \thesisref{no thesis counterpart}
+
+\lead{In short} \texttt{PatTyped} and \texttt{PatWF} transfer along \hl{$E \le E'$}.
 \end{lemma}
 \begin{proof}
 \uses{def:pattyped, def:patwf, thm:isdefeq-mono}
 \leanok
-Destructure the existential and move the two typing judgments by \texttt{HasType.mono}; the
-shape condition \texttt{TemplateHeaded} does not mention the environment. One line of proof
-each.
-Monotonicity is what makes \texttt{Ordered.pat} a legitimate registration condition: a rule
-stays well-formed as the environment grows.
+\lead{Idea} Move the two typing judgments by \texttt{HasType.mono}; \texttt{TemplateHeaded}
+does not mention the environment. What makes \texttt{Ordered.pat} legitimate.
 \end{proof}
 
 \begin{theorem}[Registered rules of an ordered environment are well-formed]
@@ -476,19 +475,16 @@ stays well-formed as the environment grows.
 \leanok
 \uses{def:ordered, def:patwf, inductive:pattern-template-headed}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{474}
-Every rule in the \texttt{pats} of an ordered environment satisfies \texttt{PatWF} there; in
-particular (\texttt{Ordered.patHeaded}, line 488) its reduct is template-headed.
 \thesisref{no thesis counterpart; the \texttt{pats} analogue of \ref{fam:ordered-entrywf}}
+
+\lead{In short} Every rule in an ordered environment's \texttt{pats} satisfies
+\texttt{PatWF}; its reduct is \hl{template-headed} (\texttt{patHeaded}).
 \end{theorem}
 \begin{proof}
 \uses{def:ordered, fam:patwf-mono, fam:addpat}
 \leanok
-Induction on \texttt{Ordered}, mirroring \texttt{Ordered.constWF} and
-\texttt{Ordered.defEqWF}: in the \texttt{pat} step the registered rule either is the one just
-added, in which case the step's own hypothesis supplies \texttt{PatWF}, or comes from the
-induction hypothesis; every step transports along its \texttt{le} lemma via
-\texttt{PatWF.mono}. \texttt{patHeaded} is the second projection, and is the export that
-\ref{thm:isdefeq-foralle-inv} and \ref{thm:isdefeq-sort-inv} consume.
+\lead{Idea} Induction on \texttt{Ordered}: the rule was just added (hypothesis supplies
+\texttt{PatWF}) or transports via \texttt{PatWF.mono}.
 \end{proof}
 
 \begin{lemma}[Levels occurring in a derivation are well-formed]
@@ -498,17 +494,16 @@ induction hypothesis; every step transports along its \texttt{le} lemma via
 \leanok
 \uses{def:isdefeq, def:vlevel-wf, def:onctx}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{498}
-If every type in $\Gamma$ mentions only universe variables below $U$, then a derivation of
-$\Gamma \vdash e_1 \equiv e_2 : A$ shows the same of $e_1$, $e_2$ and $A$. Note that this
-one needs no environment hypothesis.
+
+\lead{In short} If $\Gamma$'s types mention only levels below $U$, a derivation of
+$\Gamma \vdash e_1 \equiv e_2 : A$ shows the same of $e_1,e_2,A$ -- \hl{no environment
+hypothesis needed}.
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeq, family:pattern-transport-iota}
 \leanok
-Induction on the derivation. The \texttt{iota} \texttt{pat} case (lines 528--531) gets the
-redex from the induction hypothesis and the reduct from
-\texttt{Pattern.RHS.apply\_levelWF} fed by \texttt{Pattern.Matches.levelWF}, which splits the
-match into level and hole assignments.
+\lead{Idea} Induction; \texttt{pat} (iota) via \texttt{Pattern.RHS.apply\_levelWF} fed by
+\texttt{Matches.levelWF}.
 \end{proof}
 
 \begin{theorem}[Weakening]
@@ -518,23 +513,20 @@ match into level and hole assignments.
 \leanok
 \uses{def:isdefeq, fam:ctx-lift, def:ordered}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{546}
-Over an ordered environment: if $\Gamma \vdash e_1 \equiv e_2 : A$ and $\Gamma'$ is obtained
-from $\Gamma$ by inserting $n$ entries $k$ binders deep, then
-$\Gamma' \vdash e_1{\uparrow} \equiv e_2{\uparrow} : A{\uparrow}$ for the correspondingly
-lifted terms. The corollaries weaken by one binder, on the right by a closed suffix, from
-the empty context, and along a general lift word.
 \thesisref{typesys.tex Lemma (Weakening) thm:weak items 1--2}
+
+\lead{In short} Over an ordered environment, a derivation transports along any \hl{context
+insertion}: $\Gamma' \vdash e_1{\uparrow} \equiv e_2{\uparrow} : A{\uparrow}$ when $\Gamma'$
+inserts $n$ entries $k$ deep into $\Gamma$.
+\begin{itemize}
+\item Corollaries: one binder, a closed suffix on the right, from empty, a general lift word.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeq, thm:isdefeq-closedn, family:pattern-transport-master, family:pattern-transport-iota}
 \leanok
-Induction on the derivation, commuting lifting past instantiation in the \texttt{appDF},
-\texttt{beta} and \texttt{eta} cases and using \texttt{Ordered.closedC} to see that constant
-and axiom types are unaffected. The \texttt{iota} \texttt{pat} case (lines 573--578) rewrites
-the reduct by \texttt{Pattern.RHS.liftN\_apply}, re-derives the match with
-\texttt{Pattern.matches\_liftN}, maps the side conditions with
-\texttt{Check.Realizes.map\_liftN}, and re-establishes the \texttt{chk} premises through
-\texttt{List.mem\_map}.
+\lead{Idea} Induction commuting lifting past instantiation; \texttt{pat} (iota) rewrites by
+\texttt{Pattern.RHS.liftN\_apply} and re-derives the match.
 \end{proof}
 
 \begin{lemma}[Universe-level instantiation]
@@ -544,19 +536,16 @@ the reduct by \texttt{Pattern.RHS.liftN\_apply}, re-derives the match with
 \leanok
 \uses{def:isdefeq, def:vlevel-inst}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{646}
-A derivation at universe arity $U$ may be instantiated by any list of levels well-formed at
-$U'$, giving a derivation at $U'$ with the context, both terms and the type instantiated.
-\thesisref{axioms.tex §2.1, universe-polymorphic constants}
+\thesisref{axioms.tex \S2.1, universe-polymorphic constants}
+
+\lead{In short} A derivation at arity $U$ instantiates to any level list well-formed at
+$U'$, with \hl{context, terms and type instantiated}.
 \end{lemma}
 \begin{proof}
 \uses{def:isdefeq, family:pattern-transport-iota}
 \leanok
-Induction on the derivation; levels are substituted pointwise and \texttt{instL} commutes
-with term instantiation. The \texttt{iota} \texttt{pat} case (lines 668--673) uses
-\texttt{Pattern.RHS.instL\_apply}, \texttt{Pattern.matches\_instL} and
-\texttt{Check.Realizes.map\_instL}; it works because \texttt{Pattern.Matches} carries the
-level assignment explicitly, so the instantiated redex matches with the instantiated
-assignment.
+\lead{Idea} Induction, levels substituted pointwise; \texttt{pat} (iota) via
+\texttt{Pattern.RHS.instL\_apply}.
 \end{proof}
 
 \begin{theorem}[Substitution]
@@ -566,20 +555,17 @@ assignment.
 \leanok
 \uses{def:isdefeq, fam:ctx-lift, def:ordered}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{691}
-Over an ordered environment, if $\Gamma_0 \vdash e_0 : A_0$ and $\Gamma_1$ substitutes down
-to $\Gamma$ by replacing the variable $k$ deep with $e_0$, then
-$\Gamma_1 \vdash e_1 \equiv e_2 : A$ gives
-$\Gamma \vdash e_1[e_0] \equiv e_2[e_0] : A[e_0]$.
 \thesisref{typesys.tex Lemma (Properties of substitution) thm:subst item subst\_ty}
+
+\lead{In short} Over an ordered environment, \hl{substituting a well-typed term} transports
+a derivation: $\Gamma_0 \vdash e_0 : A_0$ and $\Gamma_1 \vdash e_1 \equiv e_2 : A$ give
+$\Gamma \vdash e_1[e_0] \equiv e_2[e_0] : A[e_0]$ (\texttt{InstN} at depth $k$).
 \end{theorem}
 \begin{proof}
 \uses{def:isdefeq, thm:isdefeq-weakn, family:pattern-transport-master, family:pattern-transport-iota}
 \leanok
-Induction on the derivation, with an inner induction on \texttt{Ctx.InstN} in the variable
-case (where weakening is needed to move $e_0$ up). The \texttt{iota} \texttt{pat} case
-(lines 729--734) rewrites by \texttt{Pattern.RHS.instN\_apply} and re-derives the match by
-\texttt{Pattern.matches\_instN}: this case is where ``the reduction rule is all substitution
-instances of this rule'' (\texttt{axioms.tex} §2.6.4) is actually discharged.
+\lead{Idea} Induction with an inner induction on \texttt{Ctx.InstN}; \texttt{pat} (iota) via
+\texttt{Pattern.RHS.instN\_apply} -- where the rule's substitution-closure is discharged.
 \end{proof}
 
 \begin{lemma}[Context conversion]
@@ -588,19 +574,16 @@ instances of this rule'' (\texttt{axioms.tex} §2.6.4) is actually discharged.
 \leanok
 \uses{def:isdefeq, def:onctx}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{302}
-\texttt{IsDefEqCtx E U $\Gamma_0$ $\Gamma_1$ $\Gamma_2$} relates two contexts sharing the
-suffix $\Gamma_0$ and pointwise definitionally equal above it. Derivations transport along
-it, and the relation is symmetric, reflexive on well-formed contexts, and preserves
-closedness and length. (The inductive itself is declared at line 302; the transport lemmas
-follow substitution, at lines 756--800.)
-\thesisref{not stated separately in the thesis; an admissible rule the de Bruijn presentation makes necessary}
+\thesisref{not stated separately; an admissible rule the de Bruijn presentation needs}
+
+\lead{In short} \texttt{IsDefEqCtx} relates two contexts sharing a suffix, \hl{pointwise
+definitionally equal} above it; derivations transport along it.
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefeq-weakn, thm:isdefeq-instn, fam:ctx-lift}
 \leanok
-The single-binder case \texttt{defeqDF\_l'} weakens into an extended context and substitutes
-the de Bruijn zero variable back, using \ref{thm:isdefeq-weakn} and \ref{thm:isdefeq-instn};
-the general case iterates it along the relation. Untouched by both contributed branches.
+\lead{Idea} The one-binder case weakens then substitutes the zero variable back; the general
+case iterates. Untouched by either branch.
 \end{proof}
 
 \begin{theorem}[Inversion for $\Pi$-types]
@@ -610,24 +593,17 @@ the general case iterates it along the relation. Untouched by both contributed b
 \leanok
 \uses{def:isdefeq, def:ordered, def:hastype-istype}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{804}
-Over an ordered environment, if one side of a derivation is a $\Pi$-type
-$\forall x{:}A.\,B$ then $\Gamma \vdash A\ \mathsf{type}$ and
-$A :: \Gamma \vdash B\ \mathsf{type}$. The primed form takes the side as a disjunction and
-an environment induction hypothesis; the two corollaries specialise it.
 \thesisref{typesys.tex thm:reg; a weak form of unique.tex thm:1dinv item 2}
+
+\lead{In short} Over an ordered environment, a $\Pi$-type on one side forces \hl{both domain
+and codomain to be types}.
 \end{theorem}
 \begin{proof}
 \uses{thm:ordered-induction, thm:isdefeq-instn, thm:isdefeq-weakn, thm:ordered-patwf, inductive:pattern-template-headed}
 \leanok
-Induction on the derivation with the side as a disjunction. The work is in
-\texttt{forallEDF} (read off the premises), \texttt{beta} (a $\Pi$ can only come from the
-body or the substituted argument) and \texttt{extra} (push the statement through level
-instantiation, using the environment induction hypothesis produced by
-\ref{thm:ordered-induction}). The \texttt{iota} \texttt{pat} case (lines 848--851) discharges
-the reduct side outright: by \texttt{Ordered.patHeaded} the reduct is template-headed and
-\texttt{TemplateHeaded.apply\_ne\_forallE} says no instance of it is a $\Pi$. Without that
-side condition this lemma would have needed $\Pi$-injectivity, which is open
-(\ref{thm:injectivity-open}).
+\lead{Idea} Induction with the side as a disjunction; \texttt{pat} (iota) is discharged
+outright by \texttt{TemplateHeaded.apply\_ne\_forallE} -- else this would need the open
+\ref{thm:injectivity-open}.
 \end{proof}
 
 \begin{lemma}[Inversion for sorts]
@@ -637,17 +613,15 @@ side condition this lemma would have needed $\Pi$-injectivity, which is open
 \leanok
 \uses{def:isdefeq, def:ordered, def:vlevel-wf}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{866}
-Over an ordered environment, if one side of a derivation is $\mathrm{Sort}\ u$ then $u$ is a
-well-formed level at the ambient universe arity. This is the weak form of sort inversion:
-it does not compare two sorts.
 \thesisref{unique.tex thm:1dinv item 1, weak form}
+
+\lead{In short} Over an ordered environment, $\mathrm{Sort}\,u$ on one side makes $u$ a
+\hl{well-formed level}; does not compare two sorts.
 \end{lemma}
 \begin{proof}
 \uses{fam:ordered-entrywf, thm:ordered-patwf, inductive:pattern-template-headed}
 \leanok
-Induction on the derivation, mirroring the $\Pi$ case; \texttt{extra} uses
-\texttt{Ordered.defEqWF} and level-instantiation well-formedness. The \texttt{iota}
-\texttt{pat} case (lines 892--895) rules out the reduct side with
+\lead{Idea} Mirrors the $\Pi$ case; \texttt{pat} (iota) via
 \texttt{TemplateHeaded.apply\_ne\_sort}.
 \end{proof}
 
@@ -658,20 +632,16 @@ Induction on the derivation, mirroring the $\Pi$ case; \texttt{extra} uses
 \leanok
 \uses{def:isdefeq, def:ordered, def:onctx, def:hastype-istype}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{912}
-In an ordered environment with a well-formed context,
-$\Gamma \vdash e_1 \equiv e_2 : A$ implies $\Gamma \vdash A\ \mathsf{type}$.
 \thesisref{typesys.tex Lemma (Regularity) thm:reg item 4}
+
+\lead{In short} In an ordered environment with a well-formed context, a derivation's type is
+itself \hl{a type}.
 \end{theorem}
 \begin{proof}
 \uses{thm:isdefeq-foralle-inv, thm:isdefeq-sort-inv, thm:isdefeq-instn, thm:ordered-induction}
 \leanok
-Induction on the derivation: the application case inverts the function's $\Pi$-type and
-substitutes, the $\beta$ case substitutes, the constant and axiom cases read the type off the
-environment induction hypothesis (\texttt{Ordered.isType}, itself
-\ref{thm:ordered-induction}). The \texttt{iota} \texttt{pat} case (line 937) is one line: the
-type is the redex's, so the induction hypothesis for $\Gamma \vdash e : A$ is exactly what is
-needed. That convenience is the other face of the design decision in
-\ref{rule:isdefeq-pat}.
+\lead{Idea} Application inverts the $\Pi$ and substitutes; constant/axiom read off
+\texttt{Ordered.isType}; \texttt{pat} (iota) reuses the induction hypothesis for $e:A$.
 \end{proof}
 
 \begin{lemma}[Substitution of definitionally equal arguments]
@@ -680,17 +650,17 @@ needed. That convenience is the other face of the design decision in
 \leanok
 \uses{def:isdefeq, def:onctx}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{952}
-Over an ordered environment and a well-formed context
-(\texttt{OnCtx} $\Gamma$ (\texttt{E.IsType U})), if $A :: \Gamma \vdash f \equiv f' : B$ and
-$\Gamma \vdash a \equiv a' : A$ then $\Gamma \vdash f[a] \equiv f'[a'] : B[a]$.
 \thesisref{typesys.tex thm:subst item 3}
+
+\lead{In short} Over an ordered environment and well-formed context, $A :: \Gamma \vdash f
+\equiv f' : B$ and $\Gamma \vdash a \equiv a' : A$ give \hl{$\Gamma \vdash f[a] \equiv
+f'[a'] : B[a]$}.
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefeq-istype, thm:isdefeq-sort-inv}
 \leanok
-An auxiliary rewrites $f[a]$ as $(\lambda x{:}A.\,f)\ a$ by $\beta$, applies the application
-congruence, and converts back along the type; it is used twice, once for the term and once
-for the type $B$, the second time supplying the sort of $B[a]$ from \ref{thm:isdefeq-istype}.
+\lead{Idea} Rewrite $f[a]$ as $(\lambda x{:}A.f)\,a$ by $\beta$, apply congruence, convert
+back; used for the term and, via \ref{thm:isdefeq-istype}, the type.
 \end{proof}
 
 \begin{lemma}[Pointwise definitionally equal substitutions]
@@ -699,24 +669,27 @@ for the type $B$, the second time supplying the sort of $B[a]$ from \ref{thm:isd
 \leanok
 \uses{def:isdefeq, def:subst, def:onctx}
 \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{973}
-\texttt{Ctx.SubstEq E U $\Gamma_0$ $\sigma$ $\sigma'$ $\Gamma$} is a pair of substitutions
-taking $\Gamma$ down to $\Gamma_0$ that are pointwise definitionally equal at the
-corresponding types. The family gives the diagonal projection, variable lookup, codomain
-weakening, extension under a binder (also up to a definitional equality of the new domain,
-\texttt{lift\_at}), well-formedness of the source context, and the identity substitution.
-\texttt{IsDefEq.substDF} (Chapter \ref{chap:metatheory}) is the consumer.
 \thesisref{the simultaneous-substitution generalisation of typesys.tex thm:subst}
+
+\lead{In short} \texttt{Ctx.SubstEq}: a pair of substitutions to $\Gamma_0$, \hl{pointwise
+definitionally equal} at the corresponding types.
+\begin{itemize}
+\item Diagonal projection, lookup, codomain weakening, extension under a binder
+  (\texttt{lift\_at}), source well-formedness, identity. Consumed by
+  \texttt{IsDefEq.substDF} (Chapter~\ref{chap:metatheory}).
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{thm:isdefeq-weakn, def:subst}
 \leanok
-Inductions on the substitution relation with \texttt{VExpr.Subst} bookkeeping; the
-weakening steps go through \texttt{IsDefEq.weak'}. All master: this section is untouched by
-both branches. Note the fully qualified names are \texttt{Lean4Lean.VEnv.Ctx.SubstEq.*},
-because the section reopens \texttt{namespace VEnv}.
+\lead{Idea} Inductions with \texttt{VExpr.Subst} bookkeeping, via \texttt{IsDefEq.weak'}.
+All upstream.
 \end{proof}
 
 \section{Tactic support and the quotient block}
+
+Small tactic support closes typing goals for the quotient block: four constants and one
+$\delta$ rule.
 
 \begin{lemma}[Tactic support for closed typing goals]
 \label{fam:typing-meta}
@@ -724,19 +697,18 @@ because the section reopens \texttt{namespace VEnv}.
 \leanok
 \uses{def:lookup, def:hastype-istype, def:venv-basic, def:ordered}
 \srcloc{Lean4Lean/Theory/Typing/Meta.lean}{6}
-Up-to-equation variants of \texttt{Lookup.zero}/\texttt{succ} and of the application and
-constant typing rules, the syntax macros \texttt{lookup\_tac} and \texttt{type\_tac} that
-chain them, and \texttt{with\_addConst}, which turns a goal about
-\texttt{(E.addConst n ci >>= f) = some E'} into the corresponding goal about the extended
-ordered environment. Used only on the quotient block: twelve call sites of \texttt{type\_tac}
-in \texttt{QuotLemmas.lean} and a hundred more in the contributed
-\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1}.
+
+\lead{In short} Up-to-equation lookup/typing variants chained into \hl{tactics for closed
+typing goals} (\texttt{lookup\_tac}, \texttt{type\_tac}), plus \texttt{with\_addConst}.
+\begin{itemize}
+\item Used only on the quotient block: twelve sites in \texttt{QuotLemmas.lean}, a hundred
+  in the contributed \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1}.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \leanok
-The variants are \texttt{eq $\triangleright$ rule}; the macros are \texttt{first}-combinators
-over them; \texttt{with\_addConst} peels one \texttt{Option.bind}. The file carries a TODO at
-\srcloc{Lean4Lean/Theory/Typing/Meta.lean}{37} (``write an actual tactic'').
+\lead{Idea} Variants are \texttt{eq $\triangleright$ rule}; the macros chain them;
+\texttt{with\_addConst} peels one \texttt{Option.bind}.
 \end{proof}
 
 \begin{lemma}[Adding the quotient constants preserves orderedness]
@@ -745,21 +717,21 @@ over them; \texttt{with\_addConst} peels one \texttt{Option.bind}. The file carr
 \leanok
 \uses{def:ordered, def:venv-addquot}
 \srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{7}
-If $E$ is ordered and \texttt{QuotReady} (it contains \texttt{Eq} with its expected type),
-then \texttt{addQuot E = some E'} implies $E'$ is ordered: each of \texttt{Quot},
-\texttt{Quot.mk}, \texttt{Quot.lift}, \texttt{Quot.ind} is typed in the environment it is
-added to, and the quotient computation rule is a well-formed definitional axiom of the last.
-\thesisref{axioms.tex §2.7.1 (quotient types)}
-\reviewnote{The quotient computation rule is modelled as a \texttt{VDefEq}, that is as a
-$\delta$ rule on closed terms, not as a \texttt{pats} entry, although the thesis calls it an
-ι rule. This asymmetry with the inductive ι rules is exactly what a proof of
-\ref{thm:wf-patsstrong} would have to handle.}
+\thesisref{axioms.tex \S2.7.1 (quotient types)}
+
+\lead{In short} Adding \texttt{Quot}, \texttt{Quot.mk/lift/ind} and the computation rule
+keeps the environment \hl{ordered}, given $E$ ordered and \texttt{QuotReady}.
+\begin{itemize}
+\item \lead{Caveat} The computation rule is a \texttt{VDefEq} ($\delta$ rule), not a
+  \texttt{pats} entry, though the thesis calls it $\iota$; \ref{thm:wf-patsstrong} must
+  handle this asymmetry.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{fam:typing-meta, def:ordered, def:venv-addquot}
 \leanok
-Four nested applications of \texttt{with\_addConst}, each typing goal closed by
-\texttt{type\_tac}, ending with \texttt{Ordered.defeq} for \texttt{quotDefEq}.
+\lead{Idea} Four nested \texttt{with\_addConst}, each goal closed by \texttt{type\_tac},
+ending with \texttt{Ordered.defeq}.
 \end{proof}
 
 \begin{lemma}[\texttt{addQuot} as an explicit chain of five steps]
@@ -769,24 +741,16 @@ Four nested applications of \texttt{with\_addConst}, each typing goal closed by
 \leanok
 \uses{def:venv-addquot, def:venv-basic, def:hastype-istype}
 \srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{19}
-From \texttt{QuotReady E} and \texttt{addQuot E = some E'} one extracts the four intermediate
-environments $e_1, \dots, e_4$ together with, for each quotient constant, its
-well-formedness in the environment it is added to and the corresponding \texttt{addConst}
-equation, and finally \texttt{quotDefEq.WF $e_4$} with
-$E' = e_4.\texttt{addDefEq}\ \texttt{quotDefEq}$.
-\thesisref{axioms.tex §2.7.1}
-\reviewnote{This re-derives, through the same \texttt{type\_tac} invocations, the four
-constant typings that \ref{thm:addquot-wf} already establishes; \texttt{addQuot\_WF} could be
-a short corollary of this lemma instead.}
+\thesisref{axioms.tex \S2.7.1}
+
+\lead{In short} Unpacks \texttt{addQuot} into its \hl{four intermediate environments}, each
+constant's well-formedness, and \texttt{quotDefEq.WF} at the last.
 \end{lemma}
 \begin{proof}
 \uses{def:venv-addquot, fam:typing-meta}
 \leanok
-Unfold \texttt{addQuot} and split the four \texttt{Option.bind}s, build the
-\texttt{HasObjects} chain (so that \texttt{Eq} and the previously added constants are in
-scope for \texttt{type\_tac}), close each typing goal by \texttt{type\_tac}, and package the
-result. It exists so that \ref{thm:addquot-strong} can walk the intermediate
-environments.
+\lead{Idea} Split the four binds, build the \texttt{HasObjects} chain, close each goal by
+\texttt{type\_tac}; feeds \ref{thm:addquot-strong}.
 \end{proof}
 
 \begin{lemma}[Recovering the quotient objects from the extended environment]
@@ -795,16 +759,19 @@ environments.
 \leanok
 \uses{def:venv-addquot}
 \srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{46}
-After \texttt{addQuot}, the resulting environment contains the four quotient constants with
-their declared types and the quotient definitional axiom.
-\thesisref{axioms.tex §2.7.1}
+\thesisref{axioms.tex \S2.7.1}
+
+\lead{In short} After \texttt{addQuot}, the environment holds \hl{the four quotient
+constants} at their declared types and the quotient axiom.
 \end{lemma}
 \begin{proof}
 \leanok
-Peel the four binds with \texttt{HasObjects.bind\_const}, then project.
+\lead{Idea} Peel the four binds, then project.
 \end{proof}
 
 \section{From well-formedness to the ordered invariant}
+
+\texttt{VEnv.WF} is what the kernel guarantees; \texttt{Ordered} is what the lemmas need.
 
 \begin{lemma}[Bookkeeping for blocks of constants and definitional equations]
 \label{fam:addconsts}
@@ -812,20 +779,19 @@ Peel the four binds with \texttt{HasObjects.bind\_const}, then project.
 \leanok
 \uses{def:vdecl-wf, def:ordered, def:venv-basic}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{8}
-Adding a block of constants grows the environment, succeeds if every name is fresh
-and the block's names are pairwise distinct (only that direction is proved, in
-\texttt{exists\_addConsts}), depends only on \texttt{toVConstVal}, preserves
-orderedness when every constant is typed in the starting environment, and makes every
-constant of the block retrievable afterwards. Adding the block's defining equations
-afterwards preserves orderedness.
-\thesisref{axioms.tex §2.5 (mutual definitions)}
+\thesisref{axioms.tex \S2.5 (mutual definitions)}
+
+\lead{In short} Adding a constant block \hl{grows the environment}, succeeds when names are
+fresh and distinct, and preserves orderedness when every constant is typed already.
+\begin{itemize}
+\item Only fresh/distinct $\Rightarrow$ succeeds is proved; adding the block's $\delta$
+  rules afterwards (\texttt{addDefEqs}) also preserves orderedness.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:ordered, def:vdecl-wf}
 \leanok
-Inductions on the block list, unfolding the \texttt{foldlM} one step at a time; the
-\texttt{addDefEqs} case builds each $\delta$ rule's left side from
-\texttt{addConsts\_constants} and the level-identity rewrite.
+\lead{Idea} Inductions unfolding \texttt{foldlM} one step at a time.
 \end{proof}
 
 \begin{theorem}[A well-formed environment is ordered]
@@ -834,22 +800,22 @@ Inductions on the block list, unfolding the \texttt{foldlM} one step at a time; 
 \leanok
 \uses{def:venv-wf, def:ordered}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{87}
-Every environment reachable by a sequence of well-formed declarations satisfies the
-\texttt{Ordered} invariant. A \texttt{CoeOut} instance (line 106) makes the passage
-automatic.
+
+\lead{In short} Every well-formed environment satisfies \hl{\texttt{Ordered}}; a
+\texttt{CoeOut} instance makes the passage automatic.
 \end{theorem}
 \begin{proof}
 \uses{def:venv-wf, fam:addconsts, thm:addquot-wf, thm:indlem-add-induct-wf}
 \leanok
-Induction on \texttt{VEnv.WF'}, one case per declaration form:
-\texttt{addConsts\_ordered}/\texttt{addDefEqs\_ordered} for mutual blocks,
-\texttt{addQuot\_WF} for quotients, \texttt{addInduct\_WF} for inductives. On master the
-\texttt{induct} case was vacuous, because \texttt{VInductDecl.WF}, \texttt{VEnv.addInduct}
-and \texttt{addInduct\_WF} were themselves \texttt{sorry}; the iota branch gives all three
-real definitions, so this theorem now has content.
+\lead{Idea} Induction on \texttt{VEnv.WF'}, one case per form; on upstream \texttt{induct} was
+vacuous (three \texttt{sorry}s), the iota branch gives it real content.
 \end{proof}
 
 \section{The strong-system bootstrap}
+
+Chapter~\ref{chap:metatheory} needs every constant and axiom of a well-formed environment
+strongly typed. Upstream's twelve-line entry point does not survive $\iota$, since
+\ref{def:ontypes} ignores \texttt{pats}; this section rebuilds it.
 
 \begin{lemma}[Declaration steps and prefixes only grow the environment]
 \label{thm:vdecl-wf-le}
@@ -858,44 +824,38 @@ real definitions, so this theorem now has content.
 \leanok
 \uses{def:vdecl-wf, def:wfprefix, struct:venv-le}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{109}
-Every \texttt{VDecl.WF} step satisfies $E \le E'$, and consequently a well-formed prefix is a
-sub-environment: \texttt{E.WFPrefix $E_0$} implies $E_0 \le E$.
 \thesisref{no thesis counterpart}
+
+\lead{In short} Every \texttt{VDecl.WF} step satisfies \hl{$E \le E'$}; hence
+\texttt{E.WFPrefix}\,$E_0$ implies $E_0 \le E$.
 \end{lemma}
 \begin{proof}
 \uses{fam:addconsts, family:indlem-pats-defeqs-preserved, family:indlem-stage-le}
 \leanok
-Case analysis on the declaration form, composing the per-operation \texttt{le} lemmas
-(\texttt{addConst\_le}, \texttt{addDefEq\_le}, \texttt{addConsts\_le},
-\texttt{addDefEqs\_le}, \texttt{addQuot\_le}, \texttt{addInduct\_le}); the prefix version is
-a three-line induction composing those. \texttt{VDecl.WF.le} has exactly one consumer, the
-prefix version (line 123), which in turn has exactly one, \ref{thm:wf-strong} (line 274).
+\lead{Idea} Case analysis composing the per-operation \texttt{le} lemmas.
 \end{proof}
 
-\begin{definition}[Subject reduction of ι along the strengthening argument, \texttt{PatsStrong}]
+\begin{definition}[Subject reduction of $\iota$ along the strengthening argument, \texttt{PatsStrong}]
 \label{def:patsstrong}
 \contrib{iota}
 \lean{Lean4Lean.VEnv.PatsStrong}
 \leanok
 \uses{def:wfprefix, def:patsstrongon, def:ordered, struct:venv-le}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{130}
-\texttt{E.PatsStrong} says: for all $E_1$ and $E_0$ with \texttt{E.WFPrefix $E_1$},
-$E_1 \le E_0 \le E$, $E_0.\texttt{defeqs} = E_1.\texttt{defeqs}$,
-$E_0.\texttt{pats} = E_1.\texttt{pats}$ and $E_0$ ordered, the registered rules of $E_0$
-enjoy subject reduction in $E_0$ (\texttt{PatsStrongOn}). Those $E_0$ are exactly the
-environments in which \ref{thm:wf-strong} types a constant or a definitional axiom: the
-stage environments of an inductive block and the intermediate environments of
-\texttt{addQuot}.
 \thesisref{unique.tex ``Regularity of reductions'' item 1; typesys.tex ``Regularity continued'' item red\_equiv}
-\reviewnote{Six positional hypotheses with $E_1$ and $E_0$ explicit, so every call site reads
-\texttt{hp \_ \_ hpre₀ .rfl \dots rfl rfl hord}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{279}; eight such call sites, at lines 279,
-282, 291, 293, 305, 308, 316 and 319). Packaging ``$E_0$ is a
-constant-only extension of a well-formed prefix of $E$'' as one named relation with implicit
-environments would remove most of the plumbing in lines 137--321. Since the statement is only
-ever discharged by a \texttt{sorry}, nobody has checked that it is provable in this
-generality: $E_1$ ranges over prefixes that already contain $\delta$ rules and the quotient
-rule, so a proof must handle the ι/$\delta$ interaction.}
+
+\lead{In short} \texttt{E.PatsStrong}: every ordered $E_0$ reached from a well-formed prefix
+of $E$ by a \hl{constant-only extension} has subject reduction for its rules.
+\begin{itemize}
+\item \lead{Given} \texttt{E.WFPrefix}\,$E_1$, $E_1 \le E_0 \le E$, matching
+  \texttt{defeqs}/\texttt{pats}, $E_0$ ordered.
+\item \lead{Then} \texttt{PatsStrongOn}\,$E_0$
+  (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{279}) -- exactly the stage environments of
+  an inductive block and the intermediate environments of \texttt{addQuot}.
+\item \lead{Caveat} Discharged only by \texttt{sorry} (\ref{thm:wf-patsstrong}): unverified
+  whether provable at this generality, since $E_1$ may already carry $\delta$ rules and the
+  quotient rule.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[Strong typing survives a fold of constant additions]
@@ -905,22 +865,16 @@ rule, so a proof must handle the ι/$\delta$ interaction.}
 \leanok
 \uses{def:envstrong, def:patsstrongon, def:ontypes, def:ordered}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{137}
-Let a list be folded into an environment by \texttt{addConst}. If every added constant is
-typed in the environment the fold starts from, that environment is ordered and satisfies
-\texttt{OnTypes init (EnvStrong init)}, and every environment the fold passes through (each a
-constant-only extension of \texttt{init} inside \texttt{final}) has subject reduction for its
-ι rules, then \texttt{OnTypes final (EnvStrong final)}.
 \thesisref{no thesis counterpart; machinery for the annotated judgment}
+
+\lead{In short} Folding \texttt{addConst} \hl{preserves strong typing} when every added
+constant is typed as it is added and every intermediate stage has subject reduction.
 \end{theorem}
 \begin{proof}
 \uses{thm:ontypes-addconst, family:indlem-pats-defeqs-preserved, family:indlem-foldlm}
 \leanok
-Induction on the list. Each step applies \texttt{OnTypes.addConst} with the
-\texttt{PatsStrongOn} instance obtained from the hypothesis at that stage, and re-aims the
-hypothesis for the tail by composing the step's $\le$, \texttt{defeqs} and \texttt{pats}
-equations (\texttt{addConst\_le}, \texttt{addConst\_defeqs}, \texttt{addConst\_pats},
-\texttt{foldlM\_le}). It is generic in the element type, so it serves both \texttt{addConsts}
-for mutual blocks and the three constant stages of \texttt{addInduct}.
+\lead{Idea} Induction applying \texttt{OnTypes.addConst}, re-aiming \texttt{PatsStrongOn} at
+each stage; serves \texttt{addConsts} and \texttt{addInduct}'s three constant stages.
 \end{proof}
 
 \begin{lemma}[Strong typing survives a block of definitional equations]
@@ -930,40 +884,34 @@ for mutual blocks and the three constant stages of \texttt{addInduct}.
 \leanok
 \uses{def:envstrong, def:ontypes, def:vdecl-wf}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{162}
-If the environment the block starts from already satisfies \texttt{OnTypes E (EnvStrong E)}
-and both sides of every definitional equation of the block satisfy \texttt{EnvStrong} there,
-then adding the whole block with \texttt{addDefEqs} leaves every constant and definitional
-axiom strongly typed.
 \thesisref{no thesis counterpart}
+
+\lead{In short} \texttt{addDefEqs} \hl{leaves every constant and axiom strongly typed}, given
+the start and new equations already are.
 \end{lemma}
 \begin{proof}
 \uses{thm:ontypes-adddefeq, thm:envstrong-mono}
 \leanok
-Induction on the block, applying \texttt{OnTypes.addDefEq} at each step and transporting the
-remaining obligations along \texttt{addDefEq\_le} with \texttt{EnvStrong.mono}. No
-\texttt{PatsStrong} hypothesis is needed: adding a definitional axiom re-types nothing.
+\lead{Idea} Induction applying \texttt{OnTypes.addDefEq}; no \texttt{PatsStrong} hypothesis
+needed, an axiom re-types nothing.
 \end{proof}
 
-\begin{lemma}[Registering ι rules preserves strong typing]
+\begin{lemma}[Registering $\iota$ rules preserves strong typing]
 \label{thm:addrules-strong}
 \contrib{iota}
 \lean{Lean4Lean.VEnv.addRules_strong}
 \leanok
 \uses{def:envstrong, def:ontypes, family:ind-add-stages, def:ind-add-rec-rule}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{175}
-If \texttt{OnTypes envR (EnvStrong envR)} and \texttt{decl.addRules envR = some E'} (the last
-of \texttt{addInduct}'s four stages, which registers the recursor rules; the source numbers
-the stages from zero and calls it stage 3), then \texttt{OnTypes E' (EnvStrong E')}.
 \thesisref{no thesis counterpart}
+
+\lead{In short} \texttt{addInduct}'s rule-registration stage \hl{adds no typing obligation}.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-foldlm, thm:ontypes-addpat, def:ind-add-rec-rule}
 \leanok
-Two nested applications of \texttt{foldlM\_inv} reduce the statement to a single
-\texttt{addRecRule} step, which is an \texttt{addPat}; \texttt{OnTypes.addPat} then closes it,
-because \texttt{OnTypes} does not mention \texttt{pats}. Short and clean, and the formal
-record of the fact that registering a rule adds no typing obligation to the environment: all
-of the cost is deferred to \ref{def:patsstrong}.
+\lead{Idea} Two \texttt{foldlM\_inv} reduce it to one \texttt{addRecRule}/\texttt{addPat}
+step, closed by \texttt{OnTypes.addPat}; cost deferred to \ref{def:patsstrong}.
 \end{proof}
 
 \begin{lemma}[Adding the quotient block preserves strong typing]
@@ -973,23 +921,22 @@ of the cost is deferred to \ref{def:patsstrong}.
 \leanok
 \uses{def:envstrong, def:ontypes, def:venv-addquot, def:patsstrongon}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{188}
-If $E$ is ordered and strongly typed, \texttt{QuotReady E} holds, and every intermediate
-environment of \texttt{addQuot} (a constant-only extension of $E$ inside $E'$) has subject
-reduction for its ι rules, then $E'$ is strongly typed.
-\thesisref{axioms.tex §2.7.1}
-\reviewnote{Hand-unrolled into about 25 lines of \texttt{l1--l5 / d1--d4 / p1--p4 / O1--O4 /
-I1--I4} with explicit \texttt{.trans} chains: correct, but a sixth quotient constant would
-require editing every chain. It cannot reuse \ref{thm:foldlm-addconst-strong} only because
-\texttt{addQuot} is an \texttt{Option} bind chain rather than a fold.}
+\thesisref{axioms.tex \S2.7.1}
+
+\lead{In short} \texttt{addQuot} \hl{preserves strong typing}, given $E$ ordered and
+strongly typed, \texttt{QuotReady}, and subject reduction on the intermediate stages.
+\begin{itemize}
+\item \lead{Caveat} Hand-unrolled into $\sim$25 lines of \texttt{.trans} chains, since
+  \texttt{addQuot} is a bind chain, not a fold, so cannot reuse
+  \ref{thm:foldlm-addconst-strong}.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{thm:addquot-chain, thm:ontypes-addconst, thm:ontypes-adddefeq, thm:envstrong-of-hastype, family:indlem-pats-defeqs-preserved}
 \leanok
-Decompose \texttt{addQuot} with \ref{thm:addquot-chain}, then apply
-\texttt{OnTypes.addConst} four times and \texttt{OnTypes.addDefEq} once, supplying at each
-step the \texttt{PatsStrongOn} instance for that stage by composing the preceding
-\texttt{addConst}s' $\le$, \texttt{defeqs} and \texttt{pats} equations; the two sides of
-\texttt{quotDefEq} are strengthened by \texttt{EnvStrong.of\_hasType}.
+\lead{Idea} Decompose via \ref{thm:addquot-chain}, apply \texttt{OnTypes.addConst} four
+times and \texttt{OnTypes.addDefEq} once; strengthen \texttt{quotDefEq} via
+\texttt{EnvStrong.of\_hasType}.
 \end{proof}
 
 \begin{theorem}[Adding an inductive block preserves strong typing]
@@ -999,21 +946,17 @@ step the \texttt{PatsStrongOn} instance for that stage by composing the precedin
 \leanok
 \uses{def:envstrong, def:ontypes, def:ind-add-induct, structure:ind-wf, def:patsstrongon}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{223}
-If $E$ is ordered and strongly typed, \texttt{decl.WF E} holds, and every environment the
-four stages of \texttt{addInduct} pass through has subject reduction for its ι rules, then
-the resulting environment is strongly typed.
-\thesisref{axioms.tex §2.6 (inductive types)}
+\thesisref{axioms.tex \S2.6 (inductive types)}
+
+\lead{In short} \texttt{addInduct} \hl{preserves strong typing}, given $E$ ordered and
+strongly typed, \texttt{decl.WF E}, and subject reduction on its four stages.
 \end{theorem}
 \begin{proof}
 \uses{thm:indlem-add-induct-stages, thm:foldlm-addconst-strong, thm:addrules-strong, family:indlem-stage-ordered, family:indlem-stage-le, family:indlem-pats-defeqs-preserved, structure:ind-wf}
 \leanok
-Split \texttt{addInduct} into its four stages with \texttt{addInduct\_stages}. The three
-constant stages (type formers, constructors, recursors) each go through
-\ref{thm:foldlm-addconst-strong}, with the typing hypotheses \texttt{VInductDecl.WF} supplies
-for that stage (\texttt{types\_wf}, \texttt{ctors\_wf}, \texttt{recs\_wf}) and with the
-\texttt{PatsStrong} hypothesis re-aimed by composing the stage $\le$, \texttt{defeqs} and
-\texttt{pats} equations; the rule-registration stage is \ref{thm:addrules-strong}. The
-re-aiming bookkeeping is repeated three times with only the prefix changing.
+\lead{Idea} Split into four stages; the three constant stages go through
+\ref{thm:foldlm-addconst-strong}, the rule stage through \ref{thm:addrules-strong},
+re-aiming \texttt{PatsStrong} each time.
 \end{proof}
 
 \begin{theorem}[Constants and axioms of a well-formed environment are strongly typed]
@@ -1023,59 +966,47 @@ re-aiming bookkeeping is repeated three times with only the prefix changing.
 \leanok
 \uses{def:venv-wf, def:patsstrong, def:envstrong, def:ontypes}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{263}
-If \texttt{E.WF} and \texttt{E.PatsStrong}, then \texttt{OnTypes E (EnvStrong E)}: every
-constant type and both sides of every definitional axiom have a derivation in the annotated
-strong judgment, whose types are themselves typed, which is stable under level instantiation,
-and which inverts $\Pi$-types.
 \thesisref{no direct counterpart; the machinery behind regularity for the annotated judgment}
+
+\lead{In short} \texttt{E.WF} with \texttt{E.PatsStrong} gives \hl{\texttt{OnTypes E
+(EnvStrong E)}}: every constant and axiom typed in the strong judgment.
 \end{theorem}
 \begin{proof}
 \uses{def:wfprefix, thm:wfprefix-trans, thm:vdecl-wf-le, thm:ontypes-addconst, thm:ontypes-adddefeq, thm:envstrong-of-hastype, thm:foldlm-addconst-strong, thm:adddefeqs-strong, thm:addquot-strong, thm:addinduct-strong, thm:wf-ordered}
 \leanok
-An auxiliary \texttt{key} is proved by induction on \texttt{VEnv.WF'} generalised over a
-\texttt{WFPrefix} witness, so that at each step the \texttt{PatsStrong} hypothesis can be
-aimed at the current stage environment; the outer statement instantiates it at
-\texttt{.rfl}. The seven declaration forms dispatch to \texttt{OnTypes.addConst},
-\texttt{OnTypes.addDefEq} with \texttt{EnvStrong.of\_hasType},
-\ref{thm:foldlm-addconst-strong} with \ref{thm:adddefeqs-strong},
-\ref{thm:addquot-strong} and \ref{thm:addinduct-strong}. This replaces master's
-\texttt{Ordered.strong}, a twelve-line proof by \ref{thm:ordered-induction}; the rewrite is
-forced, since \texttt{OnTypes} says nothing about \texttt{pats}. Keeping the ι obligation an
-explicit hypothesis rather than inlining \ref{thm:wf-patsstrong} localises the gap.
+\lead{Idea} Induction on \texttt{VEnv.WF'} generalised over a \texttt{WFPrefix} witness, so
+\texttt{PatsStrong} aims at the current stage; the seven forms dispatch to
+\ref{thm:foldlm-addconst-strong}, \ref{thm:adddefeqs-strong}, \ref{thm:addquot-strong},
+\ref{thm:addinduct-strong}. Replaces upstream's \texttt{Ordered.strong}.
 \end{proof}
 
-\begin{theorem}[Regularity of ι reductions (open)]
+\begin{theorem}[Regularity of $\iota$ reductions (open)]
 \label{thm:wf-patsstrong}
 \contrib{iota}
 \lean{Lean4Lean.VEnv.WF.patsStrong}
 \leanok
 \uses{def:venv-wf, def:patsstrong}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}
-Every well-formed environment satisfies \texttt{PatsStrong}: in every well-formed prefix and
-every constant-only extension of one, each registered ι rule preserves types, that is, a
-well-typed redex reduces to a reduct of the same type. This is not a consequence of
-\texttt{Ordered}, whose \texttt{defeq} step admits arbitrary well-typed definitional axioms:
-under an axiom $\mathrm{List}\ \mathbb{N} \equiv \mathrm{List}\ \mathrm{Bool}$ the redex
-$\mathrm{List.rec}\ \mathbb{N}\ m\ n\ c\ (\mathrm{List.cons}\ \mathrm{Bool}\
-\mathrm{true}\ tl)$ is well-typed and its reduct is not.
 \thesisref{unique.tex ``Regularity of reductions'' item 1 and typesys.tex ``Regularity continued'' item red\_equiv, which the thesis dismisses as ``easy inductions''}
+
+\lead{In short} Every well-formed environment satisfies \texttt{PatsStrong}: a well-typed
+redex of a registered $\iota$ rule reduces to a \hl{reduct of the same type}.
+\begin{itemize}
+\item Not a consequence of \texttt{Ordered} alone: \texttt{defeq} admits any well-typed
+  axiom, e.g. $\mathrm{List}\,\mathbb{N}\equiv\mathrm{List}\,\mathrm{Bool}$ gives
+  \texttt{List.rec} a well-typed redex with an ill-typed reduct.
+\item \lead{Caveat} The only new \texttt{sorry} on this branch: via
+  \ref{thm:wf-orderedstrong}'s \texttt{CoeOut}, all 343 \texttt{VEnv.WF}-dependent constants
+  -- the widest reach of any gap in the project -- become conditional on it. Upstream's entry
+  point was proved.
+\end{itemize}
 \axfoot{sorryAx (this declaration is itself sorry), Quot.sound, propext}
-\reviewnote{This is the branch's only new \texttt{sorry} and it is load-bearing: through
-\ref{thm:wf-orderedstrong} and its \texttt{CoeOut} instance, the whole strong system and
-every result in \texttt{Verify/} that takes a \texttt{VEnv.WF} hypothesis becomes conditional
-on it (343 constants depend on it, the widest reach of any hole in the non-experimental
-project). Master's corresponding entry point was proved.}
 \end{theorem}
 \begin{proof}
 \uses{thm:injectivity-open, thm:foralle-inv-derived, structure:ind-wf}
-\textbf{Not proved in Lean.} The declaration is \texttt{sorry}. The docstring
-(lines 323--333) states what a proof needs: inversion of the redex's typing together with
-injectivity of the block's type formers, that is the content of
-\ref{thm:injectivity-open}, itself open; the direct-block shape of \texttt{VInductDecl.WF} is
-what would make them applicable, since every rule fires on a constructor of the eliminated
-type former. Because well-formed prefixes already contain $\delta$ rules and the quotient
-rule, a proof must also handle ι in the presence of $\delta$, which plausibly needs the
-Church--Rosser development.
+\stSorry{} \lead{Missing} Inversion of the redex's typing with injectivity of the block's
+type formers (\ref{thm:injectivity-open}, itself open); a proof must also handle $\iota$ in
+the presence of $\delta$ and the quotient rule.
 \end{proof}
 
 \begin{theorem}[A well-formed environment satisfies the strong-system hypotheses]
@@ -1085,30 +1016,28 @@ Church--Rosser development.
 \leanok
 \uses{def:venv-wf, struct:orderedstrong}
 \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{339}
-\texttt{E.WF} implies \texttt{E.OrderedStrong}: ordered, strongly typed in its constants and
-axioms, and with subject reduction for its own registered ι rules. A \texttt{CoeOut}
-instance (line 343) makes the passage silent.
 \thesisref{no thesis counterpart}
+
+\lead{In short} \texttt{E.WF} implies \hl{\texttt{E.OrderedStrong}} (ordered, strongly
+typed, subject reduction for its rules); a \texttt{CoeOut} instance makes it silent.
+\begin{itemize}
+\item \lead{Caveat} Delivery mechanism for \ref{thm:wf-patsstrong}'s gap
+  (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{342}): any \texttt{E.WF} hypothesis
+  inherits the \texttt{sorry} with no visible cue.
+\end{itemize}
 \axfoot{sorryAx via VEnv.WF.patsStrong; Classical.choice, Quot.sound, propext}
-\reviewnote{The coercion is the delivery mechanism for the gap: a reader supplying
-\texttt{henv : E.WF} where \texttt{OrderedStrong} is expected inherits the \texttt{sorry}
-with no visible cue, and the file marks this with a bare comment at
-\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{342} rather than a docstring on the instance.
-Downstream this is not hypothetical: \texttt{Verify/Primitive.lean} was rewritten from
-\texttt{Ordered} to \texttt{OrderedStrong} in 31 places on this branch (it had none on
-master), and \texttt{Verify/Environment/Primitive/*} uses \texttt{ctx.Ewf.orderedStrong}
-throughout.}
 \end{theorem}
 \begin{proof}
 \uses{thm:wf-ordered, thm:wf-strong, thm:wf-patsstrong, struct:orderedstrong}
 \leanok
-Bundle \ref{thm:wf-ordered}, \ref{thm:wf-strong} applied to \ref{thm:wf-patsstrong}, and
-\ref{thm:wf-patsstrong} instantiated at the identity prefix and extension
-(\texttt{.rfl .rfl .rfl rfl rfl}). The proof term is complete; only
-\ref{thm:wf-patsstrong} is missing.
+\lead{Idea} Bundle \ref{thm:wf-ordered} and \ref{thm:wf-strong} applied to
+\ref{thm:wf-patsstrong}, itself at the identity prefix; only \ref{thm:wf-patsstrong} is
+missing.
 \end{proof}
 
 \section{Definitional inversion}
+
+Two long-open principles, needed by \ref{thm:wf-patsstrong}.
 
 \begin{lemma}[Definitional inversion (open)]
 \label{thm:injectivity-open}
@@ -1116,20 +1045,19 @@ Bundle \ref{thm:wf-ordered}, \ref{thm:wf-strong} applied to \ref{thm:wf-patsstro
 \leanok
 \uses{def:hastype-istype, def:venv-wf, def:hastypestratified, def:onctx}
 \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{11}
-Three principles, all admitted, over a well-formed environment and a well-formed context:
-two definitionally equal sorts have equivalent levels; two definitionally equal $\Pi$-types
-have definitionally equal domains and codomains, stated for the stratified judgment
-\texttt{HasTypeStratified} and returning stratified derivations for the components; and a
-sort is never definitionally equal to a $\Pi$-type.
 \thesisref{unique.tex Theorem (Definitional inversion) thm:1dinv items 1--3; soundness.tex ``Type injectivity''}
+
+\lead{In short} Over a well-formed environment and context: \hl{sorts and $\Pi$-types are
+injective} under definitional equality.
+\begin{itemize}
+\item Equal sorts have equivalent levels; equal $\Pi$-types have equal domains/codomains
+  (for the stratified \texttt{HasTypeStratified}); a sort is never equal to a $\Pi$-type.
+\end{itemize}
 \axfoot{sorryAx (all three are sorry), Quot.sound, propext}
 \end{lemma}
 \begin{proof}
-\textbf{Not proved in Lean.} Three literal \texttt{sorry}s; the file header calls them ``a
-bunch of important structural theorems which we can't prove''. They are pre-existing master
-holes, not contributed, but they are what the docstring of \ref{thm:wf-patsstrong} names as
-the missing ingredient, so the iota branch's open obligation sits on top of an already open
-foundation.
+\stSorry{} \lead{Missing} All three proofs; pre-existing upstream holes, not contributed, and
+the ingredient \ref{thm:wf-patsstrong} names as missing.
 \end{proof}
 
 \begin{lemma}[$\Pi$-injectivity for the unstratified judgment]
@@ -1138,172 +1066,37 @@ foundation.
 \leanok
 \uses{def:hastype-istype, def:venv-wf, def:onctx}
 \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{23}
-In a well-formed environment with a well-formed context, if $\forall x{:}A.\,B$ and
-$\forall x{:}A'.\,B'$ are definitionally equal then $A \equiv A'$ at some sort and
-$B \equiv B'$ at some sort in $A :: \Gamma$.
 \thesisref{unique.tex thm:1dinv item 2}
+
+\lead{In short} In a well-formed environment with a well-formed context, equal $\Pi$-types
+$\forall x{:}A.B$, $\forall x{:}A'.B'$ have \hl{equal domains and codomains}: $A\equiv A'$
+and $B\equiv B'$ at some sort in $A::\Gamma$.
 \axfoot{sorryAx via IsDefEqU.forallE\_inv\_stratified and via IsDefEq.strong (VEnv.WF.orderedStrong, VEnv.WF.patsStrong); Classical.choice, Quot.sound, propext}
 \end{lemma}
 \begin{proof}
 \uses{thm:injectivity-open, thm:isdefeq-strong, def:hastypestratified}
 \leanok
-Strengthen the derivation with \texttt{IsDefEq.strong}, stratify both sides with
-\texttt{HasTypeStrong.stratify}, and apply the admitted
-\texttt{forallE\_inv\_stratified}. The proof term is real, but it depends on an admitted
-lemma. The file is byte-identical to master; what changed underneath it is
-\texttt{IsDefEq.strong}, whose environment hypothesis went from \texttt{Ordered} to
-\texttt{OrderedStrong} on the \texttt{iota} branch, so this untouched master proof silently
-acquired a second, independent gap, \ref{thm:wf-patsstrong}.
+\lead{Idea} Strengthen via \texttt{IsDefEq.strong}, stratify, apply the admitted
+\texttt{forallE\_inv\_stratified}. Byte-identical to upstream; \texttt{IsDefEq.strong}'s
+environment hypothesis moved to \texttt{OrderedStrong}, so this proof now carries a second,
+independent gap.
 \end{proof}
 
-\section{Contribution summary}
-
-Everything contributed in this group belongs to the \texttt{iota} branch (381 lines);
-\texttt{trproj} does not touch it. The contribution has three layers.
-
-\emph{The rule and its admissibility condition.} \ref{rule:isdefeq-pat} adds the schematic
-ι rule to the judgment, and \ref{def:pattyped} and \ref{def:patwf} say when a rule may be
-registered, with \ref{def:ordered} gaining the corresponding \texttt{pat} constructor. The
-split into a typing condition and a shape condition is the good idea here: because
-\texttt{TemplateHeaded} is monotone (\ref{fam:patwf-mono}) and is recovered from the
-environment by \ref{thm:ordered-patwf}, the sort and $\Pi$ inversion lemmas
-(\ref{thm:isdefeq-sort-inv}, \ref{thm:isdefeq-foralle-inv}) survive the new rule with a
-one-line case each, instead of requiring the open $\Pi$-injectivity of
-\ref{thm:injectivity-open}.
-
-\emph{The induction cases.} Nine inductions over \texttt{IsDefEq} gained a \texttt{pat} case
-(\ref{thm:isdefeq-closedn}, \ref{thm:isdefeq-mono}, \ref{thm:isdefeq-levelwf},
-\ref{thm:isdefeq-weakn}, \ref{thm:isdefeq-instl}, \ref{thm:isdefeq-instn},
-\ref{thm:isdefeq-foralle-inv}, \ref{thm:isdefeq-sort-inv} and \ref{thm:isdefeq-istype}), and
-three inductions over \texttt{Ordered} gained a one-line one (\ref{thm:ordered-induction} and
-the two lemmas of \ref{fam:ordered-entrywf}). They are uniform, one to six lines each, and no
-master lemma gained a hypothesis. Each rests on a transport lemma for patterns
-(\texttt{liftN\_apply}, \texttt{instN\_apply}, \texttt{instL\_apply} and the
-\texttt{Check.Realizes.map\_*} family) proved in Chapter \ref{chap:inductive}.
-
-\emph{The bootstrap.} \ref{def:wfprefix}, \ref{thm:wfprefix-trans}, \ref{thm:vdecl-wf-le},
-\ref{def:patsstrong} and the five \texttt{*\_strong} lemmas
-(\ref{thm:foldlm-addconst-strong}, \ref{thm:adddefeqs-strong}, \ref{thm:addrules-strong},
-\ref{thm:addquot-strong}, \ref{thm:addinduct-strong}) rebuild the entry point into the strong
-system of Chapter \ref{chap:metatheory} from \texttt{VEnv.WF} rather than from
-\texttt{Ordered}, ending at \ref{thm:wf-strong} and \ref{thm:wf-orderedstrong}.
-\ref{thm:addquot-chain} exists to serve \ref{thm:addquot-strong}. The rewrite costs about
-200 lines where master needed twelve, and the cost is intrinsic: \texttt{PatsStrong} is not a
-property \ref{thm:ordered-induction} can carry, because \texttt{OnTypes}
-(\ref{def:ontypes}) says nothing about registered rules.
-
-What remains open is one statement, \ref{thm:wf-patsstrong}, and it is the statement the
-thesis calls easy. Until it is proved, every theorem in this repository that assumes
-\texttt{VEnv.WF} and uses the strong system is conditional on it. The honest framing is that
-master had left the inductive layer unspecified (\texttt{VInductDecl.WF} and
-\texttt{VEnv.addInduct} were \texttt{sorry}-ed definitions and \texttt{addInduct\_WF} a
-\texttt{sorry}-ed theorem), and the branch trades those for a real specification plus one
-open lemma; that is a good trade, but the resulting hole is wider than any it replaced.
-
-\section{Review notes}
+\section*{Caveats}
 
 \begin{itemize}
-\item \textbf{High.} \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}:
-\texttt{VEnv.WF.patsStrong} is \texttt{sorry}. Combined with the
-\texttt{CoeOut (VEnv.WF E) E.OrderedStrong} instance at line 343, every \texttt{VEnv.WF}
-hypothesis silently yields the strong-system hypotheses, so the entire strong system and the
-whole \texttt{Verify/} typechecker-correctness layer become conditional on it
-(\texttt{Verify/Primitive.lean} alone mentions \texttt{OrderedStrong} or
-\texttt{orderedStrong} in 30 places added on this branch; it had none on master). On master
-the corresponding entry point, \texttt{Ordered.strong}, was a proved theorem in a
-\texttt{sorry}-free file.
-\item \textbf{High.} \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{60}: \texttt{IsDefEq.pat}
-asserts the reduct at the redex's type with no typing premise on the reduct, that is, it
-builds subject reduction for ι into the judgment. The author's own counterexample
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{327}) shows the assumption is false over a
-merely \texttt{Ordered} environment, so every lemma of \texttt{Lemmas.lean} proved under
-\texttt{Ordered} characterises a relation that may be strictly larger than the thesis's. The
-strong system's \texttt{IsDefEqStrong.pat}
-(\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{89}) has the correct shape. Any claim of the
-form ``lean4lean proves $X$ about \texttt{IsDefEq}'' must be qualified by
-\texttt{VEnv.WF.patsStrong}.
-\item \textbf{High (pre-existing, master).}
-\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{11}: the three inversion principles of
-\ref{thm:injectivity-open} are \texttt{sorry} and the whole file is nothing else. They are
-what a proof of \texttt{patsStrong} is said to need, so the iota branch's open obligation
-rests on an already open foundation, and \ref{thm:foralle-inv-derived} now carries two
-independent gaps.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{92}:
-\texttt{VEnv.PatTyped} is existential in $U$, $\Gamma$, $e$, $m_2$ and $B$, and
-\texttt{Pattern.RHS.Generic} constrains only the holes the reduct \emph{uses}; the index
-arguments and the constructor's copy of the parameters are arbitrary terms over $\Gamma$. So
-\texttt{PatWF}, and hence \texttt{Ordered.pat}, admits a rule that typechecks only at one
-convenient instantiation. The weakness is documented at
-\srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{181}, but the name promises more than the
-predicate delivers.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{62}: the
-\texttt{Pattern.Check}/\texttt{Realizes} side-condition machinery threaded through
-\texttt{IsDefEq.pat} and nine induction cases is exercised only at the trivial check. The one
-registration point, \texttt{VEnv.addRecRule} (\srcloc{Lean4Lean/Theory/Inductive.lean}{257}),
-hard-codes \texttt{Check.true} (line 264), and every lemma about it repeats that constant
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{103},
-\srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{630},
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{688}); K-like reduction, the rule that
-would need a definitional side condition, is explicitly not modelled
-(\srcloc{Lean4Lean/Theory/Inductive.lean}{332}). Seven lemmas around
-\texttt{Check.OK}/\texttt{Check.Realizes} (\texttt{OK.map}, \texttt{Realizes.toOK},
-\texttt{OK.exists\_realizer}, \texttt{map\_liftN}, \texttt{map\_instN}, \texttt{map\_instL},
-\texttt{map\_subst}) and one premise per induction case support a side condition that no
-registered rule yet uses.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{130}:
-\texttt{VEnv.PatsStrong} is a six-hypothesis statement with both environments explicit,
-making all eight call sites read \texttt{hp \_ \_ hpre₀ .rfl \dots rfl rfl hord} (lines 279,
-282, 291, 293, 305, 308, 316, 319) and forcing the \texttt{*\_strong} lemmas to repeat the same
-$\le$/\texttt{defeqs}/\texttt{pats} composition three or four times. A single named relation
-with implicit environments would materially shorten lines 137--321. Since the statement is
-only ever discharged by \texttt{sorry}, it is also unverified that it is provable in this
-generality.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{188}:
-\texttt{addQuot\_strong} hand-unrolls \texttt{addQuot}'s five steps into about 25 lines of
-explicit \texttt{.trans} chains. Correct but brittle: any change to the quotient block
-requires editing every chain. It cannot reuse \texttt{foldlM\_addConst\_strong} only because
-\texttt{addQuot} is written as an \texttt{Option} bind chain rather than a fold.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{19}:
-\texttt{addQuot\_chain} re-derives, through the same \texttt{type\_tac} invocations, the four
-quotient-constant typings that \texttt{addQuot\_WF} (line 7) already establishes. The two
-proofs duplicate each other; \texttt{addQuot\_WF} could be a short corollary of
-\texttt{addQuot\_chain}.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{58}: the docstring of
-\texttt{IsDefEq.pat} cites \texttt{Params.pat\_wf} unqualified and forward. The intended
-declaration is the class field \texttt{Lean4Lean.VEnv.Params.pat\_wf}
-(\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{20}), in a module that imports
-\texttt{Basic.lean} and so is not in scope there, and an unrelated
-\texttt{Lean4Lean.Params.pat\_wf} exists in \srcloc{Lean4Lean/Experimental/SExpr.lean}{30}.
-Minor, but this docstring is the main explanation of the branch's central design decision.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{7}: the quotient
-computation rule is registered as a \texttt{VDefEq} (a $\delta$ rule on closed terms) rather
-than as a \texttt{pats} entry, although the thesis classifies it as an ι rule. The
-asymmetry is invisible in this chapter but is part of what a proof of
-\ref{thm:wf-patsstrong} must handle, since a well-formed prefix carries it.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{267}: \texttt{OnTypes} says
-nothing about \texttt{pats}, so \ref{thm:ordered-induction} propagates nothing about
-registered rules. This is not a defect but it is the structural cause of the 200-line
-rewrite in \texttt{EnvLemmas.lean}, and it is worth recording that a \texttt{pats}-aware
-\texttt{OnTypes} was not attempted.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{323}: the route a proof
-of \texttt{patsStrong} would take should be checked for circularity before it is attempted.
-\texttt{ChurchRosser.Params} requires \texttt{VEnv.WF} and
-\texttt{InductiveParams.toParams} builds it from \texttt{VEnv.WF.pat\_*} facts; as of this
-branch \texttt{ChurchRosser.lean} does not mention \texttt{OrderedStrong}, so the route looks
-open rather than circular, but nothing records that check.
-\item \textbf{Low (master).} \srcloc{Lean4Lean/Theory/Typing/Meta.lean}{37}:
-\texttt{type\_tac} is a brute-force \texttt{first} chain carrying its own TODO (``write an
-actual tactic''). Master ran it on the five closed terms of the quotient block; the branch
-made it markedly more load-bearing, adding six call sites in \ref{thm:addquot-chain} (which
-re-runs it over the goals \ref{thm:addquot-wf} already closes) and a hundred in the
-contributed \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1}, where it builds the
-\texttt{TrExprS} derivations for the four quotient constant types.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{23}:
-\texttt{IsDefEqU.forallE\_inv} is byte-identical to master (the whole file is), yet it now
-carries a second, independent \texttt{sorry} source. Its proof calls
-\texttt{IsDefEq.strong}, whose environment hypothesis the branch changed from
-\texttt{Ordered} to \texttt{OrderedStrong}
-(\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{805}); the \texttt{CoeOut} instance supplies
-the difference from \ref{thm:wf-patsstrong} without a visible change at the call site. This
-is the propagation mechanism of the first item, observed on an unmodified master proof.
+\item \texttt{VEnv.WF.patsStrong} (\ref{thm:wf-patsstrong}) is \texttt{sorry}: every
+  \texttt{VEnv.WF} hypothesis silently inherits it via the \texttt{CoeOut} to
+  \texttt{OrderedStrong} (\ref{thm:wf-orderedstrong}).
+\item \ref{rule:isdefeq-pat} builds subject reduction for $\iota$ into the judgment itself;
+  false over a merely \texttt{Ordered} environment.
+\item The three principles of \ref{thm:injectivity-open} are \texttt{sorry} (pre-existing);
+  a proof of \ref{thm:wf-patsstrong} needs them.
+\item \texttt{PatTyped} (\ref{def:pattyped}) is existential and constrains only the holes a
+  reduct uses: a rule can be well-formed at one convenient instantiation.
+\item The \texttt{Check}/\texttt{Realizes} side-condition machinery is exercised only at the
+  trivial check; no registered rule yet uses a nontrivial one.
+\item \texttt{addQuot\_strong} (\ref{thm:addquot-strong}) hand-unrolls five steps rather than
+  reusing \ref{thm:foldlm-addconst-strong}, since \texttt{addQuot} is a bind chain, not a
+  fold.
 \end{itemize}

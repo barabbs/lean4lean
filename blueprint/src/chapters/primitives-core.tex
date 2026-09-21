@@ -1,1797 +1,1329 @@
 \chapter{Primitive operations: core}
 \label{chap:primitives-core}
 
-Lean's kernel does not evaluate \texttt{Nat.add} by unfolding its recursive definition: it
-recognises a fixed list of definitions by name and shape and then computes them with GMP. That
-acceleration is sound only if the definition the kernel recognised really denotes the arithmetic
-operation it substitutes. This chapter is the verification of that recognition, up to but not
-including the eighteen per-primitive branches, which are Chapter~\ref{chap:primitives-arith}.
+\section*{At a glance}
+\begin{itemize}
+\item \lead{Goal} Verify the kernel's recognition of GMP-accelerated primitives, short of the
+eighteen per-primitive branches (Chapter~\ref{chap:primitives-arith}).
+\item \lead{Where} \texttt{Primitive.checkDef} (\srcloc{Lean4Lean/Primitive.lean}{561}) matches a
+name and type syntactically, then runs \texttt{isDefEq} on the definition's \hl{value}: open
+equations such as $f\,x\,0 \equiv x$. This chapter closes those into $\mathsf{Reflects}$
+statements and transports them onto the constant. Notation: $\Gamma \vdash e : A$ is
+\texttt{VEnv.HasType}, $\equiv$ is the type-erased \texttt{VEnv.IsDefEqU}, $\overline{k}$ is
+\texttt{VExpr.natLit k}, and a universe count $U$ is omitted when $0$.
+\item \lead{Main results} Theorem~\ref{vpc:thm:reflects-toconst} carries a value's reflection onto
+its constant; Theorem~\ref{vpc:thm:unfoldnatwf} discharges well-founded recursion;
+Theorem~\ref{vpc:thm:checkdef-wf} is the boundary the declaration checker consumes.
+\item \lead{Status} \stProved{} the closed vocabulary with no \texttt{axfoot} (telescopes,
+\texttt{ArgsTyped}, \texttt{addDefEq}'s equation); \stTainted{} the reflection schemas and every
+node past \ref{vpc:thm:prim-trnat-trbool}, through the admitted \texttt{VEnv.WF.patsStrong} and
+through \texttt{IsDefEq.uniq}, including \texttt{checkDef.WF} itself and every
+\texttt{PrimitiveResult}.
+\item \lead{Lean files} \texttt{Lean4Lean/Verify/Primitive.lean},
+\texttt{Lean4Lean/Verify/Environment/Primitive/Basic.lean},
+\texttt{Lean4Lean/Verify/Environment/Primitive/Recursion.lean},
+\texttt{Lean4Lean/Verify/Environment/Primitive.lean}.
+\item \lead{Thesis} No counterpart: Carneiro's system has no GMP-accelerated primitives.
+Individual nodes cite Weakening, Regularity, definitional inversion, and the beta/delta rules
+where they ground a step; a node with no \texttt{Thesis} line has none.
+\end{itemize}
 
-The recogniser itself (\texttt{Primitive.checkDef},
-\srcloc{Lean4Lean/Primitive.lean}{561}) does dispatch on the definition's name and compares its
-type syntactically, but nothing about its \emph{meaning} is read off the name. It opens probe
-variables with \texttt{withLocalDecl} and runs \texttt{isDefEq} tests on the definition's
-\emph{value}: for \texttt{Nat.add} it checks
-$f\,x\,0 \equiv x$ in context $[\mathtt{nat}]$ and
-$f\,x\,(\mathtt{succ}\,y) \equiv \mathtt{succ}\,(f\,x\,y)$ in context
-$[\mathtt{nat},\mathtt{nat}]$, both as \emph{open} equations. The four files of this chapter turn
-those open equations into the closed $\mathsf{Reflects}$ statements that
-$\mathsf{HasPrimitives}$ records, and transport them from the value onto the constant that
-\texttt{addDefEq} introduces; every statement below the transfer is about that value as an
-opaque \texttt{VExpr} and mentions no constant at all.
-
-The files are
-\srcloc{Lean4Lean/Verify/Primitive.lean}{1} (595 lines; the reflection schemas and the
-value-to-constant transfer),
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1} (1399 lines; the vocabulary every
-branch shares: telescope combinators, ground judgements, the per-branch \texttt{Data} record and
-the \texttt{PrimitiveResult} obligation),
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{1} (1775 lines; the
-well-founded-recursion recogniser, whose only two callers are \texttt{Nat.gcd}
-(\srcloc{Lean4Lean/Primitive.lean}{373}) and \texttt{Nat.bitwise}
-(\srcloc{Lean4Lean/Primitive.lean}{412}); \texttt{Nat.div} and \texttt{Nat.mod} use the fuel
-recursion of \texttt{Basic.lean} instead), and
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{1} (195 lines; the verification boundary
-\texttt{checkDef.WF}, consumed at \srcloc{Lean4Lean/Verify/Environment/Checker.lean}{201}, plus a
-pre-staged specification of the recogniser's inductive clause).
-
-There is no thesis counterpart for the subject matter: Carneiro's system has no GMP-accelerated
-primitives, and \texttt{Verify/} as a whole formalises no part of the thesis. The points of
-contact are ambient only, and they are cited node by node below: the $\delta$ rule and the
-conservativity of definitions (\texttt{axioms.tex}, Definitions), Regularity, Weakening and the
-properties of substitution (\texttt{typesys.tex}), and unique typing with definitional inversion
-(\texttt{unique.tex}). A node below that carries no thesis-correspondence line has no
-counterpart at all. In blueprint terms this chapter is an \emph{extension} of the thesis, not
-a formalisation of it: it discharges obligations the real kernel incurs that the thesis's system
-does not have.
-
-Of the 3964 lines in these four files, 3888 are master. The contributed delta is 71 lines on
-\texttt{iota} and 5 on \texttt{trproj}, and it is a single mechanical edit: twenty-seven
-declarations changed an \texttt{env.Ordered} hypothesis to \texttt{env.OrderedStrong}, forty-five
-call sites changed \texttt{x.ordered} to \texttt{x.orderedStrong}, one body line at
-\srcloc{Lean4Lean/Verify/Primitive.lean}{80} became \texttt{henv.ordered.constWF} because
-\texttt{OrderedStrong} is a structure over \texttt{Ordered}, and the five \texttt{trproj} lines
-re-wrap one signature and one call site that the \texttt{iota} edit had pushed past 100 columns.
-No statement about primitives changed and no proof was weakened. What did change is the trust
-boundary: \texttt{OrderedStrong} is obtained from \texttt{VEnv.WF} only through
-\texttt{VEnv.WF.orderedStrong}, which is built on the admitted \texttt{VEnv.WF.patsStrong}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}), so this layer now depends on the
-$\iota$ contribution's open obligation, and nineteen declarations in these files that were
-\texttt{sorryAx}-free before the branch are not any more. That dependency, and the fact that the
-edit was applied uniformly rather than minimally, are the two review points of the chapter; see
-Section~\ref{sec:vpc-contribution} and Section~\ref{sec:vpc-review}.
-
-The master code these files consist of is of high quality. Its docstrings routinely say why an
-interface has the shape it has and what the recogniser does \emph{not} check, the statements are
-the right ones (reflections are proved about the opaque value and only then moved onto the
-constant; \texttt{PrimitiveResult} quantifies over well-formed extensions so the recogniser's
-syntax stays out of the metatheory; the well-founded recursion's caller obligation is restricted
-to smaller measures, so it is the real termination argument). The weak points are all
-pre-existing: one 1135-line tactic proof, a syntactic guard on the measure that is a hypothesis
-rather than a check, and roughly 120 dead lines in
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{73}.
-
-\begin{remark}
-Notation. $\Gamma \vdash e : A$ is \texttt{VEnv.HasType}, $\Gamma \vdash e \equiv e'$ is the
-type-erased \texttt{VEnv.IsDefEqU} (the typed form carries its type explicitly), and
-$\overline{k}$ is the model numeral \texttt{VExpr.natLit k}, that is $k$ applications of
-\texttt{Nat.succ} to \texttt{Nat.zero}. All judgements are relative to a universe-parameter count
-$U$, suppressed when it is $0$. Throughout, \texttt{HasPrimitives} is the invariant recording,
-for each reserved name, what the model assumes about it; it is a fact about the \emph{empty}
-context, which is why so much of this chapter is about weakening it to a context of interest and
-back.
-\end{remark}
+\par\smallskip\noindent
+\begin{tabular}{p{0.28\linewidth}p{0.52\linewidth}l}
+\toprule
+Operation & Specification & Status\\
+\midrule
+\texttt{Nat.add}, \texttt{Nat.sub} & unary step, Theorem~\ref{vpc:thm:reflects-unary-step} & \stTainted{}\\
+\texttt{Nat.mul}, \texttt{Nat.pow} & binary step, Theorem~\ref{vpc:thm:reflects-binary-step} & \stTainted{}\\
+\texttt{Nat.shiftLeft} & first-argument step, Lemma~\ref{vpc:thm:reflects-first-arg-step} & \stTainted{}\\
+\texttt{Nat.beq}, \texttt{Nat.ble} & four constructor cases, Lemma~\ref{vpc:thm:reflects-ctor-cases} & \stTainted{}\\
+\texttt{Nat.land}, \texttt{Nat.lor}, \texttt{Nat.xor} & boolean operator cases, Lemma~\ref{vpc:thm:reflects-bool-cases} & \stTainted{}\\
+\texttt{Nat.pred} & two probed equations, Lemma~\ref{vpc:thm:reflects-pred-eqns} & \stTainted{}\\
+\texttt{Nat.div}, \texttt{Nat.mod} & fuel recursion, Theorem~\ref{vpc:thm:natfuelrec} & \stProved{}\\
+\texttt{Nat.gcd} & well-founded recursion, Theorem~\ref{vpc:thm:unfoldnatwf} & \stProved{}\\
+\texttt{Nat.bitwise} & well-founded recursion, higher-order obligation, Theorem~\ref{vpc:thm:data-mkresultbitwise} & \stTainted{}\\
+\texttt{Char.ofNat} & recorded type only, Theorem~\ref{vpc:thm:data-mkresult} & \stProved{}\\
+\bottomrule
+\end{tabular}\par\smallskip
 
 \section{Reflection for the primitive definitions}
 
-This section covers \srcloc{Lean4Lean/Verify/Primitive.lean}{1}. It first restates the
-\texttt{HasPrimitives} facts in the forms the recurrence proofs consume, then proves the five
-recurrence schemas, then carries a reflection of the value onto the constant.
+This section covers \srcloc{Lean4Lean/Verify/Primitive.lean}{1}: closed-context typing facts, the
+five recurrence schemas, and the transfer from value to constant.
 
 \begin{lemma}[Numerals are closed]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{90}
 \label{vpc:lem:prim-closedn-natlit}\lean{Lean4Lean.VExpr.closedN_natLit}\leanok
-The model numeral $\overline{n}$ is \texttt{ClosedN k} at every de Bruijn depth $k$.
 \uses{def:closedn}
+\srcloc{Lean4Lean/Verify/Primitive.lean}{90}
+
+\lead{In short} The model numeral $\overline{n}$ is \texttt{ClosedN k} at every de Bruijn depth
+$k$.
 \end{lemma}
 \begin{proof}\leanok
-Induction on $n$, unfolding \texttt{VExpr.natLit}, \texttt{natZero} and \texttt{natSucc}.
+\lead{Idea} Induction on $n$, unfolding \texttt{VExpr.natLit}, \texttt{natZero} and
+\texttt{natSucc}.
 \end{proof}
 
-\begin{lemma}[Typing of the Nat/Bool constructors and numerals at an arbitrary context]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{29}
+\begin{lemma}[Nat/Bool typing at any context]
 \label{vpc:thm:prim-nat-bool-typing}
 \lean{Lean4Lean.VEnv.HasPrimitives.natZeroT, Lean4Lean.VEnv.HasPrimitives.natSuccT, Lean4Lean.VEnv.HasPrimitives.natPredT, Lean4Lean.VEnv.HasPrimitives.natLitT, Lean4Lean.VEnv.HasPrimitives.boolLitT, Lean4Lean.VEnv.HasPrimitives.natIsType, Lean4Lean.VEnv.HasPrimitives.boolIsType}\leanok
-Seven wrappers, all assuming \texttt{env.OrderedStrong}, \texttt{env.HasPrimitives} and the
-relevant containment. For \emph{any} context $\Gamma$:
-$\Gamma \vdash \mathtt{Nat.zero} : \mathtt{nat}$,
-$\Gamma \vdash \mathtt{Nat.succ} : \mathtt{nat} \to \mathtt{nat}$,
-$\Gamma \vdash \mathtt{Nat.pred} : \mathtt{nat} \to \mathtt{nat}$ (given
-\texttt{contains Nat.pred}),
-$\Gamma \vdash \overline{k} : \mathtt{nat}$ at every universe count $U$, and
-$\Gamma \vdash \mathtt{boolLit}\ b : \mathtt{bool}$; and $\mathtt{nat}$, $\mathtt{bool}$ are
-types in the context of any well-formed \texttt{VLCtx}. These are the closed-context facts
-\texttt{HasPrimitives} records, weakened to $\Gamma$, which is the form every proof below uses.
 \uses{family:hasprimitives-accessors}
-\thesisref{no direct counterpart; the ambient facts are Weakening and Regularity, typesys.tex thm:weak and thm:reg}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{29}
+\thesisref{Weakening and Regularity, typesys.tex thm:weak, thm:reg.}
+
+\lead{In short} Seven wrappers, assuming \texttt{env.OrderedStrong}, moving
+\texttt{HasPrimitives}'s closed-context facts to an \hl{arbitrary context} $\Gamma$: the form
+every proof below uses.
+\begin{itemize}
+\item $\Gamma \vdash \mathtt{Nat.zero} : \mathtt{nat}$, $\Gamma \vdash \mathtt{Nat.succ} :
+\mathtt{nat} \to \mathtt{nat}$, $\Gamma \vdash \mathtt{Nat.pred} : \mathtt{nat} \to \mathtt{nat}$
+(given containment), $\Gamma \vdash \overline{k} : \mathtt{nat}$ at any $U$, and $\Gamma \vdash
+\mathtt{boolLit}\ b : \mathtt{bool}$;
+\item $\mathtt{nat}$ and $\mathtt{bool}$ are types in any well-formed \texttt{VLCtx}.
+\end{itemize}
 \end{lemma}
 \begin{proof}\leanok
 \uses{family:trexprs-literals, thm:isdefeq-istype}
-Each is the corresponding \texttt{TrExprS.natZero}, \texttt{.natSucc}, \texttt{.natLit} or
-\texttt{.boolLit} fact taken at the empty level context and the empty local context and pushed to
-$\Gamma$ by \texttt{VEnv.HasType.weak0}; the two \texttt{IsType} members instead take
-\texttt{IsDefEq.isType} of the corresponding constructor typing. \texttt{natLitT} additionally
-instantiates the universe with \texttt{instL} at the empty level list, rewriting by
-\texttt{VExpr.instL\_natLit}, and \texttt{natPredT} reads its typing off the
-\texttt{HasPrimitives.natPred} clause rather than off a translation.
+\lead{Idea} Each is the corresponding \texttt{TrExprS} literal rule at the empty context, pushed
+to $\Gamma$ by \texttt{HasType.weak0}; the two \texttt{IsType} members take
+\texttt{IsDefEq.isType} of the constructor typing instead.
 \end{proof}
-\begin{remark}
-The \texttt{iota} branch changed \texttt{henv : env.Ordered} to \texttt{henv : env.OrderedStrong}
-in all seven. None of them needs it: their bodies invoke only \texttt{HasType.weak0}
-(\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{610}) and \texttt{IsDefEq.isType}
-(\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{945}), both of which still take \texttt{Ordered}.
-Because \texttt{OrderedStrong} is here a \emph{hypothesis} rather than something derived, these
-seven statements are still free of \texttt{sorryAx}; the cost is paid by every caller that has
-only \texttt{VEnv.WF} and must go through \texttt{VEnv.WF.orderedStrong}.
-\end{remark}
 
-\begin{lemma}[Recovering presence of Nat and Bool from a primitive's recorded type]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{47}
+\begin{lemma}[Nat/Bool containment from a recorded type]
 \label{vpc:thm:prim-contains-nat}
 \lean{Lean4Lean.VEnv.contains_nat_of_hasType, Lean4Lean.VEnv.HasPrimitives.natOfPred, Lean4Lean.VEnv.HasPrimitives.natOfAdd, Lean4Lean.VEnv.HasPrimitives.natOfMul, Lean4Lean.VEnv.HasPrimitives.natOfDiv, Lean4Lean.VEnv.HasPrimitives.natOfMod, Lean4Lean.VEnv.HasPrimitives.boolOfBitwise}\leanok
-If $\vdash e : \mathtt{nat} \to A$ at the empty context then \texttt{Nat} is in the environment.
-Hence a branch that guarded only on \texttt{Nat.pred}, \texttt{Nat.add}, \texttt{Nat.mul},
-\texttt{Nat.div} or \texttt{Nat.mod} still learns that \texttt{Nat} is present, reading the
-typing clause off that primitive's own reflection. Dually, \texttt{Nat.bitwise}'s recorded type
-mentions \texttt{Bool}, so a guard on \texttt{Nat.bitwise} alone yields presence of \texttt{Bool},
-which is how \texttt{Nat.land}, \texttt{Nat.lor} and \texttt{Nat.xor} obtain it.
 \uses{family:hasprimitives-accessors}
-\thesisref{Regularity (typesys.tex thm:reg) plus definitional inversion (unique.tex thm:1dinv), specialised to the Pi former}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{47}
+\thesisref{Regularity, definitional inversion; typesys.tex thm:reg, unique.tex thm:1dinv.}
+
+\lead{In short} If $\vdash e : \mathtt{nat} \to A$ at the empty context, \texttt{Nat} is in the
+environment.
+\begin{itemize}
+\item \lead{Given} a branch guarded only on \texttt{Nat.pred}, \texttt{Nat.add}, \texttt{Nat.mul},
+\texttt{Nat.div} or \texttt{Nat.mod};
+\item \lead{Then} it still learns \texttt{Nat} is present, from that primitive's own reflection;
+dually a guard on \texttt{Nat.bitwise} alone yields \texttt{Bool}, which is how
+\texttt{Nat.land}, \texttt{Nat.lor} and \texttt{Nat.xor} obtain it.
+\end{itemize}
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, thm:isdefeq-foralle-inv, thm:isdefeq-istype, fam:ordered-entrywf}
-Take \texttt{isType} of the hypothesis, invert the $\Pi$ with \texttt{IsType.forallE\_inv}, and
-read the head constant off the domain with \texttt{HasType.const\_inv}.
-\texttt{boolOfBitwise} first replaces the recorded type by the one the spec prescribes, using
-\texttt{HasPrimitives.natBitwise} and \texttt{Ordered.constWF}, and then peels two $\Pi$s.
+\lead{Idea} Take \texttt{isType} of the hypothesis, invert the $\Pi$ with
+\texttt{IsType.forallE\_inv}, and read the head constant off the domain with
+\texttt{HasType.const\_inv}. \texttt{boolOfBitwise} first replaces the recorded type using
+\texttt{HasPrimitives.natBitwise}, then peels two $\Pi$s.
 \end{proof}
-\begin{remark}
-All seven genuinely need \texttt{OrderedStrong}: \texttt{contains\_nat\_of\_hasType} and
-\texttt{boolOfBitwise} directly, through \texttt{HasType.const\_inv}
-(\srcloc{Lean4Lean/Theory/Typing/Strong.lean}{915}), which moved to \texttt{OrderedStrong} on the
-\texttt{iota} branch, and the five \texttt{natOf*} wrappers through
-\texttt{contains\_nat\_of\_hasType}. The one non-signature edit in the file, \texttt{henv.constWF}
-becoming \texttt{henv.ordered.constWF} at \srcloc{Lean4Lean/Verify/Primitive.lean}{80}, is
-faithful.
-\end{remark}
 
 \begin{lemma}[The fixed measure lambda evaluates at ground arguments]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{96}
 \label{vpc:lem:prim-natfstlamapp}\lean{Lean4Lean.VEnv.HasPrimitives.natFstLamApp}\leanok
-In any well-formed context $\Gamma$,
-$(\lambda\, m \colon \mathtt{nat}.\ \lambda\, \_ \colon \mathtt{nat}.\ m)\ \overline{x}\ \overline{y}
- \equiv \overline{x}$. This is the measure \texttt{unfoldNatWellFounded.WF2} hands the recogniser
-for \texttt{Nat.gcd} and \texttt{Nat.bitwise}.
 \uses{vpc:thm:prim-nat-bool-typing}
-\thesisref{the beta rule, axioms.tex, The core language}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{96}
+\thesisref{The beta rule, axioms.tex, The core language.}
+
+\lead{In short} In any well-formed $\Gamma$, $(\lambda\, m.\ \lambda\, \_.\ m)\ \overline{x}\
+\overline{y} \equiv \overline{x}$ -- the \hl{measure} \texttt{unfoldNatWellFounded.WF2} hands the
+recogniser for \texttt{Nat.gcd} and \texttt{Nat.bitwise}.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:lem:prim-closedn-natlit, thm:isdefeq-istype}
-Two \texttt{VEnv.IsDefEq.beta} steps. The first needs the inner lambda to be well typed under the
-outer binder, which is \texttt{natLitT} plus \texttt{isType}; closedness of the numerals
-(\texttt{VExpr.closedN\_natLit}) is what shows that neither the lift under the discarded binder
-nor the final instantiation moves them.
+\lead{Idea} Two \texttt{VEnv.IsDefEq.beta} steps; closedness of the numerals discards the lift and
+the final instantiation.
 \end{proof}
-\begin{remark}
-\texttt{iota} strengthened the hypothesis to \texttt{OrderedStrong}; the body uses only
-\texttt{natLitT} and \texttt{isType}, so \texttt{Ordered} would still suffice were
-\texttt{natLitT} not itself over-strengthened.
-\end{remark}
 
-\begin{lemma}[The source constants Nat and Bool translate to their model abbreviations]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{122}
+\begin{lemma}[Nat and Bool translate to their model abbreviations]
 \label{vpc:thm:prim-trnat-trbool}
 \lean{Lean4Lean.VEnv.HasPrimitives.trNat, Lean4Lean.VEnv.HasPrimitives.trBool}\leanok
-If the environment has the primitives and contains \texttt{Nat} (resp.\ \texttt{Bool}), then the
-source expression \texttt{Nat} with no universe arguments translates to the model expression
-$\mathtt{nat}$ (resp.\ \texttt{Bool} to $\mathtt{bool}$), at any level context $Us$ and any local
-context $\Delta$.
-\thesisref{constant typing, axioms.tex, Definitions (delta reduction)}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{122}
+\thesisref{Constant typing, axioms.tex, delta reduction.}
+
+\lead{In short} If the environment has the primitives and contains \texttt{Nat} (resp.\
+\texttt{Bool}), the source constant \texttt{Nat} (resp.\ \texttt{Bool}) with no universe
+arguments translates to $\mathtt{nat}$ (resp.\ $\mathtt{bool}$), at any level and local context.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:thm:prim-nat-bool-typing, fam:strong-inversions}
-From \texttt{natIsType} (resp.\ \texttt{boolIsType}) at the empty context obtain a typing of the
-constant, read the constant info and the arity off it with \texttt{HasType.const\_inv}, and
-rebuild with the \texttt{TrExprS.const} rule; the side condition that the constant has no
-universe parameters comes out of \texttt{const\_inv}.
+\lead{Idea} From \texttt{natIsType}/\texttt{boolIsType} at the empty context, read the constant
+info off \texttt{HasType.const\_inv} and rebuild with \texttt{TrExprS.const}.
 \end{proof}
-\begin{remark}
-These two are the genuine reason the file needs \texttt{OrderedStrong}, and every node above them
-in this chapter inherits it from here.
-\end{remark}
 
-\begin{lemma}[Translation of the checked unary and binary Nat arrow types]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{149}
+\begin{lemma}[Translating the checked Nat arrow types]
 \label{vpc:thm:prim-natarrow}
 \lean{Lean4Lean.TrExprS.natArrow1, Lean4Lean.TrExprS.natArrow2}\leanok
-The source types $\forall n_1 : \mathtt{Nat}.\ \mathit{cod}$ and
-$\forall n_1\,n_2 : \mathtt{Nat}.\ \mathit{cod}$, generic in the binder names, the
-\texttt{mdata} annotations and the binder info, translate to
-$\mathtt{nat} \to \mathit{cod}'$ and $\mathtt{nat} \to \mathtt{nat} \to \mathit{cod}'$, where
-$\mathit{cod}'$ is the target of the supplied codomain bundle. Genericity in \texttt{mdata} is
-what lets these serve the prelude's declarations, which are written with strict-implicit
-annotations, verbatim.
 \uses{family:trterm-builders}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{149}
+
+\lead{In short} $\forall n_1 : \mathtt{Nat}.\ \mathit{cod}$ and $\forall n_1\,n_2 :
+\mathtt{Nat}.\ \mathit{cod}$ -- generic in binder names, \texttt{mdata} and binder info --
+translate to $\mathtt{nat} \to \mathit{cod}'$ and $\mathtt{nat} \to \mathtt{nat} \to
+\mathit{cod}'$.
+\lead{Caveat} Genericity in \texttt{mdata} is what lets these serve the prelude's
+strict-implicit declarations verbatim.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:thm:prim-trnat-trbool, vpc:thm:prim-nat-bool-typing}
-Assemble the arrow from the \texttt{TrTy.forallE} and \texttt{TrTy.mdata} combinators over
-\texttt{trNat} and \texttt{natIsType} at each binder depth, then take \texttt{.trS}. The
-\texttt{OnCtx} obligation at depth one is built from the one at depth zero.
+\lead{Idea} Assemble the arrow from \texttt{TrTy.forallE} and \texttt{TrTy.mdata} over
+\texttt{trNat} and \texttt{natIsType} at each binder depth, then \texttt{.trS}.
 \end{proof}
 
-\begin{lemma}[Shape inversions for the translations the String/Char branches check]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{160}
+\begin{lemma}[Shape inversions for String/Char translations]
 \label{vpc:thm:prim-trexprs-shape-inv}
 \lean{Lean4Lean.TrExprS.const0_inv, Lean4Lean.TrExprS.appChar_inv, Lean4Lean.TrExprS.appChar_inv', Lean4Lean.TrExprS.listCharStringArrow_inv, Lean4Lean.TrExprS.contains_nat_of_natArrow2}\leanok
-Four inversions and one containment fact. A constant with no universe arguments translates to
-itself, and does so at any level and local context; an application $c_{\{0\}}\ \mathtt{Char}$
-translates to $c_{\{0\}}\ \mathtt{char}$, and the primed version rebuilds that translation at any
-context because both halves are closed; $\mathtt{List\ Char} \to \mathtt{String}$ translates to
-$\mathtt{listChar} \to \mathtt{string}$; and a translation of a binary \texttt{Nat} arrow already
-witnesses that \texttt{Nat} is in the environment.
 \uses{def:vlevel-oflevel}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{160}
+
+\lead{In short} Four inversions and one containment fact used by the String/Char branches: a
+universe-free constant translates to itself at any context; $c_{\{0\}}\ \mathtt{Char}$ translates
+to $c_{\{0\}}\ \mathtt{char}$ (the primed form rebuilds this at any context, both halves closed);
+$\mathtt{List\ Char} \to \mathtt{String}$ translates to $\mathtt{listChar} \to \mathtt{string}$;
+and a translated binary \texttt{Nat} arrow already witnesses \texttt{Nat}'s presence.
 \end{lemma}
 \begin{proof}\leanok
-Each is a \texttt{let}-pattern match on the \texttt{TrExprS} derivation followed by
-\texttt{simp [VLevel.ofLevel]}, which forces the level list to be empty; \texttt{appChar\_inv'}
-additionally weakens the two closed sub-typings with \texttt{HasType.weak0} before rebuilding the
-application.
+\lead{Idea} A \texttt{let}-pattern match on the \texttt{TrExprS} derivation, then
+\texttt{simp [VLevel.ofLevel]}; \texttt{appChar\_inv'} additionally weakens both closed
+sub-typings with \texttt{HasType.weak0}.
 \end{proof}
-\begin{remark}
-Only \texttt{appChar\_inv'} was touched by \texttt{iota}, and only in its \texttt{henv}
-hypothesis; its body uses \texttt{weak0}, which still takes \texttt{Ordered}, so this is another
-gratuitous strengthening.
-\end{remark}
 
-\begin{lemma}[The operator argument of Nat.bitwise is a boolean binary operator]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{210}
+\begin{lemma}[Nat.bitwise's operator is a boolean binary operator]
 \label{vpc:thm:prim-bitwise-operand}\lean{Lean4Lean.TrExprS.bitwiseOperand}\leanok
-If $\mathtt{Nat.bitwise}\ \mathit{op}$ translates to $V$ then
-$V = \mathtt{Nat.bitwise}\ \mathit{op}'$ for a translation $\mathit{op}'$ of $\mathit{op}$, and
-$\vdash \mathit{op}' : \mathtt{boolOp2}$. Nothing in the recogniser checks the operator's type,
-so it has to be read off \texttt{Nat.bitwise}'s recorded type through the application.
 \uses{family:hasprimitives-accessors}
-\thesisref{unique typing (unique.tex thm:utype) and Pi-injectivity (unique.tex thm:1dinv)}
+\srcloc{Lean4Lean/Verify/Primitive.lean}{210}
+\thesisref{Unique typing, Pi-injectivity; unique.tex thm:utype, thm:1dinv.}
+
+\lead{In short} If $\mathtt{Nat.bitwise}\ \mathit{op}$ translates to $V$, then $V =
+\mathtt{Nat.bitwise}\ \mathit{op}'$ for a translation $\mathit{op}'$, and $\vdash \mathit{op}' :
+\mathtt{boolOp2}$ -- read off the recorded type, since nothing in the recogniser checks the
+operator's own type.
+\lead{Caveat} \texttt{IsDefEqU.forallE\_inv} is \texttt{sorry}-backed, so this branch of the
+verification was never unconditional.
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:foralle-inv-derived, fam:typing-meta}
-Match the \texttt{TrExprS.app}; replace the recorded constant type by the spec's using
-\texttt{HasPrimitives.natBitwise}; then \texttt{HasType.uniqU} makes the two function types
-definitionally equal and \texttt{IsDefEqU.forallE\_inv} takes the domains apart.
+\lead{Idea} Match the application; replace the recorded type by the spec's using
+\texttt{HasPrimitives.natBitwise}; \texttt{HasType.uniqU} and \texttt{IsDefEqU.forallE\_inv} take
+the domains apart.
 \end{proof}
-\begin{remark}
-\texttt{IsDefEqU.forallE\_inv} lives in \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{23} and
-is \texttt{sorry}-backed on both branches, so this branch of the primitive verification was never
-unconditional.
-\end{remark}
 
-\begin{lemma}[Application congruence for the type-erased defeq judgement]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{244}
+\begin{lemma}[Application congruence for IsDefEqU]
 \label{vpc:lem:prim-isdefequ-app-congr}
 \lean{Lean4Lean.VEnv.IsDefEqU.appDF', Lean4Lean.VEnv.IsDefEqU.app_arg', Lean4Lean.VEnv.IsDefEqU.app_fun'}\leanok
-Congruence of $\equiv$ under application for \texttt{IsDefEqU}, which hides the type, so the two
-typings are supplied explicitly; plus the two one-sided specialisations in which only the
-argument, or only the function, moves.
-\thesisref{congruence rules, axioms.tex, The core language}
+\srcloc{Lean4Lean/Verify/Primitive.lean}{244}
+\thesisref{Congruence, axioms.tex, core language.}
+
+\lead{In short} Congruence of $\equiv$ under application for the type-hiding
+\texttt{IsDefEqU}, with the two typings supplied explicitly, plus the two one-sided
+specialisations where only the argument, or only the function, moves.
+\lead{Caveat} \texttt{IsDefEqU.of\_l} goes through the \texttt{sorry}-backed
+\texttt{IsDefEq.uniq}; every node below that chains two definitional equalities inherits it.
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:defeq-mixing}
-\texttt{IsDefEqU.of\_l} recovers the typed judgement on each side, then \texttt{IsDefEq.appDF}.
+\lead{Idea} \texttt{IsDefEqU.of\_l} recovers the typed judgement on each side, then
+\texttt{IsDefEq.appDF}.
 \end{proof}
-\begin{remark}
-\texttt{IsDefEqU.of\_l} goes through \texttt{IsDefEq.uniq}
-(\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{13}), which is backed by the \texttt{sorry}s
-of \texttt{Injectivity.lean}. Every node below that chains two definitional equalities therefore
-carried \texttt{sorryAx} already on \texttt{master}.
-\end{remark}
 
 \subsection{The recurrence schemas}
 
-Each schema is stated about an \emph{opaque} \texttt{VExpr} $f$ and mentions no constant: the
-recogniser's tests are about the definition's value, and the constant only enters afterwards
-through \texttt{congr\_head}. The hypothesis $\mathtt{hU} : U = 0$ lets a caller hand over facts
-stated at \texttt{v.levelParams.length}, which is only propositionally zero, without rewriting
-them first. All five also take \texttt{henv : env.WF}, \texttt{env.HasPrimitives} and containment
-of \texttt{Nat} (or \texttt{Bool}); the well-formedness hypothesis is where
-\texttt{VEnv.WF.orderedStrong}, and with it the $\iota$ obligation, enters, because the numeral
-typings they use now ask for \texttt{OrderedStrong}.
+Each schema is stated about an opaque \texttt{VExpr} $f$; the constant enters only afterward,
+through \texttt{congr\_head}. All five take \texttt{henv : env.WF}, \texttt{env.HasPrimitives},
+containment of \texttt{Nat} or \texttt{Bool}, and \texttt{hU : U = 0} -- the probe context's
+level count is only propositionally zero, and this hypothesis lets a caller hand over its facts
+unrewritten.
 
-\begin{theorem}[Reflection from a recurrence whose step applies a unary operation]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{273}
+\begin{theorem}[Reflection: unary-step recurrence]
 \label{vpc:thm:reflects-unary-step}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat'.of_unary_step_equations}\leanok
-Let $\vdash f : \mathtt{nat} \to \mathtt{nat} \to \mathtt{nat}$ and let $g$ be a closed unary
-operation with $\vdash g : \mathtt{nat} \to \mathtt{nat}$ evaluating as
-$g\ \overline{k} \equiv \overline{G\,k}$ for all $k$. If the checker verified the open equations
-$f\ (\mathtt{bvar}\,0)\ \mathtt{zero} \equiv \mathtt{bvar}\,0$ in $[\mathtt{nat}]$ and
-$f\ (\mathtt{bvar}\,1)\ (\mathtt{succ}\ (\mathtt{bvar}\,0)) \equiv g\ (f\ (\mathtt{bvar}\,1)\ (\mathtt{bvar}\,0))$
-in $[\mathtt{nat},\mathtt{nat}]$, and the intended meaning satisfies $F\,a\,0 = a$ and
-$F\,a\,(b+1) = G(F\,a\,b)$, then $f$ reflects $F$. This is \texttt{Nat.add} through
-\texttt{Nat.succ} and \texttt{Nat.sub} through \texttt{Nat.pred}.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{273}
+
+\lead{In short} Given $\vdash f : \mathtt{nat} \to \mathtt{nat} \to \mathtt{nat}$ and a closed
+unary $g$ evaluating as $g\ \overline{k} \equiv \overline{G\,k}$:
+\begin{itemize}
+\item \lead{Given} the checker verified $f\ (\mathtt{bvar}\,0)\ \mathtt{zero} \equiv
+\mathtt{bvar}\,0$ and $f\ (\mathtt{bvar}\,1)\ (\mathtt{succ}\ (\mathtt{bvar}\,0)) \equiv g\ (f\
+(\mathtt{bvar}\,1)\ (\mathtt{bvar}\,0))$, and $F\,a\,0 = a$, $F\,a\,(b+1) = G(F\,a\,b)$;
+\item \lead{Then} $f$ \hl{reflects} $F$.
+\end{itemize}
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{theorem}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instn, vpc:lem:prim-isdefequ-app-congr, vpc:thm:prim-nat-bool-typing, fam:defeq-mixing}
-Induction on $b$. The base case instantiates the zero equation at $\overline{a}$ with
-\texttt{IsDefEqU.instN}; the step instantiates the successor equation twice, first at
-$\overline{b}$ and then at $\overline{a}$, using closedness of $f$ (recovered by
-\texttt{HasType.closedN'}) and the assumed closedness of $g$ to discard the instantiation on
-them. The induction hypothesis is
-then chained under $g$ by \texttt{IsDefEqU.app\_arg'} and closed with $g$'s own evaluation.
+\lead{Idea} Induction on $b$: the base case instantiates the zero equation with
+\texttt{IsDefEqU.instN}; the step instantiates the successor equation twice, closedness of $f$
+and $g$ discarding the instantiations, and chains the induction hypothesis under $g$.
 \end{proof}
 
-\begin{theorem}[Reflection from a recurrence whose step applies a binary operation]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{312}
+\begin{theorem}[Reflection: binary-step recurrence]
 \label{vpc:thm:reflects-binary-step}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat'.of_binary_step_equations}\leanok
-As above, but the successor equation has the form
-$f\ x\ (\mathtt{succ}\ y) \equiv g\ (f\ x\ y)\ e$ with $g$ reflecting a binary $G$, and the zero
-equation returns an arbitrary open term $z$. Two syntactic side conditions say that the open
-right-hand sides instantiate to numerals, $z[\overline{a}] = \overline{Z(a)}$ and
-$e[\overline{b}][\overline{a}] = \overline{E(a)}$, and the meaning satisfies $F\,a\,0 = Z(a)$ and
-$F\,a\,(b+1) = G\,(F\,a\,b)\,(E\,a)$. This covers \texttt{Nat.mul} through \texttt{Nat.add} with
-base $0$ and \texttt{Nat.pow} through \texttt{Nat.mul} with base $1$.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{312}
+
+\lead{In short} As above, but the successor equation is $f\ x\ (\mathtt{succ}\ y) \equiv g\ (f\ x\
+y)\ e$ with $g$ reflecting a binary $G$, and the zero equation returns an open term $z$.
+\begin{itemize}
+\item \lead{Given} $z[\overline{a}] = \overline{Z(a)}$, $e[\overline{b}][\overline{a}] =
+\overline{E(a)}$, $F\,a\,0 = Z(a)$, $F\,a\,(b+1) = G\,(F\,a\,b)\,(E\,a)$;
+\item \lead{Then} $f$ reflects $F$.
+\end{itemize}
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{theorem}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instn, vpc:lem:prim-isdefequ-app-congr, vpc:thm:prim-nat-bool-typing}
-Induction on $b$ with two \texttt{instN} instantiations per step, as in the unary case; the
-induction hypothesis is moved under $g$ by \texttt{app\_fun'} composed with \texttt{app\_arg'},
-and the result is closed with $g$'s own reflection clause.
+\lead{Idea} Induction on $b$, two \texttt{instN} instantiations per step; the induction
+hypothesis moves under $g$ by \texttt{app\_fun'} composed with \texttt{app\_arg'}.
 \end{proof}
-\begin{remark}
-The two instantiation hypotheses are equalities of \texttt{VExpr}s rather than definitional
-equalities. That is a slightly awkward interface, but it is exactly what the branch proofs can
-produce syntactically, so the choice is defensible.
-\end{remark}
 
-\begin{lemma}[Reflection from a recurrence that changes its first argument]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{350}
+\begin{lemma}[Reflection: first-argument-step recurrence]
 \label{vpc:thm:reflects-first-arg-step}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat'.of_first_arg_step_equations}\leanok
-If the successor equation recurses with a modified first argument,
-$f\ x\ (\mathtt{succ}\ y) \equiv f\ (g\ \overline{C}\ x)\ y$ with $g$ reflecting $G$, and
-$F\,a\,0 = a$, $F\,a\,(b+1) = F\,(G\,C\,a)\,b$, then $f$ reflects $F$. This is
-\texttt{Nat.shiftLeft}, where the step doubles the first argument.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{350}
+
+\lead{In short} If the successor equation recurses on a modified first argument, $f\ x\
+(\mathtt{succ}\ y) \equiv f\ (g\ \overline{C}\ x)\ y$ with $g$ reflecting $G$, and $F\,a\,0 = a$,
+$F\,a\,(b+1) = F\,(G\,C\,a)\,b$, then $f$ reflects $F$.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instn, vpc:lem:prim-isdefequ-app-congr, vpc:thm:prim-nat-bool-typing}
-Induction on $b$ \emph{generalising the first argument}, which is what makes the changed argument
-legitimate; otherwise the same two-step \texttt{instN} pattern, with $g$'s reflection supplying
-the new first argument's value.
+\lead{Idea} Induction on $b$ generalising the first argument, otherwise the same two-step
+\texttt{instN} pattern.
 \end{proof}
 
-\begin{lemma}[Reflection of a binary Nat predicate from its four constructor cases]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{386}
+\begin{lemma}[Reflection: four constructor cases]
 \label{vpc:thm:reflects-ctor-cases}
 \lean{Lean4Lean.VEnv.ReflectsNatNatBool'.of_constructor_cases}\leanok
-Given the value of $f$ at $(0,0)$, $(0,\mathtt{succ}\,y)$ and $(\mathtt{succ}\,x,0)$ as boolean
-literals, a diagonal recursion
-$f\ (\mathtt{succ}\,x)\ (\mathtt{succ}\,y) \equiv f\ x\ y$, and the matching four equations for
-$F$, the term $f$ reflects $F$. This covers \texttt{Nat.beq} and \texttt{Nat.ble}, which differ
-only in the three constant answers.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{386}
+
+\lead{In short} Given $f$'s value at $(0,0)$, $(0,\mathtt{succ}\,y)$, $(\mathtt{succ}\,x,0)$ as
+boolean literals and a diagonal $f\ (\mathtt{succ}\,x)\ (\mathtt{succ}\,y) \equiv f\ x\ y$,
+matching the four equations for $F$, then $f$ reflects $F$.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instn, vpc:thm:prim-nat-bool-typing, fam:defeq-mixing}
-Induction on $a$ generalising $b$, then a match on $b$: four cases. The $(0,0)$ case is the
-closed probed equation verbatim, the two mixed cases are one \texttt{instN} of the corresponding
-probed equation each, and the diagonal case is two instantiations followed by the induction
-hypothesis.
+\lead{Idea} Induction on $a$ generalising $b$, then a four-way case split on $b$: the $(0,0)$ case
+is the probed equation verbatim, the mixed cases one \texttt{instN} each, the diagonal case two
+instantiations then the induction hypothesis.
 \end{proof}
 
-\begin{lemma}[Reflection of a boolean binary operator]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{429}
+\begin{lemma}[Reflection: boolean binary operator]
 \label{vpc:thm:reflects-bool-cases}
 \lean{Lean4Lean.VEnv.ReflectsBoolBoolBool'.of_left_cases, Lean4Lean.VEnv.ReflectsBoolBoolBool'.of_closed_cases}\leanok
-Two ways a term of type $\mathtt{boolOp2}$ acquires its reflection: from two open equations at
-$\mathtt{false}$ and $\mathtt{true}$ in the first argument whose right-hand sides instantiate to
-literals (\texttt{Nat.land}, \texttt{Nat.lor}), or from all four closed combinations at once
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{429}
+
+\lead{In short} Two ways a \texttt{boolOp2} term acquires its reflection: from two open equations
+at \texttt{false}/\texttt{true} in the first argument whose right-hand sides are literals
+(\texttt{Nat.land}, \texttt{Nat.lor}), or from all four closed combinations at once
 (\texttt{Nat.xor}).
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instn, vpc:thm:prim-nat-bool-typing}
-\texttt{of\_left\_cases} instantiates each equation with \texttt{instN} at the boolean literal,
-discarding the instantiation on $f$ by its assumed closedness;
-\texttt{of\_closed\_cases} is a repackaging of its hypotheses after \texttt{subst}.
+\lead{Idea} \texttt{of\_left\_cases} instantiates each equation at the boolean literal,
+discarding the instantiation on $f$ by closedness; \texttt{of\_closed\_cases} repackages its
+hypotheses after \texttt{subst}.
 \end{proof}
-\begin{remark}
-\texttt{of\_closed\_cases} is a trivial repackaging and is arguably not worth a lemma, but it
-keeps the branch proofs uniform.
-\end{remark}
 
-\begin{lemma}[Reflection of Nat.pred from its two probed equations]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{458}
+\begin{lemma}[Reflection of Nat.pred]
 \label{vpc:thm:reflects-pred-eqns}
 \lean{Lean4Lean.VEnv.ReflectsNatNat'.of_pred_equations}\leanok
-If $\vdash f : \mathtt{nat} \to \mathtt{nat}$, $f\ \mathtt{zero} \equiv \mathtt{zero}$ at the
-empty context and $f\ (\mathtt{succ}\ (\mathtt{bvar}\,0)) \equiv \mathtt{bvar}\,0$ in
-$[\mathtt{nat}]$, then $f$ reflects \texttt{Nat.pred}.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{458}
+
+\lead{In short} If $\vdash f : \mathtt{nat} \to \mathtt{nat}$, $f\ \mathtt{zero} \equiv
+\mathtt{zero}$ and $f\ (\mathtt{succ}\ (\mathtt{bvar}\,0)) \equiv \mathtt{bvar}\,0$, then $f$
+reflects \texttt{Nat.pred}.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instn, vpc:thm:prim-nat-bool-typing}
-Case split on the numeral; the successor case is one \texttt{instN} of the open equation, with
-closedness of $f$ discarding the instantiation. No induction is needed, the two probes being
-already the two cases.
+\lead{Idea} Case split on the numeral; the successor case is one \texttt{instN} of the open
+equation. No induction is needed, the two probes being already the two cases.
 \end{proof}
-\begin{remark}
-The conclusion hard-codes the meta-level function \texttt{Nat.pred} instead of taking it as a
-parameter, unlike its siblings. Harmless, but asymmetric.
-\end{remark}
 
 \subsection{From the value to the constant}
 
-\begin{theorem}[Reflection transfers along a definitional equation on the head]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{475}
+\begin{theorem}[Reflection transfers along a definitional equation]
 \label{vpc:thm:reflects-congr-head}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat'.congr_head, Lean4Lean.VEnv.ReflectsNatNatBool'.congr_head, Lean4Lean.VEnv.ReflectsNatNat'.congr_head}\leanok
-If $g \equiv f$, the term $f$ reflects $F$, and $g$ has the expected arrow type, then $g$
-reflects $F$. The typings of the numerals are taken as a hypothesis rather than from
-\texttt{HasPrimitives}, because the caller reads them in the extended environment. This is the
-only place where a \emph{constant} enters the reflection story.
-\thesisref{the delta rule, axioms.tex, Definitions (delta reduction)}
+\srcloc{Lean4Lean/Verify/Primitive.lean}{475}
+\thesisref{The delta rule, axioms.tex, delta reduction.}
+
+\lead{In short} If $g \equiv f$, $f$ reflects $F$, and $g$ has the expected arrow type, then $g$
+\hl{reflects} $F$ -- the only place a constant enters the reflection story.
+\lead{Caveat} The numeral typings are a hypothesis, not read from \texttt{HasPrimitives}:
+the caller has them only in the extended environment.
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:lem:prim-isdefequ-app-congr, fam:defeq-mixing}
-Two applications of \texttt{IsDefEqU.app\_fun'} move the head across the equation at each of the
-two arguments (one, for the unary \texttt{ReflectsNatNat'} form), then \texttt{IsDefEqU.trans}
-with the value's reflection clause.
+\lead{Idea} Two applications of \texttt{IsDefEqU.app\_fun'} move the head across the equation at
+each argument, then \texttt{IsDefEqU.trans} with the value's reflection.
 \end{proof}
 
-\begin{lemma}[The definitional equation addDefEq records for a universe-free definition]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{514}
+\begin{lemma}[addDefEq's recorded equation]
 \label{vpc:thm:isdefequ-todefeq}\lean{Lean4Lean.VEnv.isDefEqU_toDefEq}\leanok
-For a definition value with $\mathit{uvars} = 0$ whose recorded definitional equation is well
-formed in the extension, the extension satisfies $\vdash c \equiv v$, where $c$ is the constant
-and $v$ the value.
 \uses{def:vconstval}
-\thesisref{the delta rule, axioms.tex, Definitions (delta reduction)}
+\srcloc{Lean4Lean/Verify/Primitive.lean}{514}
+\thesisref{The delta rule, axioms.tex, delta reduction.}
+
+\lead{In short} For a definition value with $\mathit{uvars} = 0$ whose recorded equation is well
+formed in the extension, the extension satisfies $\vdash c \equiv v$, for constant $c$ and value
+$v$.
 \end{lemma}
 \begin{proof}\leanok
-\texttt{IsDefEq.extra0} applied to the left-injection membership of the freshly added equation,
-then \texttt{simp} away the empty level substitution.
+\lead{Idea} \texttt{IsDefEq.extra0} on the left-injection membership of the fresh equation, then
+\texttt{simp} away the empty level substitution.
 \end{proof}
 
-\begin{lemma}[Reflections are monotone in the environment]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{521}
+\begin{lemma}[Reflections are monotone]
 \label{vpc:lem:reflects-mono}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat'.mono, Lean4Lean.VEnv.ReflectsNatNatBool'.mono, Lean4Lean.VEnv.ReflectsNatNat'.mono}\leanok
-If $\mathit{env} \le \mathit{env}'$ and $e$ reflects $F$ in $\mathit{env}$, then $e$ reflects $F$
-in $\mathit{env}'$.
+\srcloc{Lean4Lean/Verify/Primitive.lean}{521}
+
+\lead{In short} If $\mathit{env} \le \mathit{env}'$ and $e$ reflects $F$ in $\mathit{env}$, then
+$e$ reflects $F$ in $\mathit{env}'$.
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:isdefeq-mono}
-Componentwise \texttt{HasType.mono} and \texttt{IsDefEqU.mono}.
+\lead{Idea} Componentwise \texttt{HasType.mono} and \texttt{IsDefEqU.mono}.
 \end{proof}
 
-\begin{theorem}[The environment after adding a definition is well formed and equates constant with value]
-\srcloc{Lean4Lean/Verify/Primitive.lean}{536}
+\begin{theorem}[Adding a definition preserves well-formedness]
 \label{vpc:thm:adddefeq-wf}\lean{Lean4Lean.VDefVal.addDefEq_wf}\leanok
-If $\mathit{venv}$ is well formed, the definition has no universe parameters and is well formed
-there, and adding its constant succeeds, then adding its definitional equation on top yields a
-well-formed environment that satisfies $\vdash c \equiv v$ at the empty context.
 \uses{def:vdecl-wf}
-\thesisref{admissibility of a definition, axioms.tex, Definitions (delta reduction)}
+\srcloc{Lean4Lean/Verify/Primitive.lean}{536}
+\thesisref{Admissibility of a definition, axioms.tex, delta reduction.}
+
+\lead{In short} If $\mathit{venv}$ is well formed, the universe-free definition is well formed
+there, and adding its constant succeeds, then adding its equation too yields a well-formed
+environment with $\vdash c \equiv v$ at the empty context.
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:thm:isdefequ-todefeq}
-Both halves are the \texttt{.def} step of \texttt{VDecl.WF}. The equation is
-\texttt{isDefEqU\_toDefEq} applied to that step, with \texttt{instL\_id} handling the identity
-level substitution and \texttt{VEnv.addConst\_self} supplying the constant's entry.
+\lead{Idea} Both halves are the \texttt{.def} step of \texttt{VDecl.WF}; the equation is
+\texttt{isDefEqU\_toDefEq} at that step, with \texttt{instL\_id} and
+\texttt{VEnv.addConst\_self}.
 \end{proof}
 
-\begin{theorem}[Carrying a reflection of the value onto the constant in the extension]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{555}
+\begin{theorem}[Carrying a reflection onto the constant]
 \label{vpc:thm:reflects-toconst}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat'.toConst, Lean4Lean.VEnv.ReflectsNatNatBool'.toConst, Lean4Lean.VEnv.ReflectsNatNat'.toConst}\leanok
-If the value of a definition reflects $F$ in the environment the checker ran in, and that
-environment is below the well-formed environment the declaration is added to, then the
-\emph{constant} reflects $F$ in the environment obtained by adding the constant and its
-definitional equation.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Primitive.lean}{555}
+
+\lead{In short} If the value reflects $F$ in the checking environment, and that environment is
+below the well-formed one the declaration is added to, then the \hl{constant} reflects $F$ after
+adding the constant and its equation: the point where every primitive's specification is
+established.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:lem:reflects-mono, vpc:thm:adddefeq-wf, vpc:thm:reflects-congr-head, vpc:thm:prim-nat-bool-typing, fam:defeq-mixing}
-Three steps. \texttt{.mono} transports the reflection along the composite extension;
-\texttt{VDefVal.addDefEq\_wf} supplies well-formedness of the extension and the equation
-$c \equiv v$; \texttt{congr\_head} moves the reflection across that equation, the constant's own
-typing coming from \texttt{HasType.defeqU\_l}. The numeral typings \texttt{congr\_head} asks for
-are \texttt{natLitT} in the checked environment, transported by \texttt{.mono}.
+\lead{Idea} Three steps carry the reflection across the extension and the definitional equation.
+\lead{Steps}
+\begin{enumerate}
+\item \texttt{.mono} transports the reflection along the composite extension;
+\item \texttt{VDefVal.addDefEq\_wf} supplies well-formedness and $c \equiv v$;
+\item \texttt{congr\_head} moves the reflection across that equation, typing from
+\texttt{HasType.defeqU\_l}.
+\end{enumerate}
 \end{proof}
-\begin{remark}
-This is where every primitive's specification is actually established, so it is the point at
-which the \texttt{OrderedStrong} hypothesis introduced on \texttt{iota} reaches the top-level
-primitive guarantee.
-\end{remark}
 
 \section{The checker-side vocabulary}
 
-The remaining three sections of this chapter cover
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1}, which is the vocabulary every
-branch shares. Nothing in it mentions a particular primitive.
+This section covers \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1}: vocabulary
+every branch shares. Nothing in it names a particular primitive.
 
-\begin{lemma}[A reserved primitive name present in the real environment is present in the model]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{19}
+\begin{lemma}[A reserved name present in the kernel is present in the model]
 \label{vpc:thm:contains-primitive}\lean{Lean4Lean.TypeChecker.VContext.contains_primitive}\leanok
-If the checker runs at safety \texttt{safe}, the real kernel environment contains $n$, and $n$ is
-one of the reserved primitive names, then the model environment contains $n$.
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{19}
+
+\lead{In short} If the checker runs at safety \texttt{safe}, the real environment contains a
+reserved primitive name $n$, then the model environment contains $n$.
 \end{lemma}
 \begin{proof}\leanok
 \uses{family:tr-env-find}
-Turn \texttt{Environment.contains} into an existential \texttt{find?} using
-\texttt{SMap.find?\_isSome} and the translation's \texttt{map\_wf}, then apply
-\texttt{TrEnv.find?\_iff}, whose safety side condition is discharged by
-\texttt{VContext.safePrimitives}.
+\lead{Idea} Turn \texttt{Environment.contains} into an existential \texttt{find?} via
+\texttt{SMap.find?\_isSome} and \texttt{map\_wf}, then \texttt{TrEnv.find?\_iff}, whose safety
+side condition is \texttt{VContext.safePrimitives}.
 \end{proof}
-\begin{remark}
-The reservedness hypothesis is an auto-parameter discharged by \texttt{simp}, so callers never
-write it and the lemma's cost is invisible at the call sites.
-\end{remark}
 
 \begin{lemma}[A reflected primitive computes at literals in any context]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{35}
 \label{vpc:lem:natbinlit}
 \lean{Lean4Lean.VEnv.ReflectsNatNatNat.applyLit, Lean4Lean.TypeChecker.VContext.natBinLit, Lean4Lean.TypeChecker.VContext.natBinLitBool}\leanok
-If the constant $c$ carries a \texttt{ReflectsNatNatNat} (resp.\ \texttt{ReflectsNatNatBool})
-specification and is present, then $\Gamma \vdash c\ \overline{a}\ \overline{b} \equiv
-\overline{f(a,b)}$ (resp.\ the boolean literal), not only at the empty context and empty level
-list where \texttt{HasPrimitives} records it. \texttt{applyLit} is stated at an arbitrary
-universe count and context; \texttt{natBinLit} and \texttt{natBinLitBool} are its specialisations
-to the checker's own \texttt{VContext}.
 \uses{ind:primspec}
-\thesisref{Weakening, typesys.tex thm:weak}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{35}
+\thesisref{Weakening, typesys.tex thm:weak.}
+
+\lead{In short} If $c$ carries a \texttt{ReflectsNatNatNat} (resp.\ \texttt{ReflectsNatNatBool})
+spec and is present, $\Gamma \vdash c\ \overline{a}\ \overline{b} \equiv \overline{f(a,b)}$ at any
+context and universe count, not only the empty one \texttt{HasPrimitives} records.
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:isdefeq-instl, thm:isdefeq-weakn}
-Instantiate the recorded universe-free equation with \texttt{instL} at the empty level list and
-weaken with \texttt{IsDefEq.weak0}.
+\lead{Idea} Instantiate the universe-free equation with \texttt{instL} at the empty level list
+and weaken with \texttt{IsDefEq.weak0}.
 \end{proof}
-\begin{remark}
-\texttt{natBinLitBool} inlines the same proof rather than reusing an \texttt{applyLit} analogue
-for the \texttt{Bool}-valued case; a small asymmetry.
-\end{remark}
 
 \begin{theorem}[Introducing a Nat- or Bool-typed probe variable]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{63}
 \label{vpc:thm:withprobe}
 \lean{Lean4Lean.TypeChecker.M.WF.withNatProbe, Lean4Lean.TypeChecker.M.WF.withBoolProbe}\leanok
-A specialisation of \texttt{M.WF.withLocalDecl} to the only two probe types the recogniser binds.
-The two side conditions, the translation of \texttt{Nat} (resp.\ \texttt{Bool}) and that it is a
-type in the current context, are discharged once here instead of at each of the eighteen
-branches, and the continuation receives the fresh variable together with its translation as
-\texttt{bvar 0}.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{63}
+
+\lead{In short} A specialisation of \texttt{M.WF.withLocalDecl} to the only two probe types the
+recogniser binds, discharging both side conditions once for the eighteen branches and returning
+the fresh variable's translation as \texttt{bvar 0}.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, invoked directly for the two obligations, and independently via TypeChecker.M.WF.withLocalDecl (Verify/TypeChecker/Basic.lean:489), which is sorry-tainted on master already}
 \end{theorem}
 \begin{proof}\leanok
 \uses{thm:vtc-withlocaldecl, vpc:thm:prim-trnat-trbool, vpc:thm:prim-nat-bool-typing, family:trterm-builders}
-\texttt{M.WF.withLocalDecl} with \texttt{trNat} and \texttt{natIsType} (resp.\ \texttt{trBool} and
-\texttt{boolIsType}) as the two obligations; the variable's translation is
+\lead{Idea} \texttt{M.WF.withLocalDecl} with \texttt{trNat}/\texttt{natIsType} (resp.\
+\texttt{trBool}/\texttt{boolIsType}); the variable's translation is
 \texttt{VLCtx.find?\_vlam\_self}.
 \end{proof}
-\begin{remark}
-\texttt{iota} edited four lines here, all \texttt{c.Ewf.ordered} becoming
-\texttt{c.Ewf.orderedStrong}. The adaptation is forced by \texttt{trNat}/\texttt{trBool} and is
-faithful.
-\end{remark}
 
 \section{Spines, telescopes and substitutions}
 
-\begin{definition}[Spine application and lambda telescopes on model expressions]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{91}
+\begin{definition}[Spine application and lambda telescopes]
 \label{vpc:def:vexpr-appn-lams}
 \lean{Lean4Lean.VExpr.appN, Lean4Lean.VExpr.appN_nil, Lean4Lean.VExpr.insts_appN, Lean4Lean.VExpr.subst_appN, Lean4Lean.VExpr.appN_append, Lean4Lean.VExpr.lams, Lean4Lean.VExpr.lams_nil, Lean4Lean.VExpr.lams_cons, Lean4Lean.VExpr.liftN_lams', Lean4Lean.VExpr.liftN_lams, Lean4Lean.VExpr.lams_append}\leanok
-$e.\mathtt{appN}\ [a_1,\dots,a_n] = e\,a_1\cdots a_n$, leftmost first, which is the order a
-lambda telescope and the free-variable array already use, and
-$\mathtt{lams}\ [A_1,\dots,A_n]\ e = \lambda A_1.\cdots\lambda A_n.\ e$, outermost first;
-together with their commutation with substitution, simultaneous instantiation, lifting and list
-append.
 \uses{def:subst, def:insts, def:liftn}
-\thesisref{telescope notation, axioms.tex sec:inductive}
-\end{definition}
-\begin{remark}
-\texttt{liftN\_lams} only produces an \emph{existential} for the lifted domains rather than
-computing them; the docstring justifies this by observing that nothing downstream looks at them,
-only at how many there are. The computed form is available as \texttt{liftN\_lams'}.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{91}
+\thesisref{Telescope notation, axioms.tex sec:inductive.}
 
-\begin{definition}[Extending a substitution by a list of values, and its calculus]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{310}
+\lead{In short} $e.\mathtt{appN}\ [a_1,\dots,a_n] = e\,a_1\cdots a_n$ (leftmost first) and
+$\mathtt{lams}\ [A_1,\dots,A_n]\ e = \lambda A_1.\cdots\lambda A_n.\ e$ (outermost first), with
+their commutation with substitution, instantiation, lifting and append. \lead{Caveat}
+\texttt{liftN\_lams} gives only an existential for the lifted domains; \texttt{liftN\_lams'}
+computes them.
+\end{definition}
+
+\begin{definition}[Extending a substitution by a value list]
 \label{vpc:def:subst-consn}
 \lean{Lean4Lean.VExpr.Subst.consN, Lean4Lean.VExpr.Subst.consN_nil, Lean4Lean.VExpr.Subst.consN_cons, Lean4Lean.VExpr.Subst.consN_add, Lean4Lean.VExpr.Subst.consN_append, Lean4Lean.VExpr.Subst.consN_append_singleton, Lean4Lean.VExpr.Subst.tail_cons, Lean4Lean.VExpr.Subst.lift_comp_one, Lean4Lean.VExpr.liftN_subst_consN, Lean4Lean.VExpr.subst_consN_bvars, Lean4Lean.VExpr.subst_lift_tail_inst, Lean4Lean.VExpr.ClosedN.subst_eq'}\leanok
-$\sigma.\mathtt{consN}\ [v_1,\dots,v_n]$ prepends $n$ values to a substitution in telescope
-order, so that the last value lands on $\mathtt{bvar}\,0$. The accompanying lemmas compute the
-interaction with de Bruijn shifts: a term lifted past $n$ binders and then substituted ignores
-the prepended values, the first $n$ bound variables are sent to those values in telescope order,
-substituting under a binder and then instantiating it composes to a \texttt{cons}, and a closed
-term is unaffected by any substitution.
 \uses{def:subst, def:liftn}
-\thesisref{properties of substitution, typesys.tex thm:subst}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{310}
+\thesisref{Properties of substitution, typesys.tex thm:subst.}
+
+\lead{In short} $\sigma.\mathtt{consN}\ [v_1,\dots,v_n]$ prepends $n$ values in telescope order
+(the last on $\mathtt{bvar}\,0$): a term lifted past $n$ binders ignores them on substitution, the
+first $n$ bound variables go to them in telescope order, substituting under a binder then
+instantiating composes to a \texttt{cons}, and a closed term is unaffected by any substitution.
 \end{definition}
 
 \begin{definition}[Source-level spine application and lambda arity]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{214}
 \label{vpc:def:expr-spine}
 \lean{Lean.Expr.lambdaArity, Lean.Expr.lambdaArity_eq_zero, Lean.Expr.appN, Lean.Expr.appN_eq_mkAppList, Lean.Expr.mkAppN_eq, Lean4Lean.FVarsIn.appN}\leanok
-\texttt{Expr.lambdaArity} counts leading lambdas, which is exactly how many binders
-\texttt{lambdaTelescope} opens, its loop matching on \texttt{.lam} syntactically with no
-\texttt{whnf} in between; \texttt{Expr.appN} is the list version of \texttt{mkAppN}, reconciled
-with \texttt{mkAppList} and \texttt{mkAppN}; and \texttt{FVarsIn} distributes over a spine.
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{214}
+
+\lead{In short} \texttt{Expr.lambdaArity} counts leading lambdas -- how many binders
+\texttt{lambdaTelescope} opens, matching \texttt{.lam} syntactically with no \texttt{whnf};
+\texttt{Expr.appN} is the list form of \texttt{mkAppN}; \texttt{FVarsIn} distributes over a
+spine.
 \end{definition}
 
-\begin{lemma}[Inverting translations of application spines and free variables]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{264}
+\begin{lemma}[Inverting spine and free-variable translations]
 \label{vpc:thm:trexprs-appn-inv}
 \lean{Lean4Lean.TrExprS.appN_inv, Lean4Lean.TrExprS.app2_inv, Lean4Lean.TrExprS.closedN_nil, Lean4Lean.TrExprS.fvar_lift_uniq, Lean4Lean.TrExprS.underBV, Lean4Lean.TrExprS.fvar_uniq}\leanok
-A translation of $f\,a_1\cdots a_n$ decomposes into a translation of $f$ and a \texttt{Forall2}
-of translations of the arguments, the result being the corresponding model spine; the
-two-argument special case; a translation at the empty local context is closed; a free variable's
-translation is determined by the context, and one binder further in it is the same translation
-lifted; and \texttt{underBV} moves an arbitrary translation under one more \texttt{vlam} binder
-by lifting it.
 \uses{def:vt-vlctx}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{264}
+
+\lead{In short} A translation of $f\,a_1\cdots a_n$ decomposes into a translation of $f$ and a
+\texttt{Forall2} of translated arguments; a translation at the empty context is closed; a free
+variable's translation is determined by the context and lifts one binder further;
+\texttt{underBV} lifts an arbitrary translation under one more \texttt{vlam} binder.
 \end{lemma}
 \begin{proof}\leanok
-Induction over the spine, matching the \texttt{TrExprS.app} rule at each step, no typing needed;
-\texttt{fvar\_uniq} compares the two \texttt{VLCtx.find?} results; \texttt{closedN\_nil} goes
-through well-formedness of the translation and \texttt{closedN'}; \texttt{underBV} weakens with a
-\texttt{BVLift} and uses that the source term has no loose bound variables.
+\lead{Idea} Induction over the spine matching \texttt{TrExprS.app}; \texttt{fvar\_uniq} compares
+two \texttt{VLCtx.find?} results; \texttt{closedN\_nil} uses well-formedness of the translation;
+\texttt{underBV} weakens with a \texttt{BVLift}.
 \end{proof}
 
 \begin{definition}[List and Forall2 utilities]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{222}
 \label{vpc:def:list-helpers}
 \lean{List.Forall₂.map_right', List.Forall₂.forall_left, Lean4Lean.List.Forall₂.append_inv, Lean4Lean.List.forall_mem_pair, Lean4Lean.List.Forall₂.snoc, Lean4Lean.List.Forall₂.rev, Lean4Lean.List.Forall₂.fvars_uniq, Lean4Lean.List.mapIdx_replicate_nat}\leanok
-Pointwise-relation utilities proved by routine list inductions: mapping the right side of a
-\texttt{Forall2}, extracting a predicate on the left side, splitting over an append, snoc and
-reverse, uniqueness of a list of translated free variables, and that \texttt{mapIdx} over a
-replicated \texttt{Nat} telescope is the identity when the function fixes \texttt{Nat}.
 \uses{vpc:thm:trexprs-appn-inv}
-\end{definition}
-\begin{remark}
-The namespaces are inconsistent: \texttt{map\_right'} and \texttt{forall\_left} are declared at
-\texttt{\_root\_.List}, while the other six are written as \texttt{List.\dots} inside
-\texttt{namespace Lean4Lean} and therefore land in \texttt{Lean4Lean.List}, shadowing the real
-\texttt{List} namespace inside the project.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{222}
 
-\begin{definition}[A plain typing context viewed as a VLCtx]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{150}
+\lead{In short} Routine list-induction lemmas: mapping one side of a \texttt{Forall2}, splitting
+over append/snoc/reverse, uniqueness of translated free-variable lists, and that
+\texttt{mapIdx} over a replicated \texttt{Nat} telescope is the identity.
+\end{definition}
+
+\begin{definition}[A typing context viewed as a VLCtx]
 \label{vpc:def:vlctx-ofctx}
 \lean{Lean4Lean.VLCtx.ofCtx, Lean4Lean.VLCtx.toCtx_ofCtx}\leanok
-Every list of model types is the \texttt{toCtx} of a \texttt{VLCtx} of anonymous \texttt{vlam}
-entries, and the round trip is the identity. Facts stated only at a \texttt{VLCtx} transfer to an
-arbitrary context through this.
 \uses{def:vt-vlctx}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{150}
+
+\lead{In short} Every list of model types is the \texttt{toCtx} of a \texttt{VLCtx} of anonymous
+\texttt{vlam} entries, and the round trip is the identity -- transferring \texttt{VLCtx}-only
+facts to an arbitrary context.
 \end{definition}
 
-\begin{lemma}[Nat and Bool are types, stated at a plain context]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{158}
+\begin{lemma}[Nat and Bool are types, at a plain context]
 \label{vpc:thm:prim-istype-prime}
 \lean{Lean4Lean.VEnv.HasPrimitives.boolIsType', Lean4Lean.VEnv.HasPrimitives.natIsType'}\leanok
-The \texttt{VLCtx}-indexed \texttt{natIsType} and \texttt{boolIsType} restated for an ordinary
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{158}
+
+\lead{In short} \texttt{natIsType} and \texttt{boolIsType} restated for an ordinary
 list-of-types context.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:thm:prim-nat-bool-typing, vpc:def:vlctx-ofctx}
-Transport along \texttt{VLCtx.toCtx\_ofCtx} and apply the \texttt{VLCtx} version at
+\lead{Idea} Transport along \texttt{VLCtx.toCtx\_ofCtx} and apply the \texttt{VLCtx} version at
 \texttt{ofCtx} of the context.
 \end{proof}
-\begin{remark}
-Both signatures were strengthened to \texttt{OrderedStrong} by \texttt{iota}; neither needs more
-than its \texttt{VLCtx} original does, and those are themselves over-strengthened. Neither is
-confined to one branch: \texttt{natIsType'} is used at
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{376}, at nine places in
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{762} and twice in
-\srcloc{Lean4Lean/Verify/Environment/Primitive/DivMod.lean}{102}, and \texttt{boolIsType'} at
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1043} and 1131.
-\end{remark}
 
-\begin{lemma}[Both halves of a well-formed application are well formed]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{431}
+\begin{lemma}[Both sides of a well-formed application are well formed]
 \label{vpc:thm:wf-app-inv2}\lean{Lean4Lean.VExpr.WF.app_inv₂}\leanok
-If $f\,a$ is well formed in $\Gamma$ then so are $f$ and $a$: the type-free form of
-\texttt{app\_inv}, which is what chains when a caller peels a spine apart.
-\thesisref{Regularity, typesys.tex thm:reg}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{431}
+\thesisref{Regularity, typesys.tex thm:reg.}
+
+\lead{In short} If $f\,a$ is well formed in $\Gamma$ then so are $f$ and $a$: the type-free form
+of \texttt{app\_inv}, which chains as a caller peels a spine apart.
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions}
-\texttt{VExpr.WF.app\_inv}, forgetting the two types.
+\lead{Idea} \texttt{VExpr.WF.app\_inv}, forgetting the two types.
 \end{proof}
-\begin{remark}
-The \texttt{trproj} blame here is misleading: that commit only re-wrapped the signature across
-three lines (431--433) to keep it under 100 columns after the \texttt{iota} edit. Its only other
-lines in this chapter are the two call sites it re-flowed inside \ref{vpc:thm:wf-appn-inv}
-(455--456). There is no projection content in either place.
-\end{remark}
 
 \begin{lemma}[Spine inversion and spine congruence]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{437}
 \label{vpc:thm:wf-appn-inv}
 \lean{Lean4Lean.VExpr.WF.appN_inv, Lean4Lean.VEnv.IsDefEqU.appN}\leanok
-If $e\,a_1\cdots a_n$ is well formed then so is $e$; and if $f \equiv g$ and $f\,a_1\cdots a_n$
-is well formed, then $f\,a_1\cdots a_n \equiv g\,a_1\cdots a_n$. The arguments' typings are not
-assumed: they are recovered from well-formedness of the application.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{437}
+
+\lead{In short} If $e\,a_1\cdots a_n$ is well formed then so is $e$; and if $f \equiv g$ and
+$f\,a_1\cdots a_n$ is well formed, then $f\,a_1\cdots a_n \equiv g\,a_1\cdots a_n$ -- the
+arguments' typings are recovered, not assumed.
 \axfoot{IsDefEqU.appN takes env.WF and derives OrderedStrong from it, so its footprint has both sources: sorryAx via IsDefEqU.of\_l / IsDefEq.uniq (UniqueTyping/Injectivity) and via VEnv.WF.orderedStrong / VEnv.WF.patsStrong. VExpr.WF.appN\_inv takes OrderedStrong as a hypothesis and is itself sorryAx-free}
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, fam:defeq-mixing}
-Induction on the argument list, peeling one application at each step with \texttt{app\_inv};
-the congruence additionally uses \texttt{IsDefEqU.of\_l} and \texttt{IsDefEq.appDF} at each step.
+\lead{Idea} Induction on the argument list, peeling one application with \texttt{app\_inv}; the
+congruence additionally uses \texttt{IsDefEqU.of\_l} and \texttt{IsDefEq.appDF}.
 \end{proof}
-\begin{remark}
-\texttt{iota} changed the \texttt{variable!} hypothesis and two call sites; both are genuine,
-since these go through \texttt{app\_inv}, which moved to \texttt{OrderedStrong}. The two lines the
-\texttt{trproj} commit re-wrapped are the call sites.
-\end{remark}
 
-\begin{lemma}[Inversions that move an argument onto the head's recorded domain]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{986}
+\begin{lemma}[Inversions onto the head's recorded domain]
 \label{vpc:thm:wf-inv-prime}
 \lean{Lean4Lean.VExpr.WF.app_inv', Lean4Lean.VExpr.WF.lam_inv', Lean4Lean.VExpr.WF.betaU}\leanok
-\texttt{app\_inv} returns the argument's type only up to definitional equality;
-\texttt{app\_inv'} moves it onto the \emph{recorded} domain of a head whose $\Pi$ type is known,
-which is what makes the argument usable in a substitution, and also types the application.
-\texttt{lam\_inv'} peels one binder off a well-formed lambda and returns the extended context's
-well-formedness; \texttt{betaU} gives the argument's typing and the beta equation for a lambda
-applied to a value.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{986}
+
+\lead{In short} \texttt{app\_inv'} moves the argument onto the head's \emph{recorded} $\Pi$
+domain, usable in a substitution, and types the application; \texttt{lam\_inv'} peels one binder
+off a well-formed lambda; \texttt{betaU} gives the argument's typing and the beta equation.
+\lead{Caveat} Of the three, only \texttt{lam\_inv'} is \texttt{sorryAx}-free, being the one
+that does not go through unique typing.
 \axfoot{sorryAx via IsDefEq.uniq and IsDefEqU.forallE\_inv (UniqueTyping/Injectivity)}
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, thm:isdefeq-foralle-inv, fam:defeq-mixing}
-\texttt{app\_inv}, then \texttt{HasType.uniqU} and \texttt{IsDefEqU.forallE\_inv} to identify
-the two domains, then \texttt{HasType.defeqU\_r}; \texttt{betaU} closes with
-\texttt{VEnv.IsDefEq.beta}. Of the three, only \texttt{lam\_inv'} is \texttt{sorryAx}-free, that
-being the one which does not go through unique typing.
+\lead{Idea} \texttt{app\_inv}, then \texttt{HasType.uniqU} and \texttt{IsDefEqU.forallE\_inv} to
+identify the two domains, then \texttt{HasType.defeqU\_r}; \texttt{betaU} closes with
+\texttt{VEnv.IsDefEq.beta}.
 \end{proof}
-\begin{remark}
-\texttt{iota} touched four lines here. \texttt{lam\_inv'}'s hypothesis moved to
-\texttt{OrderedStrong}, which is genuine; the other two take \texttt{env.WF} and simply call
-\texttt{.orderedStrong} where they used to call \texttt{.ordered}.
-\end{remark}
 
 \begin{definition}[Arguments closing a lambda telescope]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{463}
 \label{vpc:ind:argstyped}
 \lean{Lean4Lean.VExpr.ArgsTyped, Lean4Lean.VExpr.ArgsTyped.natTelescope, Lean4Lean.OnCtx.of_append, Lean4Lean.OnCtx.append_right}\leanok
-$\mathsf{ArgsTyped}\ \mathit{env}\ U\ \Gamma_0\ [A_1,\dots,A_n]\ \sigma\ [v_1,\dots,v_n]$ holds
-when $\Gamma_0 \vdash v_i : A_i[\sigma.\mathtt{consN}\ v_1\cdots v_{i-1}]$ for each $i$. It is a
-relation and not a \texttt{Forall2} precisely because the $i$-th domain is substituted by $\sigma$
-extended with the first $i-1$ arguments. A list of \texttt{Nat}-typed arguments is
-\texttt{ArgsTyped} against an all-\texttt{Nat} telescope, since \texttt{Nat} is closed. The two
-\texttt{OnCtx} lemmas say that an appended context restricts, and that binders added outside a
-well-formed context leave it well formed.
 \uses{def:hastype-istype, fam:subst-basic}
-\thesisref{telescopes, axioms.tex sec:inductive}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{463}
+\thesisref{Telescopes, axioms.tex sec:inductive.}
+
+\lead{In short} $\mathsf{ArgsTyped}\ \mathit{env}\ U\ \Gamma_0\ [A_1,\dots,A_n]\ \sigma\
+[v_1,\dots,v_n]$ holds when $\Gamma_0 \vdash v_i : A_i[\sigma.\mathtt{consN}\ v_1\cdots
+v_{i-1}]$ for each $i$: a relation, not a \texttt{Forall2}, because the $i$-th domain is
+substituted by the first $i-1$ arguments. \texttt{Nat}-typed arguments are \texttt{ArgsTyped}
+against an all-\texttt{Nat} telescope, \texttt{Nat} being closed; the two \texttt{OnCtx} lemmas
+say an appended context restricts, and outer binders leave a well-formed context well formed.
 \end{definition}
 
-\begin{theorem}[Telescope arguments define a substitution, and a telescope is well typed when its body is]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{495}
+\begin{theorem}[Telescope arguments define a substitution]
 \label{vpc:thm:argstyped-substeq}
 \lean{Lean4Lean.VExpr.ArgsTyped.substEq, Lean4Lean.VExpr.wf_lams}\leanok
-Typed arguments for a telescope extend a \texttt{Ctx.SubstEq} from $\Gamma$ to $\Gamma_0$ into one
-from $\mathit{As}^{R} \mathbin{+\!\!+} \Gamma$ to $\Gamma_0$; and
-$\mathtt{lams}\ \mathit{As}\ e$ is well formed in $\Gamma$ whenever $e$ is well formed in
-$\mathit{As}^{R} \mathbin{+\!\!+} \Gamma$ and that context is well formed.
 \uses{vpc:ind:argstyped}
-\thesisref{properties of substitution, typesys.tex thm:subst}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{495}
+\thesisref{Properties of substitution, typesys.tex thm:subst.}
+
+\lead{In short} Typed arguments extend a \texttt{Ctx.SubstEq} from $\Gamma$ to $\Gamma_0$ into one
+from $\mathit{As}^{R} \mathbin{+\!\!+} \Gamma$ to $\Gamma_0$; and $\mathtt{lams}\ \mathit{As}\ e$
+is well formed in $\Gamma$ whenever $e$ is well formed in the extended, well-formed context.
 \end{theorem}
 \begin{proof}\leanok
-Induction on the domain list, \texttt{Ctx.SubstEq.cons} at each step, the domain's own
-\texttt{IsType} read off the appended context; \texttt{wf\_lams} iterates \texttt{HasType.lam} the
-same way.
+\lead{Idea} Induction on the domain list, \texttt{Ctx.SubstEq.cons} at each step;
+\texttt{wf\_lams} iterates \texttt{HasType.lam} the same way.
 \end{proof}
-\begin{remark}
-This is the key that lets an equation the checker verified \emph{under} a telescope be closed off
-at ground arguments, which is why the recogniser's open probes reach the closed reflection
-statements at all.
-\end{remark}
 
-\begin{definition}[Pi telescopes and the typing of lambda and application telescopes]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{525}
+\begin{definition}[Pi telescopes and telescope typing]
 \label{vpc:def:vexpr-forallEs}
 \lean{Lean4Lean.VExpr.forallEs, Lean4Lean.VExpr.forallEs_nil, Lean4Lean.VExpr.forallEs_cons, Lean4Lean.VEnv.HasType.lams, Lean4Lean.VEnv.HasType.appN_forallEs}\leanok
-The $\Pi$ telescope matching \texttt{VExpr.lams}; a lambda telescope over a body of type $B$ has
-type $\mathtt{forallEs}\ \mathit{As}\ B$ when the extended context is well formed; and a term of
-$\Pi$-telescope type applied to a matching \texttt{ArgsTyped} spine has the body's type closed at
-those arguments. The last is proved by iterating \texttt{HasType.app} and rewriting the
-instantiation into a \texttt{cons} with \texttt{Subst.lift\_comp\_one}.
 \uses{vpc:def:vexpr-appn-lams, vpc:ind:argstyped}
-\thesisref{telescope application, axioms.tex sec:inductive}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{525}
+\thesisref{Telescope application, axioms.tex sec:inductive.}
+
+\lead{In short} The $\Pi$ telescope matching \texttt{VExpr.lams}: a lambda telescope over a body
+of type $B$ has type $\mathtt{forallEs}\ \mathit{As}\ B$; a $\Pi$-telescope term applied to a
+matching \texttt{ArgsTyped} spine has the body's type closed at those arguments, by iterating
+\texttt{HasType.app} and rewriting with \texttt{Subst.lift\_comp\_one}.
 \end{definition}
 
-\begin{lemma}[Spine congruence with the arguments moving too]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{564}
+\begin{lemma}[Spine congruence with moving arguments]
 \label{vpc:thm:isdefequ-appn-prime}
 \lean{Lean4Lean.VEnv.IsDefEqU.appN', Lean4Lean.VEnv.IsDefEqU.app_arg}\leanok
-If $f \equiv f'$, the arguments agree pointwise, and the whole spine $f\,\bar{x}$ is well formed,
-then $f\,\bar{x} \equiv f'\,\bar{y}$; plus the one-step congruence in an argument.
-\thesisref{congruence rules, axioms.tex, The core language}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{564}
+\thesisref{Congruence, axioms.tex, core language.}
+
+\lead{In short} If $f \equiv f'$, the arguments agree pointwise, and $f\,\bar{x}$ is well formed,
+then $f\,\bar{x} \equiv f'\,\bar{y}$; plus the one-step congruence in a single argument.
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, vpc:thm:wf-appn-inv}
-Induction on the argument list, \texttt{appDF} at each step with the typings recovered by
+\lead{Idea} Induction on the argument list, \texttt{appDF} at each step with typings from
 \texttt{appN\_inv} and \texttt{app\_inv}.
 \end{proof}
 
 \begin{lemma}[Translating an application spine]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{580}
 \label{vpc:thm:trexprs-appn}\lean{Lean4Lean.TrExprS.appN}\leanok
-Given a translation of the head, translations of all arguments, and well-formedness of the
-resulting model spine, the source spine translates to the model spine. The typings that
-\texttt{TrExprS.app} needs at each step are read off well-formedness rather than assumed, so a
-caller who knows only that the application typechecks gets the translation for free.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{580}
+
+\lead{In short} Given a translation of the head, translations of all arguments, and
+well-formedness of the model spine, the source spine translates to it -- the typings
+\texttt{TrExprS.app} needs come from well-formedness, not an extra hypothesis.
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, vpc:thm:wf-appn-inv}
-Induction on the argument list, \texttt{VExpr.WF.app\_inv} supplying the two typings for each
-\texttt{TrExprS.app}.
+\lead{Idea} Induction on the argument list, \texttt{VExpr.WF.app\_inv} supplying the two typings
+at each \texttt{TrExprS.app}.
 \end{proof}
-\begin{remark}
-The \texttt{iota} signature change is needed here (\texttt{app\_inv}). Its only use among this
-chapter's four files, at \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{380}, is
-what forced that file's one contributed line; it is used nine more times in
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1466}, which belongs to
-Chapter~\ref{chap:primitives-arith}.
-\end{remark}
 
-\begin{lemma}[A well-typed lambda telescope's domains form a well-formed context]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{603}
+\begin{lemma}[A telescope's domains form a well-formed context]
 \label{vpc:thm:lams-ctx}\lean{Lean4Lean.VExpr.lams_ctx}\leanok
-If $\Gamma$ is well formed and $\mathtt{lams}\ \mathit{As}\ e$ is well formed in $\Gamma$, then
-$\mathit{As}^{R} \mathbin{+\!\!+} \Gamma$ is well formed: read off the telescope itself rather
-than carried alongside it.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{603}
+
+\lead{In short} If $\Gamma$ is well formed and $\mathtt{lams}\ \mathit{As}\ e$ is well formed in
+$\Gamma$, then $\mathit{As}^{R} \mathbin{+\!\!+} \Gamma$ is well formed -- read off the telescope
+itself, not carried alongside it.
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions}
-Structural recursion peeling one binder with \texttt{VExpr.WF.lam\_inv}.
+\lead{Idea} Structural recursion peeling one binder with \texttt{VExpr.WF.lam\_inv}.
 \end{proof}
-\begin{remark}
-The \texttt{iota} signature change is needed here, \texttt{lam\_inv} having moved to
-\texttt{OrderedStrong}.
-\end{remark}
 
-\begin{theorem}[Beta for a whole telescope under a closing substitution]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{618}
+\begin{theorem}[Beta for a telescope under a closing substitution]
 \label{vpc:thm:lams-appn}
 \lean{Lean4Lean.VExpr.lams_appN, Lean4Lean.VExpr.lams_appN'}\leanok
-$((\mathtt{lams}\ \mathit{As}\ e)[\sigma])\ v_1\cdots v_n \equiv e[\sigma.\mathtt{consN}\ \bar{v}]$,
-and the arguments extend $\sigma$ to a closing of the telescope's own context. The unprimed form
-derives the argument typings from well-formedness of the application; the primed form consumes an
-\texttt{ArgsTyped} that has already been built and returns well-formedness of the left-hand side
-instead, so that every further term closed at the same recursion arguments reuses the
-substitution. This is the bridge between the recogniser working under an open telescope and the
-statements being about the value applied to ground arguments.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{618}
+
+\lead{In short} $((\mathtt{lams}\ \mathit{As}\ e)[\sigma])\ v_1\cdots v_n \equiv
+e[\sigma.\mathtt{consN}\ \bar{v}]$, the arguments extending $\sigma$ to a closing of the
+telescope's context.
+The unprimed form derives the argument typings from well-formedness; the primed form takes a
+built \texttt{ArgsTyped} and returns well-formedness of the left side instead.
 \axfoot{sorryAx via IsDefEq.uniq and IsDefEqU.forallE\_inv (UniqueTyping/Injectivity), and via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, which both forms derive from their own env.WF hypothesis}
 \end{theorem}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, vpc:thm:wf-appn-inv, thm:isdefeq-foralle-inv, vpc:def:subst-consn, thm:isdefeq-substdf, vpc:thm:argstyped-substeq}
-Induction on the argument list. Each step inverts the application with \texttt{appN\_inv} and
-\texttt{app\_inv}, inverts the lambda with \texttt{lam\_inv}, reconciles the substituted domain
-with the lambda's recorded one by \texttt{uniqU} and \texttt{forallE\_inv}, takes one
-\texttt{IsDefEq.beta}, and rewrites the substitution composition with
-\texttt{Subst.lift\_comp\_one} and \texttt{subst\_subst}; the congruence in the remaining
-arguments is \texttt{IsDefEqU.appN}.
+\lead{Idea} Induction on the argument list. \lead{Steps}
+\begin{enumerate}
+\item invert the application (\texttt{appN\_inv}, \texttt{app\_inv}) and the lambda
+(\texttt{lam\_inv});
+\item reconcile the substituted domain with the recorded one by \texttt{uniqU} and
+\texttt{forallE\_inv};
+\item take one \texttt{IsDefEq.beta};
+\item rewrite the substitution composition with \texttt{Subst.lift\_comp\_one} and
+\texttt{subst\_subst}, congruence in the rest by \texttt{IsDefEqU.appN}.
+\end{enumerate}
 \end{proof}
-\begin{remark}
-Five \texttt{iota}-touched lines, all genuine: they feed \texttt{lam\_inv}, \texttt{app\_inv} and
-\texttt{IsDefEq.subst}. Together with \texttt{lambdaTelescope.WF} this is one of the two
-load-bearing theorems of the file.
-\end{remark}
 
 \section{Ground judgements and the environment extension}
 
-\begin{definition}[Ground judgements and closings of the recognizer's context]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{684}
+\begin{definition}[Ground judgements and telescope closings]
 \label{vpc:def:vcontext-ground}
 \lean{Lean4Lean.TypeChecker.VContext.HasType₀, Lean4Lean.TypeChecker.VContext.IsDefEqU₀, Lean4Lean.TypeChecker.VContext.WF₀, Lean4Lean.TypeChecker.VContext.Closing}\leanok
-Abbreviations for typing, definitional equality and well-formedness at the \emph{empty} context of
-the checking environment, and for a substitution $\gamma$ that closes the recogniser's whole local
-context down to the empty one, taken as a \texttt{Ctx.SubstEq} with itself so that the nil case
-pins it to the identity. Everything is stated at the empty context because
-\texttt{HasPrimitives} is a fact about it and because \texttt{Nat.bitwise}'s operator only has
-evaluation behaviour once instantiated.
 \uses{fam:substeq}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{684}
+
+\lead{In short} Abbreviations for typing, defeq and well-formedness at the \emph{empty} context of
+the checking environment, and for a substitution $\gamma$ closing the recogniser's whole local
+context, as a \texttt{Ctx.SubstEq} with itself so the nil case pins it to the identity.
 \end{definition}
 
-\begin{definition}[The well-formed extension a ground judgement is read in]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{706}
+\begin{definition}[The extension a ground judgement is read in]
 \label{vpc:struct:vcontext-ext}
 \lean{Lean4Lean.TypeChecker.VContext.Ext, Lean4Lean.TypeChecker.VContext.self, Lean4Lean.TypeChecker.VContext.Ext.cast, Lean4Lean.TypeChecker.VContext.Ext.HasType₀, Lean4Lean.TypeChecker.VContext.Ext.IsDefEqU₀, Lean4Lean.TypeChecker.VContext.Ext.WF₀, Lean4Lean.TypeChecker.VContext.Ext.Closing, Lean4Lean.TypeChecker.VContext.Ext.mono, Lean4Lean.TypeChecker.VContext.Ext.monoT, Lean4Lean.TypeChecker.VContext.Ext.monoW, Lean4Lean.TypeChecker.VContext.Ext.monoIsType, Lean4Lean.TypeChecker.VContext.Ext.monoCtx}\leanok
-A \texttt{VContext.Ext} is a well-formed environment above the checking environment. Every branch
-but \texttt{Nat.bitwise} takes the identity extension \texttt{self}, which is reducible so that
-statements read at it match on the nose; \texttt{Nat.bitwise} cannot, because its specification
-quantifies over every operator a later environment might supply, so the substitution
-instantiating its operator variable lands outside the checking environment. The \texttt{mono}
-family transports open judgements along the extension, and \texttt{cast} moves an extension along
-any change of context that keeps the environment.
 \uses{def:venv-wf, struct:venv-le}
-\thesisref{monotonicity of the judgements under environment extension, which the thesis takes for granted}
-\end{definition}
-\begin{remark}
-A good design decision, explained by its docstring. \texttt{Ext.cast} takes its environment
-equation as an auto-parameter defaulting to \texttt{rfl}, which makes context changes invisible at
-call sites.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{706}
+\thesisref{Monotonicity of the judgements under extension, taken for granted by the thesis.}
 
-\begin{theorem}[A reflected primitive applied to two literal-valued arguments, under a closing]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{759}
+\lead{In short} A \texttt{VContext.Ext} is a well-formed environment above the checking one.
+\begin{itemize}
+\item every branch but \texttt{Nat.bitwise} takes the reducible identity extension
+\texttt{self}; \texttt{Nat.bitwise} cannot, its spec quantifying over every operator a later
+environment might supply; the \texttt{mono} family transports judgements along the extension;
+\texttt{cast} moves an extension along a change of context that keeps the environment fixed;
+\item \lead{Caveat} \texttt{Ext.cast}'s environment equation defaults to \texttt{rfl}.
+\end{itemize}
+\end{definition}
+
+\begin{theorem}[A reflected primitive at two literal arguments, under a closing]
 \label{vpc:thm:ext-natbinlittr}\lean{Lean4Lean.TypeChecker.VContext.Ext.natBinLitTr}\leanok
-Let $C$ be a constant with a \texttt{ReflectsNatNatNat} specification. If a source application
-$C\ A\ B$ translates to $r$, the substituted $r[\sigma]$ is well formed at the empty context of
-the extension, and $A[\sigma]$ and $B[\sigma]$ are worth the literals $\overline{a}$ and
-$\overline{b}$ for \emph{any} translations of $A$ and $B$ that are themselves well formed there,
-then $r[\sigma]$ is worth $\overline{F(a,b)}$. Note $\sigma$ is an arbitrary
-\texttt{VExpr.Subst}: it is not assumed to be a \texttt{Closing}, the well-formedness hypotheses
-doing that work instead. Containment of $C$ comes from the translation itself and not from a
-guard, so a recurrence may name \texttt{Nat.add}, \texttt{Nat.div} or \texttt{Nat.mod} without
-its branch checking for them.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{759}
+
+\lead{In short} For a constant $C$ with a \texttt{ReflectsNatNatNat} spec: if $C\ A\ B$
+translates to $r$, $r[\sigma]$ is well formed at the extension's empty context, and $A[\sigma]$,
+$B[\sigma]$ are worth $\overline{a}$, $\overline{b}$ for \emph{any} well-formed translations of
+$A$, $B$, then $r[\sigma]$ is worth $\overline{F(a,b)}$. Here $\sigma$ is an arbitrary
+\texttt{VExpr.Subst}, not assumed a \texttt{Closing}, and containment of $C$ comes from the
+translation itself, so a recurrence may name \texttt{Nat.add}, \texttt{Nat.div} or
+\texttt{Nat.mod} without its branch guarding for them.
 \axfoot{sorryAx via IsDefEq.uniq (UniqueTyping/Injectivity) and, through app\_inv₂, via VEnv.WF.patsStrong}
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:thm:trexprs-appn-inv, vpc:thm:prim-trexprs-shape-inv, vpc:lem:natbinlit, vpc:thm:isdefequ-appn-prime, vpc:thm:wf-app-inv2}
-\texttt{app2\_inv} splits the translation and \texttt{const0\_inv} pins the head; containment is
-read straight off the \texttt{TrExprS.const} node. \texttt{applyLit} evaluates the constant at the
-two literals in the extension, and \texttt{IsDefEqU.appN'} moves the two arguments, with the
-well-formedness of each sub-application peeled off by \texttt{app\_inv₂}.
+\lead{Idea} \texttt{app2\_inv} splits the translation, \texttt{const0\_inv} pins the head;
+\texttt{applyLit} evaluates the constant at the two literals, and \texttt{IsDefEqU.appN'} moves
+the arguments, well-formedness peeled off by Lemma~\ref{vpc:thm:wf-app-inv2}.
 \end{proof}
-\begin{remark}
-The hypotheses about $A$ and $B$ are quantified over \emph{any} translation of them, which the
-docstring justifies (nested applications then compose without a uniqueness side condition). That
-is the right choice, but it makes the statement heavier than it looks. The single
-\texttt{iota}-touched line is \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{774},
-where \texttt{app\_inv₂} is now fed \texttt{E.wf.orderedStrong}.
-\end{remark}
 
 \section{Opening a lambda telescope}
 
 \begin{lemma}[Counting arguments about MLCtx telescopes]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{788}
 \label{vpc:thm:mlctx-telescope-counting}
 \lean{Lean4Lean.MLCtx.dropN_toCtx_length, Lean4Lean.MLCtx.head_vlam, Lean4Lean.MLCtx.mkLambda'_eq_lams}\leanok
-Dropping $n$ binders removes at most $n$ context entries, a \texttt{vlet} contributing none
-because a let is inlined rather than bound; a telescope whose binders account for exactly the new
-entries must open with a \texttt{vlam}; hence \texttt{MLCtx.mkLambda'} agrees with
-\texttt{VExpr.lams} over the telescope's domains in that case.
 \uses{vpc:def:vexpr-appn-lams}
-\thesisref{let binders and zeta, axioms.tex, Let binders}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{788}
+\thesisref{Let binders and zeta, axioms.tex, Let binders.}
+
+\lead{In short} Dropping $n$ binders removes at most $n$ context entries (a \texttt{vlet}
+contributing none); a telescope whose binders account for exactly the new entries must open with
+a \texttt{vlam}, so \texttt{MLCtx.mkLambda'} agrees with \texttt{VExpr.lams} in that case.
 \end{lemma}
 \begin{proof}\leanok
-Induction on $n$ with \texttt{omega} on the length arithmetic, the \texttt{vlet} case yielding a
-contradiction.
+\lead{Idea} Induction on $n$ with \texttt{omega} on the length arithmetic; the \texttt{vlet} case
+yields a contradiction.
 \end{proof}
 
 \begin{definition}[The telescope invariant, translation side included]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{842}
 \label{vpc:struct:lambdatelescope-inv}\lean{Lean4Lean.lambdaTelescope.Inv}\leanok
-The five facts a caller opening $n$ binders needs: the domain list has length $n$; the new
-context is $\mathit{As}^{R}$ on top of the old; there is a \texttt{VLCtx.FVLift} over the $n$
-binders; the opened variables translate to $\mathtt{bvar}\,0,\dots,\mathtt{bvar}\,(n-1)$
-innermost first; and the original term is \texttt{MLCtx.mkLambda'} of the body.
 \uses{ind:vt-fvlift, ind:trexprs}
-\end{definition}
-\begin{remark}
-The docstring explains the deliberate choice of \texttt{mkLambda'} over \texttt{VExpr.lams}: the
-two agree only when every binder is a \texttt{vlam}, which is true of \texttt{lambdaTelescope} but
-should not be assumed silently. Good discipline.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{842}
 
-\begin{definition}[The syntactic guard that every leading binder type is literally Nat]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{856}
+\lead{In short} What a caller opening $n$ binders gets: the domain list has length $n$; the new
+context is $\mathit{As}^{R}$ on the old; a \texttt{VLCtx.FVLift} over the $n$ binders; the opened
+variables translate to $\mathtt{bvar}\,0,\dots,\mathtt{bvar}\,(n-1)$ innermost first; and the
+original term is \texttt{MLCtx.mkLambda'} of the body, which agrees with \texttt{VExpr.lams} only
+when every binder is a \texttt{vlam} -- true here, not assumed elsewhere.
+\end{definition}
+
+\begin{definition}[The syntactic Nat-binder guard]
 \label{vpc:def:natbindertypes}
 \lean{Lean.Expr.natBinderTypes, Lean.Expr.natBinderTypes_of_abstract1, Lean4Lean.MLCtx.mkLambda_natBinderTypes}\leanok
-\texttt{Expr.natBinderTypes} decides syntactically that all leading lambda binder types are the
-constant \texttt{Nat}; abstraction cannot create such a binder type where there was none; and if
-the term a telescope built passes the test, then the context entries it opened are $\mathtt{nat}$
-on the nose. The last is proved by induction on the telescope, using the abstraction lemma
-because \texttt{mkLambda} abstracts as it builds, and reading the binder's model type off
-\texttt{TrExprS.const}.
 \uses{vpc:thm:mlctx-telescope-counting}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{856}
+
+\lead{In short} \texttt{Expr.natBinderTypes} decides syntactically that every leading lambda
+binder type is the constant \texttt{Nat}; abstraction cannot create such a binder type where
+there was none; if the term a telescope built passes the test, its opened context entries are
+$\mathtt{nat}$ on the nose.
+\lead{Caveat} A hypothesis of the well-founded-recursion theorems below, not a check the
+recogniser performs; true by \texttt{rfl} at today's call sites but unverified in general.
 \end{definition}
-\begin{remark}
-This is a \emph{hypothesis} of the well-founded-recursion theorems, not a check the recogniser
-performs: the docstring argues that it holds by \texttt{rfl} at the call sites because the caller
-wrote the measure. The verified statement is therefore conditional on a property of the caller's
-measure that the kernel never tests. The checker's behaviour is unchanged, so this is a
-specification-scope note and not a soundness bug.
-\end{remark}
 
 \begin{theorem}[Correctness of lambdaTelescope]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{899}
 \label{vpc:thm:lambdatelescope-wf}
 \lean{Lean4Lean.lambdaTelescope.loop.WF, Lean4Lean.lambdaTelescope.WF}\leanok
-\texttt{lambdaTelescope e k} opens every leading lambda of $e$ as a fresh probe variable and hands
-the instantiated body to $k$. The continuation may assume the \texttt{lambdaTelescope.Inv} bundle,
-that the opened variables are exactly the new context's, that $e$ is the re-abstraction of the
-body over them, and that the arity matches.
 \uses{vpc:struct:lambdatelescope-inv}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{899}
+
+\lead{In short} \texttt{lambdaTelescope e k} opens every leading lambda of $e$ as a fresh probe
+variable and hands the instantiated body to $k$, whose continuation may assume the
+\texttt{lambdaTelescope.Inv} bundle.
 \end{theorem}
 \begin{proof}\leanok
 \uses{thm:vtc-withlocaldecl, family:trexprs-uninstantiate, family:vt-fvarsin-lemmas, family:expr-subst, thm:trexprs-weakfv}
-Induction via \texttt{loop.WF}. Each iteration matches the \texttt{lam} rule of the translation,
-applies \texttt{M.WF.withLocalDecl}, shows that the new abstraction cancels the instantiation
-(\texttt{FVarsIn.abstract\_instantiate1}, using freshness of the variable), rebuilds the five
+\lead{Idea} Induction via \texttt{loop.WF}: each iteration matches the \texttt{lam} rule, applies
+\texttt{M.WF.withLocalDecl}, shows the new abstraction cancels the instantiation, rebuilds the
 \texttt{Inv} fields, and opens the binder with \texttt{TrExprS.inst\_fvar}.
 \end{proof}
-\begin{remark}
-Central plumbing, and heavy: the continuation hypothesis takes eleven arguments. The file's own
-docstring concedes that threading them one at a time is unreadable, which is why \texttt{Inv}
-exists.
-\end{remark}
 
 \section{What a branch is given, and what it owes}
 
-\begin{definition}[What a branch of the recognizer is given about the definition under test]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1036}
+\begin{definition}[What a branch is given about the definition]
 \label{vpc:struct:primitive-data}
 \lean{Lean4Lean.Primitive.Data, Lean4Lean.Primitive.Data.contains, Lean4Lean.Primitive.Data.uvars_eq, Lean4Lean.Primitive.Data.hv}\leanok
-A record packaging the six facts \texttt{addDefinition} has already established when it calls the
-recogniser: the checker is at safety \texttt{safe}, its level parameters are the definition's, the
-arities agree, and the definition's type and value have translations that are well typed. Three
-derived facts come with it: a named primitive present in the real environment is in the model, the
-universe count is $0$ once the entry guard has fired, and the value is available as a bundled
-\texttt{TrTerm} at any probe context.
 \uses{ind:trexprs, def:vconstval, vpc:thm:contains-primitive, family:trterm-builders}
-\thesisref{admissibility of a definition, axioms.tex, Definitions (delta reduction)}
-\end{definition}
-\begin{remark}
-The design goal recorded in the docstring is that each branch becomes a standalone theorem taking
-\texttt{Data} instead of the enclosing context; that is realised in
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Clauses.lean}{1} and is a genuine
-modularisation.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1036}
+\thesisref{Admissibility of a definition, axioms.tex, delta reduction.}
 
-\begin{definition}[The translation atoms shared by all eighteen branches]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1053}
+\lead{In short} A record packaging what \texttt{addDefinition} has already established before
+calling the recogniser: safety, the level parameters, matching arities, and typed translations of
+the definition's type and value; and three derived facts: a named primitive present in the real
+environment is in the model, the universe count is $0$ once the entry guard fires, and the value
+is a bundled \texttt{TrTerm} at any probe context.
+\end{definition}
+
+\begin{definition}[The translation atoms shared by all branches]
 \label{vpc:def:prim-atoms}
 \lean{Lean4Lean.Primitive.zerob, Lean4Lean.Primitive.succb, Lean4Lean.Primitive.oneb, Lean4Lean.Primitive.twob, Lean4Lean.Primitive.boolb, Lean4Lean.Primitive.hNatT, Lean4Lean.Primitive.trNat, Lean4Lean.Primitive.predb, Lean4Lean.Primitive.addb, Lean4Lean.Primitive.divb, Lean4Lean.Primitive.modb, Lean4Lean.Primitive.mulb, Lean4Lean.Primitive.natCod, Lean4Lean.Primitive.natCod1, Lean4Lean.Primitive.boolCod, Lean4Lean.Primitive.trBool, Lean4Lean.Primitive.boolOp2Ty, Lean4Lean.Primitive.boolOp2Ty_tgt, Lean4Lean.Primitive.bitwiseTy}\leanok
-Pre-built \texttt{TrTerm} and \texttt{TrTy} bundles for everything a branch's shape check
-mentions: the \texttt{Nat} constructors and the numerals $1$ and $2$ written as constructor
-applications rather than literals, the boolean literals, the operators that appear in someone
-else's recurrence (\texttt{Nat.pred}, \texttt{Nat.add}, \texttt{Nat.div}, \texttt{Nat.mod},
-\texttt{Nat.mul}), the codomain bundles at each binder depth, the type
-\texttt{Bool -> Bool -> Bool} pinned so that its target is \texttt{boolOp2} on the nose, and
-\texttt{Nat.bitwise}'s own type.
 \uses{vpc:thm:prim-trnat-trbool, vpc:thm:prim-nat-bool-typing, struct:trterm, thm:trexprs-ofconst, family:trterm-builders}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1053}
+
+\lead{In short} Pre-built \texttt{TrTerm}/\texttt{TrTy} bundles for everything a branch's shape
+check mentions: the \texttt{Nat} constructors and the numerals $1,2$ as constructor applications,
+the boolean literals, the operators named in someone else's recurrence, the codomain bundles at
+each depth, \texttt{Bool -> Bool -> Bool} pinned to target \texttt{boolOp2}, and
+\texttt{Nat.bitwise}'s own type.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, entering through trNat, trBool and TrTerm.ofConst}
 \end{definition}
-\begin{remark}
-Thirteen \texttt{iota}-touched lines here (1074--1124), all \texttt{c.Ewf.ordered} becoming
-\texttt{c.Ewf.orderedStrong}, all forced by the new signatures of \texttt{trNat},
-\texttt{trBool}, \texttt{natIsType}, \texttt{boolIsType} and \texttt{TrTerm.ofConst}. Of the
-nineteen atoms, only \texttt{zerob}, \texttt{succb}, \texttt{oneb}, \texttt{twob} and
-\texttt{boolb} came through the edit still free of \texttt{sorryAx}; the other fourteen acquired
-one. The docstring records that routing the enclosing theorem's branches
-through these atoms costs about 40 seconds of elaboration, so that theorem keeps duplicate local
-copies; an acknowledged duplication that is to disappear once the branches are extracted.
-\end{remark}
 
-\begin{theorem}[The checked type pins the model type of the constant]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1163}
+\begin{theorem}[The checked type pins the constant's model type]
 \label{vpc:thm:data-mktyeq}
 \lean{Lean4Lean.Primitive.Data.mkTyEq, Lean4Lean.Primitive.Data.mkTyEq1, Lean4Lean.Primitive.Data.mkTyEqBitwise}\leanok
-If the recogniser's syntactic test showed that the definition's source type is the expected arrow
-shape, then the model type recorded for the constant is exactly the corresponding model arrow:
-$\mathtt{nat} \to \mathtt{nat} \to \mathit{cod}'$, $\mathtt{nat} \to \mathit{cod}'$, or
-$\mathtt{boolOp2} \to \mathtt{natOp2}$. The binary version is generic in the codomain bundle, so
-\texttt{Nat.beq} and \texttt{Nat.ble} pass a \texttt{Bool} bundle instead.
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1163}
+
+\lead{In short} If the syntactic test showed the source type has the expected arrow shape, the
+model type recorded for the constant is exactly the matching model arrow: $\mathtt{nat} \to
+\mathtt{nat} \to \mathit{cod}'$, $\mathtt{nat} \to \mathit{cod}'$, or $\mathtt{boolOp2} \to
+\mathtt{natOp2}$, the binary form generic in the codomain bundle so \texttt{Nat.beq}/\texttt{Nat.ble}
+pass a \texttt{Bool} bundle instead.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, inherited from natArrow1/natArrow2 and the atoms}
 \end{theorem}
 \begin{proof}\leanok
 \uses{family:trexprs-eqv, def:trexprs-isunique, vpc:thm:prim-natarrow, vpc:def:prim-atoms}
-\texttt{TrExprS.eqv} moves the translation onto the shape that was compared against, then
-\texttt{TrExprS.unique} (determinism of translation, with \texttt{IsUnique} discharging the
-codomain) against the arrow that \texttt{natArrow1}, \texttt{natArrow2} or \texttt{bitwiseTy}
-builds.
+\lead{Idea} \texttt{TrExprS.eqv} moves the translation onto the compared shape, then
+\texttt{TrExprS.unique} against the arrow \texttt{natArrow1}/\texttt{natArrow2}/\texttt{bitwiseTy}
+build.
 \end{proof}
 
-\begin{definition}[The obligation the primitive recognizer must discharge]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1204}
+\begin{definition}[The obligation the recognizer must discharge]
 \label{vpc:struct:primitiveresult}\lean{Lean4Lean.Primitive.PrimitiveResult}\leanok
-For a definition the recogniser accepted: it is safe, it has no level parameters, and for every
-well-formed environment above the checking environment that already satisfies
-\texttt{HasPrimitives}, adding the definition's constant and its definitional equation yields an
-environment that still satisfies \texttt{HasPrimitives}.
 \uses{ind:primspec, def:tr-constant, def:venv-basic}
-\thesisref{conservativity of definitions, axioms.tex, Definitions (delta reduction)}
-\end{definition}
-\begin{remark}
-The quantification over extensions is the right shape: primitive semantics are claimed only in
-well-formed extensions of the environment recognition ran in, which is what keeps the
-recogniser's syntactic implementation out of the rest of the metatheory.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1204}
+\thesisref{Conservativity of definitions, axioms.tex, delta reduction.}
 
-\begin{theorem}[Assembling a PrimitiveResult from a branch's reflection of the value]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1216}
+\lead{In short} For a definition the recogniser accepted: it is safe, has no level parameters, and
+for every well-formed extension already satisfying \texttt{HasPrimitives}, adding its constant
+and its equation keeps that invariant.
+\end{definition}
+
+\begin{theorem}[Assembling a PrimitiveResult]
 \label{vpc:thm:data-mkresult}
 \lean{Lean4Lean.Primitive.Data.mkResult, Lean4Lean.Primitive.Data.mkResult1, Lean4Lean.Primitive.Data.mkResultBool, Lean4Lean.Primitive.Data.mkResultTypeEq}\leanok
-Given membership of the specification in \texttt{primSpecs}, the pinned model type, and a
-reflection of the \emph{value} in the checking environment, produce the
-\texttt{PrimitiveResult}. The quantification over extensions is discharged here, so an individual
-branch never sees it. \texttt{mkResultTypeEq} covers \texttt{Char.ofNat}, whose whole obligation
-is the recorded type.
 \uses{vpc:struct:primitiveresult}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1216}
+
+\lead{In short} Given membership in \texttt{primSpecs}, the pinned model type, and a reflection
+of the value in the checking environment, produce the \texttt{PrimitiveResult}; the
+quantification over extensions is discharged here, so no branch sees it.
+\texttt{mkResultTypeEq} covers \texttt{Char.ofNat}, whose whole obligation is the recorded
+type.
 \end{theorem}
 \begin{proof}\leanok
 \uses{thm:hasprimitives-addconst, vpc:thm:reflects-toconst, vpc:struct:primitive-data}
-\texttt{HasPrimitives.addPrimitiveDefEq} reduces the invariant to the one new specification, then
-the appropriate \texttt{toConst} carries the value's reflection onto the constant; the name
-equation comes from the declaration's translation and the universe count from
-\texttt{Data.uvars\_eq}.
+\lead{Idea} \texttt{HasPrimitives.addPrimitiveDefEq} reduces the invariant to the one new
+specification, then the matching \texttt{toConst} carries the value's reflection onto the
+constant.
 \end{proof}
-\begin{remark}
-Three near-identical proof scripts, \texttt{mkResult}, \texttt{mkResult1} and
-\texttt{mkResultBool}, differing only in the specification constructor and the pinned type;
-\texttt{mkResultTypeEq} is a different and shorter proof. A reviewer might ask for one
-polymorphic lemma for the first three, but the \texttt{PrimSpec} constructors have different
-arities, so the duplication is defensible.
-\end{remark}
 
 \begin{theorem}[The obligation for Nat.bitwise]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1262}
 \label{vpc:thm:data-mkresultbitwise}\lean{Lean4Lean.Primitive.Data.mkResultBitwise}\leanok
-For \texttt{Nat.bitwise} the reflection must hold at \emph{every} boolean operator any
-well-formed extension might supply: given the recorded type and a proof that for every extension
-and every $f$ reflecting $g$ the value applied to $f$ reflects $\mathtt{Nat.bitwise}\ g$, the
-\texttt{PrimitiveResult} follows.
 \uses{vpc:struct:primitiveresult}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1262}
+
+\lead{In short} For \texttt{Nat.bitwise} the reflection must hold at \emph{every} boolean
+operator a well-formed extension might supply: given the recorded type and, for every extension
+and every $f$ reflecting $g$, that the value applied to $f$ reflects
+$\mathtt{Nat.bitwise}\ g$, the \texttt{PrimitiveResult} follows: the specification that forces
+\texttt{VContext.Ext} (\ref{vpc:struct:vcontext-ext}) to exist at all.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong (natLitT) and via IsDefEq.uniq (UniqueTyping/Injectivity)}
 \end{theorem}
 \begin{proof}\leanok
 \uses{thm:hasprimitives-addconst, vpc:thm:adddefeq-wf, vpc:thm:reflects-congr-head, vpc:lem:prim-isdefequ-app-congr, vpc:thm:prim-nat-bool-typing, fam:defeq-mixing}
-\texttt{addPrimitiveDefEq} reduces to the one new specification; its type half is the recorded
-constant. For the reflection half, transport the caller's argument along the composite extension,
-then move it from the value to the constant with \texttt{congr\_head}, the constant's typing
-coming from \texttt{HasType.defeqU\_l} and the application's from \texttt{HasType.app}.
+\lead{Idea} \texttt{addPrimitiveDefEq} reduces to the new specification; transport the argument
+along the composite extension, then move it from value to constant with \texttt{congr\_head}.
 \end{proof}
-\begin{remark}
-This is the branch whose higher-order specification forced \texttt{VContext.Ext} to exist at all.
-\end{remark}
 
 \section{The Nat.div and Nat.mod fuel recursion}
 
 \begin{definition}[The shape of a fuel-recursion call]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1313}
 \label{vpc:def:natgocall}
 \lean{Lean4Lean.Primitive.natGoCall, Lean4Lean.Primitive.natGoType}\leanok
-A call of \texttt{Nat.div.go} or \texttt{Nat.modCore.go} as a five-argument application, and the
-type it is checked against: the divisor, a proof that it is positive, the fuel, the dividend and
-a proof that the fuel covers it, returning \texttt{Nat}, for whatever order relation the branch
-checked.
-\end{definition}
-\begin{remark}
-The docstring says the type is spelled out at each use rather than named, because naming it makes
-the peeling \texttt{simp}s unfold it. It is in fact named, as \texttt{natGoType}, but as an
-\texttt{abbrev}, hence reducible, which is the same thing for \texttt{simp}; the
-performance-driven point stands, the wording does not.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1313}
 
-\begin{lemma}[Typing the arguments of a well-formed fuel-recursion call]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1325}
+\lead{In short} A call of \texttt{Nat.div.go} or \texttt{Nat.modCore.go} as a five-argument
+application -- divisor, positivity proof, fuel, dividend, a proof the fuel covers it -- and the
+type it is checked against.
+\end{definition}
+
+\begin{lemma}[Typing the arguments of a fuel-recursion call]
 \label{vpc:thm:goargs}\lean{Lean4Lean.Primitive.goArgs}\leanok
-If a five-argument call is well formed at the empty context and the head has the recorded
-\texttt{natGoType}, then each argument has its recorded domain type and the call itself has type
-$\mathtt{nat}$.
 \uses{vpc:def:natgocall}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1325}
+
+\lead{In short} If a well-formed five-argument call at the empty context has the recorded
+\texttt{natGoType} head, each argument has its recorded domain and the call itself has type
+$\mathtt{nat}$.
 \axfoot{sorryAx via IsDefEq.uniq and IsDefEqU.forallE\_inv through app\_inv', and via VEnv.WF.orderedStrong / VEnv.WF.patsStrong, which the four app\_inv calls invoke directly}
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:strong-inversions, vpc:thm:wf-inv-prime, fam:inst-inst}
-Four \texttt{app\_inv}s peel the spine, then five \texttt{app\_inv'}s move each argument onto the
-recorded domain in turn, with \texttt{simp} discharging each instantiation using closedness of
+\lead{Idea} Four \texttt{app\_inv}s peel the spine, then five \texttt{app\_inv'}s move each
+argument onto its recorded domain, \texttt{simp} discharging each instantiation via closedness of
 the order relation.
 \end{proof}
-\begin{remark}
-Four \texttt{iota}-touched lines, all forced by \texttt{app\_inv}.
-\end{remark}
 
 \begin{theorem}[The fuel recursion runs to the end]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1360}
 \label{vpc:thm:natfuelrec}\lean{Lean4Lean.Primitive.natFuelRec}\leanok
-Given a step equation at literals saying that a call at fuel $f'+1$ either stops with
-$\overline{E(x)}$ when $x < b$ or reduces to a context $H$ applied to the call at fuel $f'$ and
-dividend $x - b$, together with the arithmetic side conditions relating $F$, $E$ and $h$, a
-well-formed call at a positive divisor $b$ and any fuel $f > x$ is definitionally
-$\overline{F(x,b)}$. Positivity of $b$ is a hypothesis, not something the lemma derives.
 \uses{vpc:def:natgocall}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1360}
+
+\lead{In short} Given a step equation at literals -- a call at fuel $f'+1$ stops with
+$\overline{E(x)}$ when $x < b$, else reduces to a context $H$ applied to the call at fuel $f'$ and
+dividend $x - b$ -- with $F,E,h$ arithmetically consistent, a well-formed call at positive $b$ and
+fuel $f > x$ is definitionally $\overline{F(x,b)}$.
+Positivity of $b$ is a hypothesis, not derived.
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:thm:goargs, fam:defeq-mixing}
-Induction on the fuel, generalising the dividend and the bound proof. Each step applies the
-supplied equation, transports well-formedness backwards through the context $H$, and chains the
-induction hypothesis through $H$'s evaluation hypothesis and the argument typings from
-\texttt{goArgs}.
+\lead{Idea} Induction on the fuel, generalising the dividend and the bound proof, chaining the
+induction hypothesis through $H$'s evaluation and the argument typings from \texttt{goArgs}.
 \end{proof}
-\begin{remark}
-A well-chosen abstraction: \texttt{Nat.div} and \texttt{Nat.mod} differ only in what the step does
-to the recursive call and in what the recursion returns when it stops, so both branches are this
-one lemma. Ten hypotheses is a lot, but each is motivated in the docstring.
-\end{remark}
 
 \begin{lemma}[Guard and safety boilerplate]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1392}
 \label{vpc:lem:elsefail-hok}
 \lean{Lean4Lean.Primitive.elseFail, Lean4Lean.Primitive.hok}\leanok
-A guard that throws on failure proves whatever its continuation proves; and the recogniser's entry
-test implies the definition is safe with no level parameters.
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1392}
+
+\lead{In short} A guard that throws on failure proves whatever its continuation proves; the
+recogniser's entry test implies the definition is safe with no level parameters.
 \end{lemma}
 \begin{proof}\leanok
 \uses{thm:vtc-forin}
-\texttt{split} and \texttt{M.WF.bindThrow}; \texttt{simp\_all} on the entry test.
+\lead{Idea} \texttt{split} and \texttt{M.WF.bindThrow}; \texttt{simp\_all} on the entry test.
 \end{proof}
 
 \section{Well-founded recursion}
 
-This section covers \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{1}, the
-verification of \texttt{unfoldNatWellFounded}. Its only two callers are \texttt{checkNatGcd}
-(\srcloc{Lean4Lean/Primitive.lean}{373}) and \texttt{checkNatBitwise}
-(\srcloc{Lean4Lean/Primitive.lean}{412}); \texttt{Nat.div} and \texttt{Nat.mod} go through the
-fuel recursion of the previous section instead. The fixpoint
-$\mathtt{Nat.fix}\ h\ F\ x$ is \emph{not} definitionally $F\ x\ (\lambda y\,\_.\ \mathtt{Nat.fix}\ h\ F\ y)$,
-and the \texttt{Nat.eager} gadget in the fuel deliberately blocks reduction until the measure
-evaluates to a numeral, so the caller cannot obtain the unfolding in one step: it has to consume
-fuel. That is why the functional and the fuelled \texttt{go} are part of the interface rather
-than hidden.
+This section covers \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{1}: the
+verification of \texttt{unfoldNatWellFounded}, whose only callers guard \texttt{Nat.gcd} and
+\texttt{Nat.bitwise} (\texttt{Nat.div}/\texttt{Nat.mod} use the fuel recursion above).
+$\mathtt{Nat.fix}\ h\ F\ x$ does not unfold definitionally to $F\ x\ (\lambda y\,\_.\
+\mathtt{Nat.fix}\ h\ F\ y)$, so a caller must consume fuel to reach it.
 
-\begin{definition}[What the well-founded-recursion recognizer hands back]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{43}
+\begin{definition}[What the recognizer hands back]
 \label{vpc:struct:probebundle}\lean{Lean4Lean.Primitive.ProbeBundle}\leanok
-A record extending the code-level \texttt{Probe} with the model side: translations of the
-fixpoint functional $F$, the packer and the induction-hypothesis domain; the packed-argument type
-$\mathit{Aty}$ read off the head-normal form of $F$'s inferred type; the fact that the packer
-\emph{is} a lambda telescope over \texttt{Nat} domains whose body has type $\mathit{Aty}$; and
-the two typings $\mathit{dom} : \mathit{Aty} \to \mathtt{Sort}\ u$ and
-$F : (a : \mathit{Aty}) \to \mathit{dom}\ a \to \_$.
 \uses{family:kernel-primitive-dsl, ind:trexprs, vpc:def:vexpr-appn-lams}
-\thesisref{no counterpart; the ambient inductive machinery is axioms.tex sec:inductive}
-\end{definition}
-\begin{remark}
-The docstrings are unusually candid about what the recogniser does \emph{not} check (nothing here
-relates $\mathit{Aty}$ to the packer), and push that obligation to the caller through
-\texttt{applied}. The honesty is right, but it means the bundle's interface is wider than it
-looks.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{43}
+\thesisref{No counterpart; the ambient machinery is axioms.tex sec:inductive.}
 
-\begin{lemma}[The bundle's pieces applied to a packed argument]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{80}
+\lead{In short} A record extending the code-level \texttt{Probe} with translations of the
+fixpoint functional $F$, the packer, and the induction-hypothesis domain; the packed-argument
+type $\mathit{Aty}$ read off $F$'s inferred type; that the packer \emph{is} a lambda telescope
+over \texttt{Nat} domains with body of type $\mathit{Aty}$; and the typings of $\mathit{dom}$ and
+$F$.
+\lead{Caveat} Nothing here relates $\mathit{Aty}$ to the packer; that check is pushed to
+\texttt{applied}.
+\end{definition}
+
+\begin{lemma}[The bundle applied to a packed argument]
 \label{vpc:thm:probebundle-applied}
 \lean{Lean4Lean.Primitive.ProbeBundle.applied, Lean4Lean.Primitive.ProbeBundle.packAty}\leanok
-\texttt{applied}: given a translation of an argument and a proof that it has type $\mathit{Aty}$,
-one gets translations of $\mathit{dom}\ a$ and $F\ a$, that $\mathit{dom}\ a$ is a type, and that
-$F\ a$, the equation's left-hand side, is well typed, all at the probe's own context, which
-extends the recogniser's by whatever variables the pattern binds. \texttt{packAty}: the packer applied to a spine of
-\texttt{Nat}-typed arguments of the right length has type $\mathit{Aty}$.
 \uses{vpc:struct:probebundle}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{80}
+
+\lead{In short} \texttt{applied}: given a translated argument of type $\mathit{Aty}$, get
+translations of $\mathit{dom}\ a$ and $F\ a$, that $\mathit{dom}\ a$ is a type, and that $F\ a$ is
+well typed, at the probe's own extended context.
+\texttt{packAty}: the packer applied to a \texttt{Nat}-typed spine of the right length has
+type $\mathit{Aty}$.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:def:vexpr-forallEs, vpc:ind:argstyped, thm:trexprs-weakfv, vpc:thm:lams-appn}
-Weaken the bundle's recogniser-context typings over the probe's lift and apply
-\texttt{HasType.app}; the instantiation of the induction-hypothesis domain is consumed by the
-lift the domain picked up under the binder. \texttt{packAty} rewrites the lifted packer as a
-telescope of \texttt{Nat}s (using that the domains are closed), builds the arguments'
-\texttt{ArgsTyped} by \texttt{natTelescope}, closes the telescope with \texttt{lams\_appN'} and
-transports the body's type along the resulting substitution.
+\lead{Idea} Weaken the bundle's typings over the probe's lift and apply \texttt{HasType.app};
+\texttt{packAty} rewrites the packer as a \texttt{Nat} telescope, builds \texttt{ArgsTyped} by
+\texttt{natTelescope}, and closes with \texttt{lams\_appN'}.
 \end{proof}
 
-\begin{definition}[The bundle's pieces under a closing substitution]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{154}
+\begin{definition}[The bundle under a closing substitution]
 \label{vpc:def:probebundle-closed}
 \lean{Lean4Lean.Primitive.ProbeBundle.Fc, Lean4Lean.Primitive.ProbeBundle.packc, Lean4Lean.Primitive.ProbeBundle.domc, Lean4Lean.Primitive.ProbeBundle.arg, Lean4Lean.Primitive.ProbeBundle.ihTy, Lean4Lean.Primitive.ProbeBundle.pγ, Lean4Lean.Primitive.ProbeBundle.parg, Lean4Lean.Primitive.ProbeBundle.pihTy, Lean4Lean.Primitive.ProbeBundle.plhs, Lean4Lean.Primitive.ProbeBundle.ihCtx}\leanok
-Accessors for the functional, the packer and the domain closed by a substitution $\gamma$ for the
-recogniser's context; the packed argument at ground arguments; and the induction-hypothesis type
-there. The \texttt{p}-prefixed family (\texttt{parg}, \texttt{pihTy}, \texttt{plhs}
-and the substitution \texttt{p}$\gamma$) is the same inside a probe, where the bundle's translations still carry the
-probe's own lift, together with the probe's context (\texttt{ihCtx}) and the closed form of the
-equation's left-hand side.
 \uses{def:subst, vpc:def:vexpr-appn-lams}
-\end{definition}
-\begin{remark}
-The docstring justifies abbreviations over extra parameters (one bundle instead of a handful of
-expressions that have to be kept in step) and notes that the recursion arguments are already
-closed, being literals, so they are not closed by $\gamma$.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{154}
 
-\begin{definition}[One unfolding of the recursion with recursive calls discharged]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{176}
+\lead{In short} Accessors for the functional, packer and domain closed by a substitution
+$\gamma$; the packed argument and induction-hypothesis type at ground arguments; and the
+\texttt{p}-prefixed family giving the same inside a probe, together with its context and the
+closed equation's left side. The recursion arguments are already closed, being literals, so
+$\gamma$ does not touch them.
+\end{definition}
+
+\begin{definition}[One unfolding with recursive calls discharged]
 \label{vpc:def:probebundle-done}\lean{Lean4Lean.Primitive.ProbeBundle.Done}\leanok
-$\mathsf{Done}$ says: for every recursion argument $a$ and every induction hypothesis
-$\mathit{ih}$ of the right type, if $\mathit{ih}$ returns $\overline{R(y)}$ on every $y$ of
-strictly smaller measure, taking the argument up to definitional equality, then
-$F\ (\mathit{pack}\ \overline{\sigma(a)})\ \mathit{ih} \equiv \overline{R(a)}$. This is the
-caller's real obligation and the real termination argument.
 \uses{vpc:def:probebundle-closed, vpc:struct:vcontext-ext}
-\end{definition}
-\begin{remark}
-The restriction to smaller measures is what stops the hypothesis from being vacuous, and is also
-all that the fuel induction can supply: a \texttt{go} at fuel $t$ is stuck below $t$.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{176}
 
-\begin{definition}[What the recognizer's checks buy, at ground arguments]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{223}
-\label{vpc:struct:natfixunfold}\lean{Lean4Lean.Primitive.ProbeBundle.NatFixUnfold}\leanok
-Three fields over a family $\mathit{goFn}$: the packed argument is well typed; \texttt{entry} says
-the value at ground arguments is $\mathit{go}$ at fuel $\mathit{measure}(a)+1$; and \texttt{step}
-says one unit of fuel buys one call to $F$ with the recursive calls pointing at $\mathit{go}$ at
-the lower fuel, uniformly in a base point $b$. $\mathit{go}$ is a family because closing the
-telescope at different arguments may leave different terms, only the functional being checked
-telescope-free.
-\uses{vpc:def:probebundle-closed}
+\lead{In short} $\mathsf{Done}$: for every recursion argument $a$ and induction hypothesis
+$\mathit{ih}$ that returns $\overline{R(y)}$ on every $y$ of strictly smaller measure, $F\
+(\mathit{pack}\ \overline{\sigma(a)})\ \mathit{ih} \equiv \overline{R(a)}$ -- the caller's real
+obligation, the smaller-measure restriction being all the fuel induction below can supply.
 \end{definition}
-\begin{remark}
-The twenty-line docstring explaining why $\mathit{go}$ is a family, and why the two axes (the
-closing of the recogniser's context and the indexing of the recursion arguments) are separate, is
-the single most useful piece of documentation in the chapter.
-\end{remark}
+
+\begin{definition}[What the checks buy, at ground arguments]
+\label{vpc:struct:natfixunfold}\lean{Lean4Lean.Primitive.ProbeBundle.NatFixUnfold}\leanok
+\uses{vpc:def:probebundle-closed}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{223}
+
+\lead{In short} Three fields over a family $\mathit{goFn}$: the packed argument is well typed;
+\texttt{entry} says the value at ground arguments is $\mathit{go}$ at fuel
+$\mathit{measure}(a)+1$; \texttt{step} says one unit of fuel buys one call to $F$ with recursive
+calls at the lower fuel, uniformly in a base point $b$; $\mathit{go}$ is a family since closing
+the telescope at different arguments may leave different terms, only the functional being
+telescope-free.
+\end{definition}
 
 \begin{theorem}[The fuel induction]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{247}
 \label{vpc:thm:goconverges}
 \lean{Lean4Lean.Primitive.ProbeBundle.GoConverges, Lean4Lean.Primitive.ProbeBundle.GoConverges.succ, Lean4Lean.Primitive.ProbeBundle.GoConverges.all, Lean4Lean.Primitive.ProbeBundle.NatFixUnfold.reflects}\leanok
-$\mathsf{GoConverges}\ t$ says that $\mathit{go}$ at fuel $t$ computes $R$ on every argument whose
-measure $t$ outruns. It is preserved by adding one unit of fuel, given \texttt{NatFixUnfold} and
-\texttt{Done}, hence holds at every fuel; and at the fuel the recursion is actually entered with
-this gives the reflection of the value at ground arguments.
 \uses{vpc:struct:natfixunfold, vpc:def:probebundle-done}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{247}
+
+\lead{In short} $\mathsf{GoConverges}\ t$: $\mathit{go}$ at fuel $t$ computes $R$ on every
+argument whose measure $t$ outruns; preserved by one unit of fuel given \texttt{NatFixUnfold} and
+\texttt{Done}, hence holds at every fuel, giving the reflection at the fuel actually entered.
 \end{theorem}
 \begin{proof}\leanok
 \uses{fam:defeq-mixing}
-\texttt{succ} takes \texttt{step} to produce the induction hypothesis, feeds it to \texttt{Done},
-and discharges \texttt{Done}'s recursive-call premise with the outer induction hypothesis, which
-is legitimate because \texttt{Done} only asks about smaller measures and the fuel is one ahead.
-\texttt{all} is the structural recursion on the fuel, and \texttt{reflects} instantiates at the
-base point \texttt{entry} supplies.
+\lead{Idea} Induction on the fuel: \texttt{succ} feeds \texttt{step}'s hypothesis to
+\texttt{Done}, discharging its recursive-call premise with the outer induction hypothesis.
 \end{proof}
-\begin{remark}
-The induction is on the fuel, not on the argument: the recursive call has a smaller measure but
-whatever fuel the outer call had left, so an induction on the argument would not line the two up.
-The proof is short and clean, in pleasant contrast to \texttt{unfoldNatWellFounded.WF'}.
-\end{remark}
 
 \begin{theorem}[Correctness of running one probe against the bundle]
-\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{344}
 \label{vpc:thm:probebundle-probe-wf}\lean{Lean4Lean.Primitive.ProbeBundle.probe.WF}\leanok
-Running a probe with a substitution for the pattern's arguments, a failure continuation and a
-right-hand-side builder is well formed, and its postcondition has the shape \texttt{Done} asks
-about: for every extension, every closing $\gamma$ of the probe's own variables and every closed
-induction hypothesis of the probe's domain type, the probed left-hand side is definitionally
-equal to some value the builder produced and described.
 \uses{vpc:def:probebundle-closed}
+\contrib{mixed}\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{344}
+
+\lead{In short} Running a probe with a substitution, a failure continuation and a
+right-hand-side builder is well formed, and its postcondition has the shape \texttt{Done} asks
+about: for every extension, closing and closed induction hypothesis, the probed left side is
+definitionally equal to a value the builder produced and described.
 \axfoot{sorryAx via VEnv.WF.orderedStrong / VEnv.WF.patsStrong (TrExprS.appN) and via the typechecker monad's own gaps}
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:thm:probebundle-applied, vpc:thm:trexprs-appn, thm:vtc-withlocaldecl, vpc:thm:prim-istype-prime}
-Assemble the packed argument's typing with \texttt{packAty} and its translation with
-\texttt{TrExprS.appN} over the reconciliation \texttt{Expr.mkAppN\_eq}, then \texttt{applied}
-gives the binder's type and the left-hand side's typing. Open the binder with
-\texttt{M.WF.withLocalDecl}, run \texttt{checkType} and \texttt{isDefEq} on the builder's output,
-and close by substituting the checked equation along the extended closing.
+\lead{Idea} Assemble the packed argument's typing and translation via \texttt{packAty} and
+\texttt{TrExprS.appN}; \texttt{applied} gives the binder's type; open it with
+\texttt{M.WF.withLocalDecl}, run the builder, close by substituting along the extended closing.
 \end{proof}
-\begin{remark}
-The single \texttt{iota} line in this 1775-line file is inside this proof, at
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{380}, forced by
-\texttt{TrExprS.appN}'s new hypothesis. Three adjacent lines now spell the same coercion three
-ways: line 376 passes \texttt{c.Ewf} bare through the \texttt{CoeOut} instance, line 380 writes
-\texttt{.orderedStrong} explicitly, line 381 keeps \texttt{.ordered}.
-\end{remark}
 
-\begin{definition}[The go step equation, exported one telescope at a time]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{445}
+\begin{definition}[The go step equation, one telescope at a time]
 \label{vpc:def:unfold-step}
 \lean{Lean4Lean.Primitive.unfoldNatWellFounded.StepIH, Lean4Lean.Primitive.unfoldNatWellFounded.StepBranch, Lean4Lean.Primitive.unfoldNatWellFounded.Step}\leanok
-Three nested existential propositions recording what the recogniser's three \texttt{lambdaTelescope}
-passes established about the equation
-$\mathit{go}\ \dots (\mathtt{succ}\ t)\ x\ \mathit{hfuel} \equiv F\ x\ (\lambda y\,h_y.\ \mathit{go}\ \dots t\ y\ \mathit{pf})$:
-the outer \texttt{Step} is \texttt{go}'s own telescope, whose body is a recursor applied to the
-fuel variable and in which the recursor does not mention that variable; the middle
-\texttt{StepBranch} is the successor branch as a function of the recursion argument and its proof;
-the inner \texttt{StepIH} is the induction hypothesis as the recursor at the lower fuel.
 \uses{vpc:struct:lambdatelescope-inv, ind:trexprs}
-\thesisref{the iota rule for Nat, axioms.tex sec:inductive}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{445}
+\thesisref{The iota rule for Nat, axioms.tex sec:inductive.}
+
+\lead{In short} Three nested existentials recording what the recogniser's three
+\texttt{lambdaTelescope} passes established about $\mathit{go}\ \dots (\mathtt{succ}\ t)\ x\
+\mathit{hfuel} \equiv F\ x\ (\lambda y\,h_y.\ \mathit{go}\ \dots t\ y\ \mathit{pf})$:
+\texttt{Step} is \texttt{go}'s own telescope (its body a recursor on the fuel variable, which the
+recursor does not mention); \texttt{StepBranch} is the successor branch as a function of the
+recursion argument; \texttt{StepIH} is the induction hypothesis as the recursor at the lower
+fuel.
 \end{definition}
-\begin{remark}
-The condition that the recursor does not mention the fuel variable is essential and well
-explained: without it, closing the telescope at two different fuels would give two unrelated
-recursors. These three definitions are, however, very wide existentials:
-\texttt{StepIH} and \texttt{StepBranch} bind nine variables each (three and four conjuncts
-respectively) and \texttt{Step} binds sixteen under nine conjuncts.
-\end{remark}
 
 \begin{definition}[The eager gadget at literals]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{501}
 \label{vpc:def:unfold-eager}\lean{Lean4Lean.Primitive.unfoldNatWellFounded.Eager}\leanok
-What the recogniser's check on the \texttt{eager} gadget is worth: there is a translation of the
-gadget such that at every \emph{literal} $k$ one has $\mathit{eager}\ \overline{k} \equiv \overline{k}$.
 \uses{ind:trexprs}
-\end{definition}
-\begin{remark}
-The docstring explains why this cannot be exported as an implication conditioned on the decision
-being a boolean literal: that premise would live at the probe context, where the decision is
-precisely what is not a literal, so no consumer could supply it. The instantiation therefore
-happens inside the block. An excellent explanation of a subtle design forcing.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{501}
 
-\begin{definition}[What the recognizer's local-declaration block exports]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{527}
+\lead{In short} What the check on the \texttt{eager} gadget is worth: a translation of the
+gadget such that at every literal $k$, $\mathit{eager}\ \overline{k} \equiv \overline{k}$. Not an
+implication on the decision being a literal: that premise would live at the probe context, where
+the decision is precisely not one.
+\end{definition}
+
+\begin{definition}[What the local-declaration block exports]
 \label{vpc:def:unfold-blockq}\lean{Lean4Lean.Primitive.unfoldNatWellFounded.BlockQ}\leanok
-The four checks of the block that binds the recursion variable, carried forward verbatim as a
-proposition about the extended context: that the fixpoint's own measure agrees with the caller's;
-the entry equation, reducing the fixpoint at the bound variable to \texttt{go} at the same
-arguments fuelled by the successor of the measure; the \texttt{Step} equation at that same
-\texttt{go}; and the \texttt{Eager} gadget. The intermediate terms are existentially quantified
-along with their translations.
 \uses{vpc:def:unfold-step, vpc:def:unfold-eager, ind:trexprs, def:trexpr}
-\end{definition}
-\begin{remark}
-The docstring's last paragraph says that only the first two checks are recorded so far. That is
-stale: the definition records all four, \texttt{Step} and \texttt{Eager} included.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{527}
 
-\begin{theorem}[The recognizer returns a bundle satisfying the unfolding facts]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{587}
+\lead{In short} The block's four checks, carried forward as a proposition about the extended
+context: the fixpoint's measure agrees with the caller's; the entry equation reduces the fixpoint
+at the bound variable to \texttt{go} fuelled by the successor of the measure; the \texttt{Step}
+equation at that \texttt{go}; and the \texttt{Eager} gadget.
+\end{definition}
+
+\begin{theorem}[The recognizer returns a bundle satisfying the unfolding]
 \label{vpc:thm:unfoldnatwf-prime}\lean{Lean4Lean.Primitive.unfoldNatWellFounded.WF'}\leanok
-\texttt{unfoldNatWellFounded e meas fail} is well formed and returns a \texttt{ProbeBundle} whose
-packer telescope has exactly \texttt{meas.lambdaArity} domains, such that for every extension and
-every closing there is a \texttt{NatFixUnfold} for it at the value. The hypotheses are
-translations of the value and the measure, presence of \texttt{Nat}, safety, the
-conditional-verification facts moved out to the callers, the measure's evaluation at ground
-arguments, and the syntactic \texttt{natBinderTypes} guard on the measure.
 \uses{vpc:struct:natfixunfold, vpc:def:natbindertypes}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{587}
+
+\lead{In short} \texttt{unfoldNatWellFounded e meas fail} is well formed and returns a
+\texttt{ProbeBundle} whose packer telescope has exactly \texttt{meas.lambdaArity} domains, such
+that for every extension and closing there is a \texttt{NatFixUnfold} for it at the value.
+Hypotheses: translations of the value and measure, presence of \texttt{Nat}, safety, the
+conditional-verification facts moved to callers, the measure's evaluation at ground arguments,
+and the \texttt{natBinderTypes} guard on the measure.
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:thm:lambdatelescope-wf, vpc:def:unfold-blockq, vpc:thm:lams-appn, vpc:thm:argstyped-substeq, thm:vtc-withlocaldecl}
-A single tactic proof of 1135 lines with \texttt{set\_option maxHeartbeats 1000000}: open the
-measure's telescope with \texttt{lambdaTelescope.WF}, use \texttt{checkType} to relate the value's
-telescope to the measure's, track the translations through \texttt{whnfCore},
-\texttt{unfoldDefinition} and the application destructuring, then turn the four checks of
-\texttt{BlockQ} into the three fields of \texttt{NatFixUnfold}, closing the telescope per base
-point with \texttt{VExpr.lams\_appN} and \texttt{ArgsTyped.substEq}.
+\lead{Idea} Open the measure's telescope with \texttt{lambdaTelescope.WF} and relate it to the
+value's via \texttt{checkType}. \lead{Steps}
+\begin{enumerate}
+\item track translations through \texttt{whnfCore} and \texttt{unfoldDefinition};
+\item destructure the application;
+\item turn \texttt{BlockQ}'s four checks into \texttt{NatFixUnfold}'s three fields;
+\item close the telescope per base point with \texttt{VExpr.lams\_appN} and
+\texttt{ArgsTyped.substEq}.
+\end{enumerate}
 \end{proof}
-\begin{remark}
-Two design decisions are recorded in the preamble, worked out before the proof was written: the
-packer is used applied and never as an abstraction, and the telescope is closed per base point.
-Both are right. The proof itself is, at this size, not practically reviewable and is a
-maintenance liability.
-\end{remark}
 
 \begin{theorem}[The recognizer's contract for its callers]
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{1723}
 \label{vpc:thm:unfoldnatwf}
 \lean{Lean4Lean.Primitive.unfoldNatWellFounded.WF, Lean4Lean.Primitive.unfoldNatWellFounded.WF₂}\leanok
-Combining the plumbing with the fuel induction: the recogniser returns a bundle such that for
-every extension, closing and intended answer $R$, if the caller proves the single-unfolding
-obligation \texttt{Done}, then the value at ground arguments is $\overline{R(a)}$. The second form
-specialises to the two-argument recursion measured by $\lambda m\,\_.\ m$, which is what
-\texttt{Nat.gcd} and \texttt{Nat.bitwise} use.
 \uses{vpc:def:probebundle-done}
+\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{1723}
+
+\lead{In short} Combining the plumbing with the fuel induction: the recogniser returns a bundle
+such that for every extension, closing and intended answer $R$, if the caller proves
+\texttt{Done}, the value at ground arguments is $\overline{R(a)}$.
+The second form specialises to the two-argument recursion measured by $\lambda m\,\_.\ m$,
+used by \texttt{Nat.gcd} and \texttt{Nat.bitwise}.
 \end{theorem}
 \begin{proof}\leanok
 \uses{vpc:thm:unfoldnatwf-prime, vpc:thm:goconverges, vpc:lem:prim-natfstlamapp, vpc:thm:prim-trnat-trbool, vpc:def:prim-atoms}
-Weaken the postcondition of the plumbing theorem and apply \texttt{NatFixUnfold.reflects}. The
-specialised form additionally builds the fixed measure's translation from \texttt{trNat} and
-\texttt{hNatT} and evaluates it at ground arguments with \texttt{natFstLamApp}, which is closed,
-so no closing reaches it.
+\lead{Idea} Weaken the plumbing theorem's postcondition and apply
+\texttt{NatFixUnfold.reflects}; the specialised form builds the fixed measure's translation and
+evaluates it with \texttt{natFstLamApp}.
 \end{proof}
-\begin{remark}
-The user-facing statement is the right one: the caller's only obligation is \texttt{Done}, and $R$
-is quantified after the closing so that the answer may depend on it, which \texttt{Nat.bitwise}
-needs. Both consumers take the specialised \texttt{WF₂}:
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Gcd.lean}{31} and
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Bitwise.lean}{61}. Nothing consumes the general
-\texttt{WF}.
-\end{remark}
 
 \section{The verification boundary}
 
 This section covers \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{1}: the theorem the
-declaration checker consumes, and a second half specifying the recogniser's inductive clause that
-as yet has no consumer.
+declaration checker consumes, and a pre-staged specification of the recogniser's inductive
+clause.
 
-\begin{theorem}[Verification boundary for the primitive-definition recognizer]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{33}
+\begin{theorem}[Verification boundary for the recognizer]
 \label{vpc:thm:checkdef-wf}\lean{Lean4Lean.Primitive.checkDef.WF}\leanok
-If the model environment is well formed for the real one, the universe counts of the declaration
-and its model entry agree, the model entry is well formed there, and the type and value of the
-definition already have the translations recorded for it, then running \texttt{Primitive.checkDef}
-either
-returns \texttt{false} or returns \texttt{true} together with a \texttt{PrimitiveResult}: the
-definition is safe, has no universe parameters, and its addition preserves \texttt{HasPrimitives}
-in every well-formed extension.
 \uses{vpc:struct:primitive-data, vpc:struct:primitiveresult}
-\thesisref{no counterpart; this is the Lean 4 kernel's primitive-acceleration layer}
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{33}
+\thesisref{No counterpart; the Lean 4 kernel's primitive-acceleration layer.}
+
+\lead{In short} If the model environment is well formed for the real one, universe counts agree,
+and the definition's type and value already have their recorded translations, then
+\texttt{Primitive.checkDef} either returns \texttt{false} or returns \texttt{true} with a
+\texttt{PrimitiveResult}: safe, no universe parameters, addition preserves
+\texttt{HasPrimitives} in every well-formed extension.
 \end{theorem}
 \begin{proof}\leanok
 \uses{prim-clauses:thm:checknatadd-wf, prim-divmod:thm:checknatdiv-wf, prim-gcd:thm:checknatgcd-wf, prim-bitwise:thm:checknatbitwise-wf, prim-clauses:thm:checkstringoflist-wf}
-Bundle the hypotheses into a \texttt{Primitive.Data}, unfold \texttt{checkDef} and \texttt{split}
-on its eighteen-way dispatch, discharging each branch with the corresponding branch theorem of
-Chapter~\ref{chap:primitives-arith}; the default branch returns \texttt{nofun}.
+\lead{Idea} Bundle the hypotheses into a \texttt{Primitive.Data}, unfold \texttt{checkDef} and
+split on its eighteen-way dispatch, each branch discharged by its
+Chapter~\ref{chap:primitives-arith} theorem; the default branch returns \texttt{nofun}.
 \end{proof}
-\begin{remark}
-The docstring records why this shape is available at all: \texttt{addDefinition} reorders type and
-value checking before calling the recogniser, so that the two translations arrive here as
-hypotheses. Consumed at \srcloc{Lean4Lean/Verify/Environment/Checker.lean}{201}.
-\end{remark}
 
-\begin{definition}[Adding a run of constants to a model environment]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{73}
+\begin{definition}[Adding a run of constants]
 \label{vpc:ind:addsconsts}\lean{Lean4Lean.Primitive.AddsConsts}\leanok
-An inductive relation saying that one environment is reached from another by adding each of a
-list of names at its declared type with no universe parameters, interleaved with arbitrary
-\texttt{addDefEq} steps. It abstracts the only part of a future \texttt{AddInduct} specification
-that the primitive invariant depends on.
 \uses{def:venv-basic}
-\thesisref{inductive type admissibility, axioms.tex sec:inductive}
-\end{definition}
-\begin{remark}
-Nothing in the repository constructs an \texttt{AddsConsts}; it is a placeholder, as the file's
-own docstring says.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{73}
+\thesisref{Inductive type admissibility, axioms.tex sec:inductive.}
 
-\begin{lemma}[Basic properties of a run of constant additions]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{81}
+\lead{In short} An inductive relation: one environment is reached from another by adding each
+name of a list at its declared universe-free type, interleaved with arbitrary
+\texttt{addDefEq} steps.
+\lead{Caveat} It abstracts the only part of a future \texttt{AddInduct} specification the
+primitive invariant depends on; nothing yet constructs an \texttt{AddsConsts}.
+\end{definition}
+
+\begin{lemma}[Basic properties of a run of additions]
 \label{vpc:lem:addsconsts-lemmas}
 \lean{Lean4Lean.Primitive.AddsConsts.constants_stable, Lean4Lean.Primitive.AddsConsts.constants_of_mem, Lean4Lean.Primitive.AddsConsts.holds_of_ne}\leanok
-A constant already present survives the run, because \texttt{addConst} fails on a name that is
-already there; each constant of the run is present at the end with the type it was added at; and
-a primitive specification whose name is none of the added ones survives the run.
 \uses{vpc:ind:addsconsts}
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{81}
+
+\lead{In short} A constant already present survives the run; each added constant is present at
+the end with its added type; a primitive specification whose name is none of the added ones
+survives the run.
 \end{lemma}
 \begin{proof}\leanok
 \uses{fam:addconsts, thm:primspec-addconst}
-Induction on the derivation, using \texttt{VEnv.addConst\_constants\_eq} and the
-\texttt{PrimSpec.Holds} transport lemmas for \texttt{addConst} and \texttt{addDefEq}.
+\lead{Idea} Induction on the derivation, using \texttt{VEnv.addConst\_constants\_eq} and the
+\texttt{PrimSpec.Holds} transport lemmas.
 \end{proof}
 
-\begin{definition}[The constants contributed by the declarations of Bool and Nat]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{114}
+\begin{definition}[Constants contributed by Bool and Nat]
 \label{vpc:def:bool-nat-consts}
 \lean{Lean4Lean.Primitive.boolConsts, Lean4Lean.Primitive.natConsts}\leanok
-The three-element lists $[(\mathtt{Bool},\mathtt{Type}),(\mathtt{false},\mathtt{bool}),(\mathtt{true},\mathtt{bool})]$
-and $[(\mathtt{Nat},\mathtt{Type}),(\mathtt{Nat.zero},\mathtt{nat}),(\mathtt{Nat.succ},\mathtt{nat} \to \mathtt{nat})]$.
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{114}
+
+\lead{In short} The lists
+$[(\mathtt{Bool},\mathtt{Type}),(\mathtt{false},\mathtt{bool}),(\mathtt{true},\mathtt{bool})]$
+and $[(\mathtt{Nat},\mathtt{Type}),(\mathtt{Nat.zero},\mathtt{nat}),(\mathtt{Nat.succ},\mathtt{nat}
+\to \mathtt{nat})]$.
 \end{definition}
 
-\begin{lemma}[Adding the Bool or Nat block preserves the primitive invariant]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{121}
+\begin{lemma}[Adding the Bool or Nat block preserves the invariant]
 \label{vpc:thm:addsconsts-hasprimitives}
 \lean{Lean4Lean.Primitive.AddsConsts.hasPrimitives_bool, Lean4Lean.Primitive.AddsConsts.hasPrimitives_nat}\leanok
-If an environment satisfies \texttt{HasPrimitives} and the next one is obtained by adding exactly
-\texttt{boolConsts} (resp.\ \texttt{natConsts}), then it still satisfies \texttt{HasPrimitives}.
 \uses{vpc:def:bool-nat-consts, ind:primspec}
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{121}
+
+\lead{In short} If an environment satisfies \texttt{HasPrimitives} and the next is obtained by
+adding exactly \texttt{boolConsts} (resp.\ \texttt{natConsts}), it still satisfies
+\texttt{HasPrimitives}.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:lem:addsconsts-lemmas}
-Case split on whether the specification's name is one of the three added ones. If it is not,
-\texttt{holds\_of\_ne}; if it is, decide which by membership in the mapped list and
-\texttt{simp [primSpecs]}, then discharge the containment or type equation with
+\lead{Idea} Case split on whether the specification's name is among the three added; if not,
+\texttt{holds\_of\_ne}, else decide by membership and discharge with
 \texttt{constants\_of\_mem}.
 \end{proof}
-\begin{remark}
-The two are byte-for-byte the same proof script with the constant list swapped; one lemma
-parameterised by a three-element list would remove the duplication.
-\end{remark}
 
-\begin{definition}[What the recognizer's inductive clause is worth]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{162}
-\label{vpc:def:primitive-inductive-result}
-\lean{Lean4Lean.Primitive.PrimitiveInductiveResult}\leanok
-The proposition that a flagged inductive declaration is one of the two primitive inductives in
-standard form (safe, no level parameters, no parameters, a single type at \texttt{Type}, with
-exactly the constructors the primitive table speaks about) and that adding the constants it
-contributes preserves \texttt{HasPrimitives}.
+\begin{definition}[What the inductive clause is worth]
+\label{vpc:def:primitive-inductive-result}\lean{Lean4Lean.Primitive.PrimitiveInductiveResult}\leanok
 \uses{vpc:def:bool-nat-consts, vpc:ind:addsconsts}
-\thesisref{inductive specifications, axioms.tex sec:inductive}
-\end{definition}
-\begin{remark}
-The docstring is candid about the missing half of the handshake: a constructive
-\texttt{AddInduct} whose added constants are these, which the declaration checker's inductive
-case still waits on.
-\end{remark}
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{162}
+\thesisref{Inductive specifications, axioms.tex sec:inductive.}
 
-\begin{lemma}[Verification boundary for the recognizer's inductive clause]
-\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{174}
+\lead{In short} A flagged inductive declaration is one of the two primitive inductives in
+standard form (safe, no level or ordinary parameters, one type at \texttt{Type}, exactly the
+constructors the table names) and adding the constants it contributes preserves
+\texttt{HasPrimitives}.
+\lead{Caveat} The recogniser's inductive clause waits on a constructive
+\texttt{AddInduct} supplying exactly these constants; none exists yet.
+\end{definition}
+
+\begin{lemma}[Verification boundary for the inductive clause]
 \label{vpc:thm:checkinductive-wf}\lean{Lean4Lean.Primitive.checkInductive.WF}\leanok
-If \texttt{Primitive.checkInductive} returns \texttt{true} on a declaration, then
-\texttt{PrimitiveInductiveResult} holds of it.
 \uses{vpc:def:primitive-inductive-result}
+\srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{174}
+
+\lead{In short} If \texttt{Primitive.checkInductive} returns \texttt{true} on a declaration, then
+\texttt{PrimitiveInductiveResult} holds of it.
+\lead{Caveat} Unused: the environment checker calls \texttt{checkInductive}, but no
+verification of the declaration checker's inductive case consumes this theorem yet.
 \end{lemma}
 \begin{proof}\leanok
 \uses{vpc:thm:addsconsts-hasprimitives, family:expr-beq}
-Unfold and \texttt{split} repeatedly on the recogniser's guards, using \texttt{Expr.eqv\_sort} to
-read the sort off the checked type, and close each surviving branch with the corresponding
-preservation lemma.
+\lead{Idea} Unfold and split repeatedly on the recogniser's guards, using
+\texttt{Expr.eqv\_sort} to read the sort, closing each branch with the matching preservation
+lemma.
 \end{proof}
-\begin{remark}
-Unused: the environment checker calls \texttt{Primitive.checkInductive}, but no verification of
-the declaration checker's inductive case consumes this theorem yet.
-\end{remark}
 
-\section{Contribution summary}
+\section*{Caveats}
 \label{sec:vpc-contribution}
-
-Twenty-seven of the seventy-six nodes of this chapter carry a contribution badge, and all of them
-carry it for the same reason. No statement about primitives was added, removed or changed on
-either branch: the entire delta is one mechanical adaptation of a hypothesis. Counted on the
-\texttt{iota} branch itself, twenty-seven declarations changed an \texttt{henv : env.Ordered}
-hypothesis to \texttt{henv : env.OrderedStrong} (twenty-five \texttt{theorem} lines, one
-\texttt{variable!} line covering \texttt{VExpr.WF.appN\_inv}, and one continuation line of
-\texttt{TrExprS.appChar\_inv'}), forty-five call sites changed \texttt{x.ordered} to
-\texttt{x.orderedStrong}, and one body line at \srcloc{Lean4Lean/Verify/Primitive.lean}{80} became
-\texttt{henv.ordered.constWF} because \texttt{OrderedStrong} is a structure whose first field is
-\texttt{Ordered}. That is 73 lines on the branch, of which 71 still carry \texttt{iota} blame at
-\texttt{HEAD}; one of them is the single line in
-\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{380}. The 5 lines blamed on
-\texttt{trproj} are the two hunks of \texttt{git diff iota HEAD} over these files: a three-line
-re-wrap of the signature of \ref{vpc:thm:wf-app-inv2} (431--433) and a two-line re-wrap of a call
-site inside the proof of \ref{vpc:thm:wf-appn-inv} (455--456), both pushed past 100 columns by the
-\texttt{iota} edit. There is no projection content anywhere in this chapter.
-
-The reason for the adaptation is upstream of this chapter. On \texttt{master} the inversion
-lemmas this layer lives on, \texttt{VExpr.WF.app\_inv}, \texttt{VExpr.WF.lam\_inv} and
-\texttt{HasType.const\_inv}, were provable from \texttt{Ordered} alone. On \texttt{iota} they were
-restated over \ref{struct:orderedstrong}, whose third field is subject reduction for the
-registered $\iota$ rules (\ref{def:patsstrongon}), and every consumer was dragged along. Within
-this chapter the genuine consumers are \ref{vpc:thm:prim-contains-nat} and
-\ref{vpc:thm:prim-trnat-trbool}, which go through \texttt{const\_inv}, and
-\ref{vpc:thm:wf-appn-inv}, \ref{vpc:thm:wf-inv-prime}, \ref{vpc:thm:lams-ctx},
-\ref{vpc:thm:lams-appn}, \ref{vpc:thm:trexprs-appn} and \ref{vpc:thm:goargs}, which go through
-\texttt{app\_inv} or \texttt{lam\_inv}. Everything else inherits the hypothesis from those,
-mostly through \ref{vpc:thm:prim-nat-bool-typing} and \ref{vpc:def:prim-atoms}.
-
-How it connects. The strengthened hypothesis is carried from the reflection schemas onto the
-constant by \ref{vpc:thm:reflects-toconst}, packaged into the recogniser's obligation by
-\ref{vpc:thm:data-mkresult} and \ref{vpc:thm:data-mkresultbitwise}, and surfaces at the
-verification boundary \ref{vpc:thm:checkdef-wf}, which the declaration checker consumes at
-\srcloc{Lean4Lean/Verify/Environment/Checker.lean}{201}. Since \texttt{OrderedStrong} is obtained
-from \texttt{VEnv.WF} only through \ref{thm:wf-orderedstrong}, and that rests on the admitted
-\ref{thm:wf-patsstrong}, the guarantee the primitive layer offers the kernel is now conditional on
-the $\iota$ contribution's one open obligation. That obligation is a \emph{new} source, not the
-first: before the branch this layer already reached the \texttt{sorry}s of
-\texttt{Theory/Typing/Injectivity.lean} and \texttt{Theory/Typing/UniqueTyping.lean}, through
-\ref{vpc:thm:prim-bitwise-operand} and through every node that chains two definitional equalities
-(\ref{vpc:lem:prim-isdefequ-app-congr}), and the \texttt{sorry} at \texttt{TrProj.weak'\_inv}
-through the typechecker monad's \texttt{M.WF.withLocalDecl}. What is new is that nineteen
-declarations in these four files which were \texttt{sorryAx}-free on \texttt{master} are not any
-more; they are listed in Section~\ref{sec:vpc-review}.
-
-What remains open on the contributed side is exactly \ref{thm:wf-patsstrong}; nothing in this
-chapter can discharge it, and nothing in this chapter is made harder or easier by it. What remains
-open as a matter of hygiene is the scope of the edit: it was applied uniformly rather than to the
-lemmas that need it, so the blast radius of \ref{thm:wf-patsstrong} in this layer is larger than
-the proofs require, and it is what turned nineteen previously unconditional declarations into
-conditional ones. Both points are recorded in Section~\ref{sec:vpc-review}.
-
-\section{Review notes}
 \label{sec:vpc-review}
-
 \begin{itemize}
-\item \textbf{High.} \srcloc{Lean4Lean/Verify/Primitive.lean}{29}: the \texttt{iota} branch
-replaced \texttt{env.Ordered} by \texttt{env.OrderedStrong} in every hypothesis of this layer.
-\texttt{OrderedStrong} is derivable from \texttt{VEnv.WF} only through
-\texttt{VEnv.WF.orderedStrong}, which is built on
-\texttt{VEnv.WF.patsStrong := sorry} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}). On
-\texttt{master} the inversion lemmas this layer uses (\texttt{VExpr.WF.app\_inv},
-\texttt{VExpr.WF.lam\_inv}, \texttt{HasType.const\_inv}) were provable from \texttt{Ordered}
-alone, and \texttt{Theory/Typing/Strong.lean} contained no \texttt{sorry} at all. After the
-change, \texttt{checkDef.WF} and every \texttt{PrimitiveResult} transitively depend on an admitted
-subject-reduction lemma for the new generic $\iota$-rule mechanism. Concretely, nineteen
-declarations in these four files carried no \texttt{sorryAx} on \texttt{master} and carry one
-now, the \emph{only} route being a \texttt{.orderedStrong} coercion the edit inserted:
-\texttt{ReflectsBoolBoolBool'.of\_left\_cases} (\srcloc{Lean4Lean/Verify/Primitive.lean}{429}),
-\texttt{ReflectsNatNat'.of\_pred\_equations} (\srcloc{Lean4Lean/Verify/Primitive.lean}{458}), the
-fourteen shared translation atoms \texttt{hNatT}, \texttt{trNat}, \texttt{predb}, \texttt{addb},
-\texttt{divb}, \texttt{modb}, \texttt{mulb}, \texttt{natCod}, \texttt{natCod1}, \texttt{boolCod},
-\texttt{trBool}, \texttt{boolOp2Ty}, \texttt{boolOp2Ty\_tgt} and \texttt{bitwiseTy}
-(\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1071}), and the three type-pinning
-theorems \texttt{Data.mkTyEq}, \texttt{Data.mkTyEq1} and \texttt{Data.mkTyEqBitwise}
-(\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{1163}). Everything the eighteen
-branches of Chapter~\ref{chap:primitives-arith} build on those atoms follows. This is a real
-widening of the trust boundary of code that is not part of the $\iota$ contribution, and it is
-stated nowhere in the source.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Verify/Primitive.lean}{84}: the edit was applied
-uniformly rather than minimally. \texttt{natZeroT} (29), \texttt{natSuccT} (34),
-\texttt{natPredT} (39), \texttt{natLitT} (84), \texttt{natFstLamApp} (96), \texttt{natIsType}
-(114), \texttt{boolLitT} (129), \texttt{boolIsType} (134) and \texttt{appChar\_inv'} (177) invoke
-only \texttt{HasType.weak0} (\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{610}) and
-\texttt{IsDefEq.isType} (\srcloc{Lean4Lean/Theory/Typing/Lemmas.lean}{945}), both of which still
-take \texttt{Ordered}; so do \texttt{boolIsType'} and \texttt{natIsType'}
-(\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{158}). Only
-\texttt{contains\_nat\_of\_hasType} (47), \texttt{boolOfBitwise} (76), \texttt{trNat} (122) and
-\texttt{trBool} (140) need the stronger hypothesis directly, through
-\texttt{HasType.const\_inv}; the five \texttt{natOf*} wrappers and
-\texttt{natArrow1}/\texttt{natArrow2} inherit it from those four and are not gratuitous. Keeping
-the weaker hypothesis where it suffices would have confined the new \texttt{sorry} dependency to
-four lemmas and their transitive users instead of the whole file. The edit reads as a global
-search-and-replace, not a considered minimisation.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{6}: the module
-docstring claims that ``the checker, extension, and declaration modules introduce no additional
-\texttt{sorry}-backed assumptions. The imported type-checker and theory layers retain their own
-explicit verification gaps.'' This is still literally true but now reads as a stronger trust
-statement than the code supports, since this layer's hypotheses are \texttt{OrderedStrong} and
-their only producer is the admitted \texttt{VEnv.WF.patsStrong}. The docstring was not revisited
-when the hypotheses were strengthened.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Verify/Primitive.lean}{210}: pre-existing on
-\texttt{master}, and unchanged by either branch, this chapter was never unconditional.
-\texttt{bitwiseOperand} uses \texttt{IsDefEqU.forallE\_inv}
-(\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{23}) and
-\texttt{IsDefEqU.of\_l} (\srcloc{Lean4Lean/Verify/Primitive.lean}{244}) goes through
-\texttt{IsDefEq.uniq} (\srcloc{Lean4Lean/Theory/Typing/UniqueTyping.lean}{13}), both
-\texttt{sorry}-backed. Every node below that chains two definitional equalities or inverts a
-$\Pi$ inherits that taint. A third, also pre-existing, reaches every theorem of this chapter that
-runs in the typechecker monad: \texttt{TypeChecker.M.WF.withLocalDecl}
-(\srcloc{Lean4Lean/Verify/TypeChecker/Basic.lean}{489}) restores its caches with
-\texttt{ConditionallyHasType.weakN\_inv} and \texttt{ConditionallyWHNF.weakN\_inv}
-(\srcloc{Lean4Lean/Verify/Typing/ConditionallyTyped.lean}{18}), which go through
-\texttt{TrExprS.weakFV\_inv} to the \texttt{sorry} at \texttt{TrProj.weak'\_inv}
-(\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{747}); that \texttt{sorry} is on \texttt{master}
-too, at line 723 of the same file, so this route is pre-existing even though the line now carries
-\texttt{trproj} blame. The footprints in this chapter therefore name three independent
-pre-existing \texttt{sorry} sources plus the contributed one, not one.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{856}: the
-syntactic guard \texttt{Expr.natBinderTypes}, that every leading binder type of the measure is
-literally the constant \texttt{Nat}, is a \emph{hypothesis} of the well-founded-recursion
-theorems, not a check the recogniser performs. The docstring argues it holds by \texttt{rfl} at
-the call sites because the caller writes the measure, which is true today; the verified statement
-is nonetheless conditional on a property of the caller's measure that the kernel never tests.
-\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{73}: dead code,
-documented but dead. \texttt{AddsConsts}, \texttt{constants\_stable},
-\texttt{constants\_of\_mem}, \texttt{holds\_of\_ne}, \texttt{boolConsts}, \texttt{natConsts},
-\texttt{hasPrimitives\_bool}, \texttt{hasPrimitives\_nat}, \texttt{PrimitiveInductiveResult} and
-\texttt{checkInductive.WF} form a closed cluster: they use each other and nothing else in the
-repository uses any of them, \texttt{AddsConsts} in particular being constructed nowhere. Lines
-73--195, 123 of this file's 195, are this pre-staged half, waiting on the \texttt{inductDecl} case
-of \texttt{addDecl.WF} (\srcloc{Lean4Lean/Verify/Environment.lean}{208}).
-\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive.lean}{121}:
-\texttt{AddsConsts.hasPrimitives\_bool} (121) and \texttt{AddsConsts.hasPrimitives\_nat} (137)
-are byte-for-byte the same proof script with \texttt{boolConsts} and \texttt{natConsts} swapped. A
-single lemma parameterised by the three-element constant list would remove the duplication.
-\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{431}: the only
-\texttt{trproj}-attributed lines in this chapter, 431--433 and 455--456, are a pure line re-wrap;
-\texttt{git diff iota HEAD} over these four files is exactly two hunks re-flowing lines the
-\texttt{iota} edit had pushed past 100 columns. Any summary of the \texttt{trproj} branch that
-counts them as projection work overstates its footprint.
-\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{318}: namespace
-inconsistency for the \texttt{List} helpers. \texttt{List.Forall2.map\_right'} (222) and
-\texttt{List.Forall2.forall\_left} (229) are declared with \texttt{\_root\_.}, while
-\texttt{List.Forall2.append\_inv} (318), \texttt{List.forall\_mem\_pair} (333),
-\texttt{List.Forall2.snoc} (336), \texttt{List.Forall2.rev} (342),
-\texttt{List.Forall2.fvars\_uniq} (357) and \texttt{List.mapIdx\_replicate\_nat} (141) are written
-bare inside \texttt{namespace Lean4Lean} and therefore land in \texttt{Lean4Lean.List}, shadowing
-the real \texttt{List} namespace inside the project.
-\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{587}:
-\texttt{unfoldNatWellFounded.WF'} is a single tactic proof of 1135 lines (587 to 1721) requiring
-\texttt{set\_option maxHeartbeats 1000000}. It is the largest obligation in the chapter and, at
-that size, not practically reviewable; the surrounding design notes are good but do not substitute
-for decomposition. Its \texttt{BlockQ} docstring
-(\srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{527}) is also stale: it says only
-the first two checks are recorded so far, whereas the definition records all four.
-\item \textbf{Low.} \srcloc{Lean4Lean/Verify/Environment/Primitive/Recursion.lean}{376}: after the
-\texttt{iota} edit three adjacent lines spell the same coercion three ways, line 376 passing
-\texttt{c.Ewf} bare through the \texttt{CoeOut} instance, line 380 writing
-\texttt{.orderedStrong} explicitly and line 381 keeping \texttt{.ordered}. Not wrong, but it takes
-a moment to see that these are the same object.
-\item \textbf{Low.} Small interface asymmetries, all \texttt{master} and all noted in the node
-remarks above: \texttt{ReflectsNatNat'.of\_pred\_equations}
-(\srcloc{Lean4Lean/Verify/Primitive.lean}{458}) hard-codes the meta-level \texttt{Nat.pred}
-instead of taking it as a parameter, unlike the six sibling schemas, which all take the
-meta-level function as a parameter;
-\texttt{ReflectsBoolBoolBool'.of\_closed\_cases} (\srcloc{Lean4Lean/Verify/Primitive.lean}{450})
-is a repackaging of its own hypotheses; \texttt{VContext.natBinLitBool}
-(\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{52}) inlines the proof of
-\texttt{ReflectsNatNatNat.applyLit} (\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{35})
-rather than reusing a \texttt{Bool}-valued analogue; and
-\texttt{VExpr.liftN\_lams} (\srcloc{Lean4Lean/Verify/Environment/Primitive/Basic.lean}{195})
-returns only an existential for the lifted domains where \texttt{liftN\_lams'} (128) computes
-them.
+\item Many reflection schemas, and every node past \ref{vpc:thm:prim-trnat-trbool}, depend on
+\texttt{VEnv.WF.orderedStrong}, whose only producer is the admitted
+\texttt{VEnv.WF.patsStrong}; \texttt{checkDef.WF} and every \texttt{PrimitiveResult} inherit it.
+\item Nodes that chain two definitional equalities, or invert a $\Pi$
+(\ref{vpc:thm:prim-bitwise-operand}, \ref{vpc:lem:prim-isdefequ-app-congr} and its consumers), go
+through \texttt{IsDefEq.uniq} and \texttt{IsDefEqU.forallE\_inv}, both \texttt{sorry}-backed.
+\item Every node run in the typechecker monad restores caches through
+\texttt{TrExprS.weakFV\_inv}, which reaches a further \texttt{sorry} at
+\texttt{TrProj.weak'\_inv}.
+\item \ref{vpc:def:natbindertypes}'s syntactic Nat-binder guard is a hypothesis of the
+well-founded-recursion theorems, not something the recogniser checks.
+\item \ref{vpc:ind:addsconsts} and the cluster it supports through
+\ref{vpc:thm:checkinductive-wf} are pre-staged: nothing constructs an \texttt{AddsConsts} yet,
+and \ref{vpc:thm:checkinductive-wf} has no consumer.
+\item \texttt{Nat.bitwise}'s higher-order obligation (\ref{vpc:thm:data-mkresultbitwise}) is the
+only branch whose specification quantifies over every extension's operators.
 \end{itemize}

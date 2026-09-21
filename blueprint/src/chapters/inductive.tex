@@ -1,83 +1,35 @@
 \chapter{Inductive types and iota-reduction}
 \label{chap:inductive}
 
-This chapter covers the model of Lean's inductive declarations: the syntactic shapes the
-constants of an inductive block must have, the staged environment extension that installs
-them, the well-formedness record they are checked against, and the machinery that turns a
-recursor computation rule into a registered schematic reduction rule ($\iota$ reduction).
-Four files are in scope: \srcloc{Lean4Lean/Theory/Inductive.lean}{1}, the specification
-layer (444 lines); \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{1}, the abstract pattern
-machinery together with the $\iota$ reduct builder (725 lines);
-\srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{1}, the environment bookkeeping and
-the soundness theorem for \texttt{addInduct} (785 lines); and
-\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{1}, a concrete instance of the
-Church-Rosser development's parameter record (433 lines).
-
-The baseline matters for judging this material. On \texttt{master},
-\texttt{Theory/Inductive.lean} was seven lines, consisting of
-\texttt{def VInductDecl.WF := sorry} and \texttt{def VEnv.addInduct := sorry}, and
-\texttt{InductiveLemmas.lean} was a single \texttt{theorem addInduct\_WF ... := sorry}.
-Inductive types were entirely unmodelled: \texttt{VInductDecl.WF} was an opaque proposition,
-so no environment containing an inductive declaration could be shown well-formed and every
-downstream theorem quantifying over well-formed environments was uninstantiable there. The
-\texttt{iota} branch
-replaces both \texttt{sorry}-definitions with real definitions, proves
-\texttt{addInduct\_WF} relative to the new record, makes the $\iota$ rule a first-class
-reduction rule of the type system, and builds the first concrete instance of the
-\texttt{Params} class the Church-Rosser development is parameterised over. Counting by
-line attribution: \texttt{Inductive.lean} is 4 master / 438 \texttt{iota} / 2
-\texttt{trproj}; \texttt{InductiveLemmas.lean} 8 / 753 / 24;
-\texttt{InductiveParams.lean} 0 / 389 / 44; \texttt{Pattern.lean} 229 / 419 / 77. In total
-about 2150 of the group's 2387 lines are contributed, and 69 of this chapter's 74 nodes.
-
-Thesis correspondence is \texttt{axioms.tex} \S2.6: \S2.6.1 inductive specifications
-(\texttt{sec:inductive}), \S2.6.2 large elimination (\texttt{sec:large\_elim}), \S2.6.3 the
-recursor, \S2.6.4 the computation rule (\texttt{sec:iota}). The model deviates from the
-thesis in two systematic, deliberate, kernel-facing directions. It carries a
-parameter/index split (\texttt{decl.nparams}) that the thesis's $t\;p[b]$ does not have,
-and it supports mutual blocks (\texttt{decl.types} a list) where the thesis has a single
-$\mu t{:}F.\,K$. Both are recorded in the docstrings. A third and more consequential
-difference is that the thesis builds positivity into the grammar of a \texttt{ctor}
-judgment, whereas the model states flat predicates over an already elaborated $\Pi$-type,
-mirroring the kernel's \texttt{checkPositivity} and \texttt{isValidIndApp?}; no lemma
-anywhere relates the two.
-
-An attribution caveat applies throughout. On these four files
-\texttt{git diff iota trproj} consists of two line re-wraps
-(\srcloc{Lean4Lean/Theory/Inductive.lean}{397},
-\srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{618}) and two docstring rewrites
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{351},
-\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{385}): every \emph{code} block the
-line blame tags \texttt{trproj} was ported to \texttt{iota} as commit \texttt{3de1dcb},
-byte for byte. The blame's tag is kept in the badges below, but for review purposes the
-code of this group belongs to the $\iota$ contribution. What \texttt{trproj} has here that
-\texttt{iota} does not is the expanded \texttt{DefEqsAsPats}/\texttt{toParams}
-documentation, which is the most useful prose in the group
-(\ref{def:indparams-defeqs-as-pats}).
-
-Assessment. The design is good and unusually well considered: the staging of
-\texttt{VInductDecl.WF} so that each kind of constant is typed in the environment the
-kernel checks it in, the \texttt{Generic}/\texttt{Realizes}/\texttt{TemplateHeaded} triple
-that makes the new \texttt{IsDefEq.pat} rule legal and informative, the split of
-\texttt{iotaRHS'} (what reduction sees) from \texttt{iotaRHS} (the typed split), and the
-\texttt{PatsIota} registry invariant are all the right abstractions, each justified in
-prose in the source. No file in the group contains a \texttt{sorry}, the proofs are short,
-and the specification is exercised against real kernel data by \texttt{Tests/IotaShape.lean}
-through the \texttt{Decidable} instances of \texttt{Tests/ShapeDecide.lean}. Three things
-limit what the result means, all recorded in \S\ref{sec:ind-review}: nothing derives
-\texttt{VInductDecl.WF} from the kernel's own inductive checker, so the hardest declaration
-kind remains an assumption of the refinement; \texttt{VExpr.RuleShape} pins only the
-\emph{number} of recursive arguments of an $\iota$ reduct, so the record admits rules Lean
-would never generate; and the \texttt{Params} instance applies only to environments with no
-definitional axiom at all. The contribution should be described as specified and validated,
-not as verified.
+\section*{At a glance}
+\begin{itemize}
+\item \lead{Goal} Specify an inductive block's constants, stage their addition to the
+environment, and give the recursor's computation rule (\hl{$\iota$-reduction}) as a
+first-class reduction rule.
+\item \lead{Main results} Theorem~\ref{thm:indlem-add-induct-wf} (adding a well-formed block
+keeps the environment ordered); Theorem~\ref{thm:indparams-wf-patsiota} (well-formed
+environments fit the iota shape); Lemma~\ref{thm:indparams-cr-defeq-of-induct} (Church-Rosser
+for one block, tainted).
+\item \lead{Status} \stProved{} 73 nodes; \stTainted{} 1
+(Lemma~\ref{thm:indparams-cr-defeq-of-induct}, via two \texttt{sorry}s in
+\texttt{NormalEq.parRed}).
+\item \lead{Contribution} \texttt{iota} specifies well-formedness (\ref{structure:ind-wf}),
+the $\iota$-rule reduct, and soundness of \texttt{addInduct}. \texttt{trproj} ports several
+lemmas unchanged and adds the toy \texttt{inductParams} instance.
+\item \lead{Lean files} \texttt{Lean4Lean/Theory/Inductive.lean},
+\texttt{Lean4Lean/Theory/Typing/Pattern.lean},
+\texttt{Lean4Lean/Theory/Typing/InductiveLemmas.lean},
+\texttt{Lean4Lean/Theory/Typing/InductiveParams.lean}.
+\item \lead{Thesis} axioms.tex \S2.6: \S2.6.1 inductive specifications, \S2.6.2 large
+elimination, \S2.6.3 the recursor, \S2.6.4 the computation rule.
+\end{itemize}
 
 \section{Syntactic shapes of an inductive block}
 
-All predicates in this section live in namespace \texttt{VExpr} and read an already
-elaborated type. Notation: \texttt{bvarsDesc lo n} is the descending variable list
-$[\mathsf{bvar}(lo+n-1),\ldots,\mathsf{bvar}\,lo]$, \texttt{piArity}/\texttt{piBinders}/\texttt{piBody}
-read a $\Pi$-telescope and \texttt{lamArity}/\texttt{lamBody} a $\lambda$-telescope.
+Predicates here live in namespace \texttt{VExpr} and read an elaborated type.
+\texttt{bvarsDesc lo n} is the descending list $[\mathsf{bvar}(lo+n-1),\ldots,\mathsf{bvar}\,lo]$;
+\texttt{piArity}/\texttt{piBinders}/\texttt{piBody} read a $\Pi$-telescope and
+\texttt{lamArity}/\texttt{lamBody} a $\lambda$-telescope.
 
 \begin{definition}[Occurrence of a block's type formers, \texttt{MentionsConst}]
 \label{def:ind-mentions-const}
@@ -85,18 +37,15 @@ read a $\Pi$-telescope and \texttt{lamArity}/\texttt{lamBody} a $\lambda$-telesc
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{24}
 \uses{ind:vexpr}
-$\mathsf{MentionsConst}\;cs\;e$ is defined by recursion on $e$: false at $\mathsf{bvar}$
-and $\mathsf{sort}$, list membership at $\mathsf{const}$, disjunction at the three binary
-nodes. \texttt{mentionsConst} is the Boolean twin and \texttt{mentionsConst\_iff} relates
-them by a structural induction discharged by \texttt{simp}.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}), the implicit side condition that a
-nonrecursive argument type does not mention $t$}
-\reviewnote{It mirrors the kernel's \texttt{hasIndOcc}
-(\srcloc{Lean4Lean/Inductive/Add.lean}{118}), which searches the whole term, so the two
-agree. The Boolean copy exists only so that \texttt{Tests/ShapeDecide.lean} can
-\texttt{decide} the shape predicates; the \texttt{Decidable} instance built from
-\texttt{mentionsConst\_iff} lives there, not beside the definition, a placement the test
-file's header states and defends.}
+\thesisref{axioms.tex \S2.6.1.}
+
+\lead{In short} \hl{Whether $e$ mentions any former in $cs$}: false at $\mathsf{bvar}$/$\mathsf{sort}$,
+list membership at $\mathsf{const}$, disjunction at the three binary nodes.
+\begin{itemize}
+\item \lead{Lean} \texttt{mentionsConst} is the Boolean twin; \texttt{mentionsConst\_iff}
+relates them.
+\item Mirrors the kernel's \texttt{hasIndOcc} \srcloc{Lean4Lean/Inductive/Add.lean}{118}.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Result type of a constructor, \texttt{CtorResult}]
@@ -105,16 +54,11 @@ file's header states and defends.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{44}
 \uses{def:pi-telescope, def:bvarsdesc, def:mkapps}
-$ty.\mathsf{CtorResult}\;T\;np\;nf\;nind$ holds when $ty.\mathsf{piArity} = np+nf$ and there
-are universe levels $us$ and a list $idx$ of length $nind$ with
-$ty.\mathsf{piBody} = (\mathsf{const}\;T\;us).\mathsf{mkApps}\,(\texttt{bvarsDesc}\;nf\;np \mathbin{+\!\!+} idx)$.
-Under $np+nf$ binders the parameters sit at $\mathsf{bvar}(nf+np-1),\ldots,\mathsf{bvar}\,nf$,
-which is exactly \texttt{bvarsDesc nf np}; the index terms are unconstrained here.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}), the base case $t\;e\;\mathsf{ctor}$
-of the \texttt{ctor} judgment}
-\reviewnote{The thesis has one argument sequence where the model fixes the first
-\texttt{nparams} arguments to be the parameter variables. This is a deliberate move towards
-the kernel and is documented as such.}
+\thesisref{axioms.tex \S2.6.1.}
+
+\lead{In short} $ty.\mathsf{CtorResult}\;T\,np\,nf\,nind$ holds when \hl{$ty.\mathsf{piArity}
+= np+nf$ and $ty.\mathsf{piBody} = (\mathsf{const}\,T\,us).\mathsf{mkApps}(\texttt{bvarsDesc}\,nf\,np
+\mathbin{+\!\!+} idx)$} for some levels $us$ and index list $idx$ of length $nind$.
 \end{definition}
 
 \begin{definition}[A valid recursive occurrence of the block, \texttt{ValidIndApp}]
@@ -123,18 +67,17 @@ the kernel and is documented as such.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{75}
 \uses{def:ind-mentions-const, def:bvarsdesc, def:mkapps}
-$e.\mathsf{ValidIndApp}\;fs\;np\;d$ holds when there is a former $T \in fs$, levels $us$ and
-index terms $idx$ with
-$e = (\mathsf{const}\;T\;us).\mathsf{mkApps}\,(\texttt{bvarsDesc}\;d\;np \mathbin{+\!\!+} idx)$
-and no $a \in idx$ mentions a former of $fs$. The offset $d$ is the number of binders
-between the field level and the occurrence.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}), the $t\;e$ of the recursive-argument
-rule}
-\reviewnote{The kernel's \texttt{isValidIndAppIdx} (\srcloc{Lean4Lean/Inductive/Add.lean}{157})
-additionally checks the exact arity \texttt{args.size == nparams + nindices[i]}. The model
-drops it and so accepts a former over-applied in its index positions. Such a field would be
-rejected later by \texttt{WF.universes}, so this is imprecision rather than a hole, but the
-docstring advertises the predicate as mirroring \texttt{isValidIndApp?} and it does not.}
+\thesisref{axioms.tex \S2.6.1.}
+
+\lead{In short} $e.\mathsf{ValidIndApp}\;fs\;np\;d$ holds when
+\hl{$e = (\mathsf{const}\;T\;us).\mathsf{mkApps}(\texttt{bvarsDesc}\;d\;np \mathbin{+\!\!+} idx)$}
+for some $T \in fs$, $us$, and $idx$ with no member mentioning $fs$; $d$ is the offset from
+the field level.
+\begin{itemize}
+\item \lead{Caveat} The kernel's \texttt{isValidIndAppIdx}
+\srcloc{Lean4Lean/Inductive/Add.lean}{157} also checks exact arity; this predicate drops
+it, accepting an over-applied former (later rejected by \texttt{WF.universes}).
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Strict positivity of one constructor field, \texttt{FieldPositive}]
@@ -143,17 +86,18 @@ docstring advertises the predicate as mirroring \texttt{isValidIndApp?} and it d
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{93}
 \uses{def:ind-valid-ind-app, def:ind-mentions-const, def:pi-telescope}
-A field type $ty$ is positive at depth $d$ when either it does not mention the block at
-all, or every one of its $\Pi$-binder types is free of the block's formers and
-$ty.\mathsf{piBody}$ is a \texttt{ValidIndApp} at depth $d + ty.\mathsf{piArity}$.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}), the two argument rules
-$\forall y{:}\beta.\,\tau$ and $(\forall z{::}\gamma.\;t\;e)\to\tau$}
-\reviewnote{Two deviations. The kernel reduces the field type and each binder domain to
-weak head normal form (\texttt{checkPositivity},
-\srcloc{Lean4Lean/Inductive/Add.lean}{184}) whereas the model reads manifest binders only,
-so the model is strictly \emph{stricter} than the kernel. Conversely the thesis forbids a
-recursive argument from being referred to by later arguments and the model, like the
-kernel, does not.}
+\thesisref{axioms.tex \S2.6.1.}
+
+\lead{In short} $ty$ is $\mathsf{FieldPositive}$ at depth $d$ iff
+\hl{$\neg\mathsf{MentionsConst}\;fs\;ty$, or every $\Pi$-binder of $ty$ avoids $fs$ and
+$ty.\mathsf{piBody}.\mathsf{ValidIndApp}\;fs\;np\;(d+ty.\mathsf{piArity})$}: the block is
+absent, or reached only through a valid recursive occurrence.
+\begin{itemize}
+\item \lead{Caveat} Reads manifest $\Pi$-binders; the kernel's \texttt{checkPositivity}
+\srcloc{Lean4Lean/Inductive/Add.lean}{184} reduces to whnf first, so this is stricter.
+\item The thesis also forbids a recursive argument from being referred to by later
+arguments; this predicate, like the kernel, does not enforce that.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Strict positivity of a constructor, \texttt{CtorPositive}]
@@ -162,12 +106,11 @@ kernel, does not.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{101}
 \uses{def:ind-field-positive, def:ind-mentions-const, def:pi-telescope}
-$ty.\mathsf{CtorPositive}\;fs\;np$ holds when no former of $fs$ occurs in the first $np$
-$\Pi$-binder types, and for every $i < ty.\mathsf{piArity} - np$ the binder at position
-$np+i$ exists and is \texttt{FieldPositive} at depth $i$. The depth bookkeeping is correct:
-under field $i$'s own $k$ binders the parameters sit at \texttt{bvarsDesc (i + k) np}, which
-is what \texttt{FieldPositive} passes on as $d + ty.\mathsf{piArity}$.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive})}
+\thesisref{axioms.tex \S2.6.1.}
+
+\lead{In short} $ty.\mathsf{CtorPositive}\;fs\;np$: \hl{no former occurs in the $np$
+parameter binders, and for $i < ty.\mathsf{piArity}-np$ the binder at $np+i$ is
+\texttt{FieldPositive} at depth $i$}.
 \end{definition}
 
 \begin{definition}[A field appears among the result indices, \texttt{FieldInIndices}]
@@ -176,16 +119,16 @@ is what \texttt{FieldPositive} passes on as $d + ty.\mathsf{piArity}$.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{107}
 \uses{def:app-spine, def:pi-telescope}
-$ty.\mathsf{FieldInIndices}\;np\;i$ says
-$\mathsf{bvar}\,(ty.\mathsf{piArity} - np - 1 - i)$ occurs in
-$ty.\mathsf{piBody}.\mathsf{getAppArgs}.\mathsf{drop}\;np$.
-\thesisref{axioms.tex \S2.6.2 (\texttt{sec:large\_elim}), the side condition $y \in e$}
-\reviewnote{The kernel's \texttt{isLargeEliminator}
-(\srcloc{Lean4Lean/Inductive/Add.lean}{275}) searches all result arguments, not only those
-past \texttt{nparams}. The two agree because \texttt{CtorResult} pins the first $np$
-arguments to be \texttt{bvarsDesc nf np}, whose entries are all $\ge nf$, while the field
-variable sought here is $\mathsf{bvar}\,(nf-1-i) < nf$; that argument is what makes the
-\texttt{drop np} sound and it is recorded nowhere in the source.}
+\thesisref{axioms.tex \S2.6.2.}
+
+\lead{In short} $ty.\mathsf{FieldInIndices}\;np\;i$ holds when
+\hl{$\mathsf{bvar}\,(ty.\mathsf{piArity}-np-1-i)$ occurs in
+$ty.\mathsf{piBody}.\mathsf{getAppArgs}.\mathsf{drop}\;np$}.
+\begin{itemize}
+\item The kernel's \texttt{isLargeEliminator} \srcloc{Lean4Lean/Inductive/Add.lean}{275}
+searches all result arguments; agreement relies on \texttt{CtorResult} pinning the first
+$np$ to values $\ge nf$.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The de Bruijn context of a constructor field, \texttt{fieldCtx}]
@@ -194,11 +137,10 @@ variable sought here is $\mathsf{bvar}\,(nf-1-i) < nf$; that argument is what ma
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{112}
 \uses{def:pi-telescope}
-$ty.\mathsf{fieldCtx}\;np\;i = (ty.\mathsf{piBinders}.\mathsf{take}\,(np+i)).\mathsf{reverse}$,
-the parameter and earlier-field binder types innermost first, which is the orientation
-contexts have in this development. Used only by \texttt{LargeElim} and
-\texttt{WF.universes}.
-\thesisref{no direct counterpart; a helper for the typing clauses of \S2.6.2}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $ty.\mathsf{fieldCtx}\;np\;i = (ty.\mathsf{piBinders}.\mathsf{take}\,(np+i)).\mathsf{reverse}$:
+\hl{the parameter and earlier-field types, innermost first}.
 \end{definition}
 
 \begin{definition}[Type of a recursor's major premise, \texttt{MajorApp}]
@@ -207,11 +149,12 @@ contexts have in this development. Used only by \texttt{LargeElim} and
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{63}
 \uses{def:bvarsdesc, def:mkapps}
-$A.\mathsf{MajorApp}\;T\;np\;nm\;nmin\;nind$ says
-$A = (\mathsf{const}\;T\;us).\mathsf{mkApps}\,(\texttt{bvarsDesc}\,(nm{+}nmin{+}nind)\;np \mathbin{+\!\!+} \texttt{bvarsDesc}\;0\;nind)$
-for some $us$. The arithmetic checks out: at the major binder there are $np+nm+nmin+nind$
-binders in scope.
-\thesisref{axioms.tex \S2.6.3, the binder $z : P\;a$ of $\mathrm{rec}_P$}
+\thesisref{axioms.tex \S2.6.3.}
+
+\lead{In short} $A.\mathsf{MajorApp}\;T\;np\;nm\;nmin\;nind$ holds when
+\hl{$A = (\mathsf{const}\;T\;us).\mathsf{mkApps}(\texttt{bvarsDesc}\,(nm{+}nmin{+}nind)\;np
+\mathbin{+\!\!+} \texttt{bvarsDesc}\;0\;nind)$} for some $us$: $T$ applied to the parameters and
+the indices in scope at the major premise.
 \end{definition}
 
 \begin{definition}[Shape of a motive binder, \texttt{MotiveShape}]
@@ -220,15 +163,11 @@ binders in scope.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{121}
 \uses{def:headconst, def:pi-telescope}
-A motive type is a $\Pi$-telescope whose body is a sort and whose \emph{last} binder is
-headed by a constant, that constant being \texttt{motiveFormer?}. Which constant is not
-pinned here, because a bare \texttt{VEnv} has no notion of type former; \texttt{RecShape}
-ties only the eliminated motive's head to the major premise.
-\thesisref{axioms.tex \S2.6.3, $\kappa = \forall a{::}\alpha.\;P\;a \to \mathcal{U}_u$}
-\reviewnote{A deliberately weak approximation of $\kappa$: the telescope is not required to
-be $indices \to P\;a \to \mathsf{Sort}$. Its ``ends in a sort'' clause is subsumed by
-\texttt{VInductDecl.WF.recs\_elim}, which pins the exact sort, so it is also mildly
-redundant.}
+\thesisref{axioms.tex \S2.6.3.}
+
+\lead{In short} A motive type is a \hl{$\Pi$-telescope ending in a sort, whose last binder
+is headed by a constant} (\texttt{motiveFormer?}); a bare \texttt{VEnv} has no notion of
+type former, so \texttt{RecShape} ties the eliminated motive's head to the major premise.
 \end{definition}
 
 \begin{definition}[A minor premise targets one of the motives, \texttt{MinorHeaded}]
@@ -237,13 +176,12 @@ redundant.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{128}
 \uses{def:app-spine, def:pi-telescope}
-$A.\mathsf{MinorHeaded}\;i\;nm$ says $A.\mathsf{piBody}.\mathsf{getAppFn} =
-\mathsf{bvar}\,(A.\mathsf{piArity}+i+k)$ for some $k < nm$, that is, the body is headed by
-motive $nm-1-k$. The index computation is correct: at minor $i$ there are $np+nm+i$ binders
-in scope outside the minor's own telescope.
-\thesisref{axioms.tex \S2.6.3, the head $C$ of $\varepsilon_c = \forall b{::}\beta.\forall v{::}\delta.\;C\;p[b]\;(c\;b)$}
-\reviewnote{Nothing ties minor $i$ to the motive of the type former its constructor belongs
-to, only to \emph{some} motive.}
+\thesisref{axioms.tex \S2.6.3.}
+
+\lead{In short} $A.\mathsf{MinorHeaded}\;i\;nm$ holds when
+\hl{$A.\mathsf{piBody}.\mathsf{getAppFn} = \mathsf{bvar}\,(A.\mathsf{piArity}+i+k)$} for some
+$k<nm$, i.e.\ minor $i$'s body is headed by motive $nm-1-k$, not tied to the constructor's
+own former.
 \end{definition}
 
 \begin{definition}[The minor premise belonging to a constructor, \texttt{MinorFor}]
@@ -252,15 +190,10 @@ to, only to \emph{some} motive.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{134}
 \uses{def:recheaded, def:headconst, def:app-spine}
-$A.\mathsf{MinorFor}\;c$ says $A$ is \texttt{RecHeaded} (its $\Pi$-body's head is a bound
-variable) and the \emph{last} argument of that application is headed by the constant $c$.
-Its only use in the theory is inside \texttt{VInductDecl.WF.rule\_shape}, which picks, for
-each rule, a minor satisfying it.
-\thesisref{axioms.tex \S2.6.3, the argument $c\;b$ of $\varepsilon_c$}
-\reviewnote{Two distinct constructors cannot satisfy \texttt{MinorFor} for the same minor
-(\texttt{getLast?} and \texttt{headConst?} are functions), so the constructor-to-minor map
-\texttt{rule\_shape} chooses is injective, but no lemma in the repository derives that and
-nothing uses it; \texttt{rules\_nodup} is what the proofs actually appeal to.}
+\thesisref{axioms.tex \S2.6.3.}
+
+\lead{In short} $A.\mathsf{MinorFor}\;c$: \hl{$A$ is \texttt{RecHeaded} and its last argument
+is headed by constructor $c$}.
 \end{definition}
 
 \begin{definition}[Shape of a recursor type, \texttt{RecShape}]
@@ -269,20 +202,20 @@ nothing uses it; \texttt{rules\_nodup} is what the proofs actually appeal to.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{143}
 \uses{def:ind-motive-shape, def:ind-minor-headed, def:ind-major-app, def:pi-telescope, def:mkapps, def:bvarsdesc}
-$ty.\mathsf{RecShape}\;np\;nm\;nmin\;nind$ requires $ty.\mathsf{piArity} = np+nm+nmin+nind+1$;
-the $nm$ binders after the parameters to be \texttt{MotiveShape}; the next $nmin$ to be
-\texttt{MinorHeaded}; and, for some $j < nm$, the last binder to be $T$ applied to the
-parameter and index variables (\texttt{MajorApp}) with $T$ the head of motive $j$'s last
-binder, while $ty.\mathsf{piBody}$ is $\mathsf{bvar}\,(nind+nmin+1+(nm-1-j))$ applied to
-\texttt{bvarsDesc 0 (nind+1)}, that is, motive $j$ applied to the indices and the major.
-\thesisref{axioms.tex \S2.6.3, $\mathrm{rec}_P : \forall C{:}\kappa.\forall e{::}\varepsilon.\forall a{::}\alpha.\forall z{:}P\;a.\;C\;a\;z$}
-\reviewnote{Parameter and index binder types are unconstrained, as are the heads of the
-non-eliminated motives of a mutual recursor: a documented weakening of $\kappa$ and
-$\varepsilon$. The de Bruijn arithmetic of the body head is machine-checked against the
-kernel by \texttt{checkShapes} in \texttt{Tests/IotaShape.lean}, which decides
-\texttt{RecShape} on the translated \texttt{RecursorVal.type} of some fifty recursors
-(\texttt{Nat}, \texttt{Eq}, \texttt{Acc}, \texttt{Vec}, the \texttt{Ev}/\texttt{Od} mutual
-block, \texttt{False}, and a list of \texttt{Init}/\texttt{Std} inductives).}
+\thesisref{axioms.tex \S2.6.3.}
+
+\lead{In short} $ty.\mathsf{RecShape}\;np\;nm\;nmin\;nind$: \hl{parameters, then $nm$
+motives, then $nmin$ minors, then the major premise, then the eliminated motive applied to
+the indices and the major}.
+\begin{itemize}
+\item $ty.\mathsf{piArity} = np+nm+nmin+nind+1$; binders $np..np{+}nm{-}1$ are
+\texttt{MotiveShape}; the next $nmin$ are \texttt{MinorHeaded}; the last binder is
+\texttt{MajorApp} for the type former $T$ heading motive $j$'s last binder ($j<nm$); and
+$ty.\mathsf{piBody} = \mathsf{bvar}\,(nind+nmin+1+(nm-1-j))$ applied to
+\texttt{bvarsDesc 0 (nind+1)}.
+\item Parameter and index binder types, and the heads of non-eliminated motives, are
+unconstrained: a weakening of $\kappa$ and $\varepsilon$.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Shape of a constructor type, \texttt{CtorShape}]
@@ -291,15 +224,15 @@ block, \texttt{False}, and a list of \texttt{Init}/\texttt{Std} inductives).}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{157}
 \uses{def:ctorheaded, def:pi-telescope}
-$ty.\mathsf{CtorShape}\;arity$ is $ty.\mathsf{piArity} = arity$ together with
-$ty.\mathsf{CtorHeaded}$. It is deliberately weaker than \texttt{CtorResult}: it names
-neither the type former nor the index count, which is what lets
-\ref{thm:indlem-rules-ctor-shape} state it about a constant looked up in an environment
-where the block is no longer in hand.
-\thesisref{no direct counterpart; the environment-level residue of \S2.6.1}
-\reviewnote{Its two halves are consumed separately and neither by the same client:
-\texttt{PatsIota.ctor\_shape} keeps only the \texttt{CtorHeaded} half, and the front end
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{514}) only the arity half.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $ty.\mathsf{CtorShape}\;arity$: \hl{$ty$ has $arity$ binders and is
+\texttt{CtorHeaded}}, naming neither the type former nor the index count.
+\begin{itemize}
+\item Weaker than \texttt{CtorResult}; its two halves are used separately
+(\texttt{PatsIota.ctor\_shape} only \texttt{CtorHeaded}, the front end
+\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{514} only the arity).
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The type former a recursor eliminates, \texttt{majorFormer?}]
@@ -308,10 +241,10 @@ where the block is no longer in hand.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{161}
 \uses{def:headconst, def:pi-telescope, def:getmajoridx}
-$ty.\mathsf{majorFormer?}\;idx = ty.\mathsf{piBinders}[idx]?.\mathsf{bind}\;\mathsf{headConst?}$,
-the head constant of the $idx$-th $\Pi$-binder, that is, of the major premise when
-$idx = r.\mathsf{getMajorIdx}$.
-\thesisref{axioms.tex \S2.6.3, the $t$ eliminated by $\mathrm{rec}_P$}
+\thesisref{axioms.tex \S2.6.3.}
+
+\lead{In short} $ty.\mathsf{majorFormer?}\;idx = ty.\mathsf{piBinders}[idx]?.\mathsf{bind}\;\mathsf{headConst?}$:
+\hl{the head constant of binder $idx$}, the major premise when $idx=r.\mathsf{getMajorIdx}$.
 \end{definition}
 
 \begin{definition}[Shape of an iota-rule reduct, \texttt{RuleShape}]
@@ -320,17 +253,18 @@ $idx = r.\mathsf{getMajorIdx}$.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{174}
 \uses{def:lam-telescope, def:bvarsdesc, def:mkapps}
-$rhs.\mathsf{RuleShape}\;np\;nm\;nmin\;nf\;nrec\;j$ says
-$rhs.\mathsf{lamArity} = np+nm+nmin+nf$ and, for some list $recArgs$ of length $nrec$,
-$rhs.\mathsf{lamBody} = \mathsf{bvar}\,(nf + (nmin-1-j))$ applied to
-$\texttt{bvarsDesc}\;0\;nf \mathbin{+\!\!+} recArgs$: minor $j$ applied $\eta$-long to the
-fields and then to $nrec$ further arguments.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), $\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b) \equiv e_c\;b\;v$}
-\reviewnote{This is the main weakening of \S2.6.4 in the file, flagged at length in its own
-docstring: the recursive calls $v_i = \lambda x{::}\xi_i.\;\mathrm{rec}_P\;C\;e\;\pi_i[b,x]\;(u_i\;x)$
-are pinned only in number, not in shape, and \texttt{WF.rules\_wf} only forces them to be
-well-typed. \texttt{VInductDecl.WF} therefore accepts $\iota$ rules Lean would never
-generate.}
+\thesisref{axioms.tex \S2.6.4, $\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b) \equiv e_c\;b\;v$.}
+
+\lead{In short} $rhs.\mathsf{RuleShape}\;np\;nm\;nmin\;nf\;nrec\;j$ holds when
+$rhs.\mathsf{lamArity} = np+nm+nmin+nf$ and, for some $recArgs$ of length $nrec$,
+\hl{$rhs.\mathsf{lamBody} = \mathsf{bvar}\,(nf+(nmin-1-j))$ applied to
+$\texttt{bvarsDesc}\;0\;nf \mathbin{+\!\!+} recArgs$}: minor $j$ applied $\eta$-long to the
+fields, then $nrec$ more arguments.
+\begin{itemize}
+\item \lead{Caveat} Pins the recursive calls $v_i$ only in number, not in the shape
+$\lambda x{::}\xi_i.\;\mathrm{rec}_P\;C\;e\;\pi_i[b,x]\;(u_i\;x)$ the thesis requires;
+\texttt{WF.rules\_wf} only forces them well-typed.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Spine reformulations of the shape predicates]
@@ -339,20 +273,17 @@ generate.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{48}
 \uses{def:ind-ctor-result, def:ind-major-app, def:ind-valid-ind-app}
-Each of \texttt{CtorResult}, \texttt{MajorApp} and \texttt{ValidIndApp} is re-expressed
-through \texttt{headConst?}, \texttt{getAppArgs} and a list-prefix condition, eliminating
-the existentials over the universe list and the index list.
-\thesisref{no direct counterpart; a decidability interface for \S2.6.1 and \S2.6.3}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \texttt{CtorResult}, \texttt{MajorApp} and \texttt{ValidIndApp} restated via
+\texttt{headConst?}, \texttt{getAppArgs} and a list-prefix condition, eliminating the
+existentials over the universe and index lists.
 \end{lemma}
 \begin{proof}
 \uses{fam:const-spine, def:bvarsdesc}
 \leanok
-All three are rewrites by \texttt{eq\_const\_mkApps\_iff} and
-\texttt{eq\_const\_mkApps\_append\_iff} together with \texttt{bvarsDesc\_length}; the
-\texttt{CtorResult} case first commutes the two conjuncts under the existentials.
-Their only consumer is \texttt{Tests/ShapeDecide.lean}, where they supply the
-\texttt{Decidable} instances, so the theory files carry three lemmas whose sole purpose is
-testing.
+\lead{Idea} Rewrite by \texttt{eq\_const\_mkApps\_iff}/\texttt{\_append\_iff} and
+\texttt{bvarsDesc\_length}, commuting the \texttt{CtorResult} conjuncts first.
 \end{proof}
 
 \begin{lemma}[Immediate consequences of the shape predicates]
@@ -361,23 +292,17 @@ testing.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{183}
 \uses{def:ind-rule-shape, def:ind-rec-shape, def:ind-ctor-result, def:ind-ctor-shape, def:ind-major-former, def:recheaded, def:ctorheaded}
-A \texttt{RuleShape} reduct is a $\lambda$-abstraction as soon as $j < nmin$; a
-\texttt{RecShape} type is \texttt{RecHeaded}, has at least one motive, and its major
-premise's head constant is the one \texttt{majorFormer?} reads; a \texttt{CtorResult} type
-is \texttt{CtorHeaded} and has \texttt{CtorShape (np + nf)}.
-\thesisref{no direct counterpart; interface lemmas}
+\thesisref{no direct counterpart.}
+
+\lead{In short} A \texttt{RuleShape} reduct is a $\lambda$ once $j<nmin$; a
+\texttt{RecShape} type is \texttt{RecHeaded} with at least one motive, its major premise
+headed by \texttt{majorFormer?}; a \texttt{CtorResult} type is \texttt{CtorHeaded} and has
+\texttt{CtorShape (np+nf)}.
 \end{lemma}
 \begin{proof}
 \leanok
-Each is a projection out of the defining conjunction or existential, with \texttt{omega} for
-the arity case of \texttt{RuleShape.lam} and \texttt{getAppFn\_mkApps} for the two
-head-shape cases.
-\reviewnote{\texttt{RuleShape.lam} (used by \texttt{addRules\_ordered}),
-\texttt{RecShape.recHeaded} (used by \texttt{PatsIota.induct}) and
-\texttt{CtorResult.ctorShape} (used by \texttt{rules\_ctor\_shape}) are load-bearing.
-\texttt{RecShape.one\_le\_numMotives} (\srcloc{Lean4Lean/Theory/Inductive.lean}{196}) and
-\texttt{RecShape.majorFormer?\_eq} (\srcloc{Lean4Lean/Theory/Inductive.lean}{202}) are
-referenced nowhere in the repository.}
+\lead{Idea} Each is a projection out of the defining conjunction/existential, with
+\texttt{omega} for the arity case and \texttt{getAppFn\_mkApps} for the head-shape cases.
 \end{proof}
 
 \section{Large elimination}
@@ -388,19 +313,21 @@ referenced nowhere in the repository.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{226}
 \uses{def:ind-field-in-indices, def:ind-field-ctx, fam:vlevel-lattice, def:hastype-istype, struct:vinductdecl}
-$decl.\mathsf{LargeElim}\;env\;\ell$ is a three-way disjunction: $\ell$ is never zero; or the
-block is a single type former with no constructor; or a single type former with one
-constructor each of whose fields is either typed at $\mathsf{sort}\;0$ in $env$ and the
-field's own \texttt{fieldCtx}, or occurs among the indices of the constructor's result type.
-Here $env$ is the stage-0 environment, the one in which the type formers are declared.
-\thesisref{axioms.tex \S2.6.2 (\texttt{sec:large\_elim}), the $\mathrm{LE}$ judgments}
-\reviewnote{It matches the kernel's \texttt{isLargeEliminator}
-(\srcloc{Lean4Lean/Inductive/Add.lean}{258}) clause for clause, including the zero-constructor
-case, and the thesis's separate rule for recursive arguments is subsumed. But the kernel
-tests \texttt{isAlwaysZero} on the inferred level where the model demands a typing at
-$\mathsf{sort}\;0$; these agree only up to level defeq and uniqueness of typing, neither of
-which is proved here. Because the propositionality clause is a typing judgment,
-\texttt{LargeElim} is undecidable.}
+\thesisref{axioms.tex \S2.6.2.}
+
+\lead{In short} $decl.\mathsf{LargeElim}\;env\;\ell$: \hl{$\ell$ may exceed
+$\mathsf{Prop}$-level} when the block is trivial or subsingleton.
+\begin{itemize}
+\item Holds when $\ell$ is never zero; or the block is one former with no constructor; or one
+former with one constructor whose every field is typed at $\mathsf{sort}\;0$ (in the stage-0
+$env$, its own \texttt{fieldCtx}) or occurs among the result indices. Matches the kernel's
+\texttt{isLargeEliminator} \srcloc{Lean4Lean/Inductive/Add.lean}{258} clause for clause,
+except the kernel tests \texttt{isAlwaysZero} on the inferred level where this demands a
+typing at $\mathsf{sort}\;0$; the two agree only up to level defeq and uniqueness of typing,
+neither proved here.
+\item \lead{Caveat} Undecidable: the propositionality clause is a typing judgment, not a
+syntactic test.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The decidable syntactic half of large elimination, \texttt{LargeElimShape}]
@@ -409,22 +336,20 @@ which is proved here. Because the propositionality clause is a typing judgment,
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{237}
 \uses{def:ind-large-elim, struct:vinductdecl}
-$decl.\mathsf{LargeElimShape}$ says the block has exactly one type former and every type
-former has at most one constructor. \texttt{LargeElim.shape} proves that a block which
-eliminates largely while its result sort may be $\mathsf{Prop}$ has that shape, by a
-three-way case split reading the singleton lists off the second and third disjuncts.
-\thesisref{axioms.tex \S2.6.2 (\texttt{sec:large\_elim})}
-\reviewnote{\texttt{LargeElimShape} carries a \texttt{Decidable} instance and is used by the
-tests; \texttt{LargeElim.shape}, the lemma that justifies calling it the syntactic half, is
-used nowhere.}
+\thesisref{axioms.tex \S2.6.2.}
+
+\lead{In short} $decl.\mathsf{LargeElimShape}$: \hl{one type former, at most one constructor
+each}.
+\begin{itemize}
+\item \texttt{LargeElim.shape}: a block eliminating largely at a possibly-$\mathsf{Prop}$
+sort has that shape, by cases on \texttt{LargeElim}'s second and third disjuncts.
+\end{itemize}
 \end{definition}
 
 \section{Patterns, matching and schematic rule reducts}
 
 This section is \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{1}. The first five nodes are
-master's abstract machinery for schematic rewrite rules; the rest is what the $\iota$ rule
-needed added to it. The additions are strictly additive: \texttt{git diff master} on this
-file shows no deleted lines.
+upstream's abstract schematic-rewrite machinery, extended additively for the $\iota$ rule.
 
 \begin{definition}[Patterns, subpatterns and pattern intersection]
 \label{inductive:pattern-core}
@@ -432,19 +357,16 @@ file shows no deleted lines.
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{8}
 \uses{ind:vexpr}
-A \texttt{Pattern} is a constant, an application of two patterns, or a \texttt{var} hole over
-a pattern; \texttt{varN} iterates \texttt{var}. \texttt{Subpattern} is reflexive structural
-containment, \texttt{Arity} counts argument positions above a subpattern, and
-\texttt{Pattern.inter} computes the common refinement of two patterns: at an
-\texttt{app}/\texttt{var} pair the \texttt{app}'s argument pattern survives
-($\mathsf{var}\,f \sqcap \mathsf{app}\,f'\,a' = \mathsf{app}\,(f \sqcap f')\,a'$), since a
-\texttt{var} hole matches any argument. Antisymmetry of \texttt{Subpattern} goes through a
-\texttt{sizeOf} bound.
-\reviewnote{\texttt{Pattern.LE} is declared and used nowhere in the repository, and
-\texttt{Arity}/\texttt{Arity.subpattern} only in the experimental logical-relations
-development (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3436} and
-\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3620}), never in the verified one. This is
-pre-existing \texttt{master} code, not the contributor's.}
+\lead{In short} A \texttt{Pattern} is a constant, an application of two patterns, or a
+\hl{\texttt{var} hole} over a pattern (\texttt{varN} iterates \texttt{var}).
+\begin{itemize}
+\item \texttt{Subpattern}: reflexive structural containment (antisymmetric via
+\texttt{sizeOf}); \texttt{Arity}: argument positions above a subpattern, used only in the
+experimental development \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3436}
+\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3620}.
+\item \texttt{Pattern.inter}: common refinement of two patterns; a \texttt{var} hole matches
+any argument, so at an \texttt{app}/\texttt{var} pair the \texttt{app}'s argument survives.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Matching a pattern against an expression]
@@ -453,15 +375,13 @@ pre-existing \texttt{master} code, not the contributor's.}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{132}
 \uses{inductive:pattern-core}
-$p.\mathsf{Path}$ enumerates the holes of $p$, and $p.\mathsf{Matches}\;e\;ls\;g$ says $e$
-matches $p$ with the head constant instantiated at levels $ls$ and hole assignment $g$.
-Matching is deterministic (both by structural induction on the derivation), and an
-expression matches $p$ and $q$ iff it matches their intersection.
-\reviewnote{In the \texttt{app} case the argument side's level list is discarded, so an
-$\iota$ redex constrains the recursor's universes but not the constructor's. That is what
-makes \texttt{iotaRHS}'s use of the recursor's levels correct.
-\texttt{Matches.uniq} (line 143) and \texttt{matches\_determ} (line 283) are the same
-statement proved twice.}
+\lead{In short} $p.\mathsf{Path}$ enumerates $p$'s holes; \hl{$p.\mathsf{Matches}\;e\;ls\;g$}
+says $e$ matches $p$ at levels $ls$ with hole assignment $g$.
+\begin{itemize}
+\item Matching is deterministic; $e$ matches $p$ and $q$ iff it matches their intersection.
+\item \lead{Caveat} In the \texttt{app} case the argument side's level list is discarded, so
+an $\iota$ redex constrains the recursor's universes but not the constructor's.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Rule reducts and side conditions]
@@ -470,11 +390,12 @@ statement proved twice.}
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{155}
 \uses{inductive:pattern-core, inductive:pattern-matches}
-A $p.\mathsf{RHS}$ is a tree of closed fixed terms, applications, and references to holes of
-$p$; \texttt{RHS.apply} instantiates it at a match, level-instantiating the fixed parts. A
-$p.\mathsf{Check}$ is a list of pairs of reducts to be related, and \texttt{Check.OK}
-asserts them against a given relation; \texttt{OK.map} transports it along a relation
-morphism.
+\lead{In short} A $p.\mathsf{RHS}$ is a tree of \hl{closed fixed terms, applications, and
+references to $p$'s holes}; \texttt{RHS.apply} instantiates it at a match.
+\begin{itemize}
+\item A $p.\mathsf{Check}$ is a list of reduct pairs to be related; \texttt{Check.OK}
+asserts them against a relation; \texttt{OK.map} transports it along a relation morphism.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Lifting and instantiation of matches and reducts]
@@ -483,18 +404,14 @@ morphism.
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{186}
 \uses{inductive:pattern-matches, inductive:pattern-rhs}
-\texttt{RHS.apply} commutes with lifting and with instantiation (the fixed parts being
-closed). For lifting, matching is characterised both ways: $p$ matches $e.\mathsf{lift}'\rho$
-iff it matches $e$ with correspondingly lifted holes. For instantiation only the forward
-direction is proved: a match of $e$ yields a match of $e.\mathsf{inst}\;e_0\;k$ with
-instantiated holes.
+\lead{In short} \texttt{RHS.apply} commutes with \hl{lifting and instantiation} (fixed parts
+are closed); matching commutes with lifting both ways, with instantiation only forward.
 \end{lemma}
 \begin{proof}
 \leanok
-Structural induction on the reduct for the \texttt{apply} lemmas; for
-\texttt{matches\_lift'} an induction on the \texttt{Matches} derivation generalised over the
-pre-image in the forward direction and over the lifted holes in the backward one, with
-\texttt{matches\_liftN} a corollary through \texttt{lift'\_consN\_skipN}.
+\lead{Idea} Structural induction on the reduct for the \texttt{apply} lemmas; on the
+\texttt{Matches} derivation for \texttt{matches\_lift'}, with \texttt{matches\_liftN} a
+corollary via \texttt{lift'\_consN\_skipN}.
 \end{proof}
 
 \begin{definition}[The two schematic rule shapes, \texttt{SimplePattern}]
@@ -503,11 +420,13 @@ pre-image in the forward direction and over the lifted holes in the backward one
 \leanok
 \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{484}
 \uses{inductive:pattern-core}
-A \texttt{SimplePattern} is either $\mathsf{iota}\;rec\;M\;ctor\;N$, unfolding to
-$(\mathsf{const}\;rec).\mathsf{varN}\;M$ applied to
-$(\mathsf{const}\;ctor).\mathsf{varN}\;N$, or $\mathsf{defn}\;head$, the bare constant.
-\reviewnote{\texttt{SimplePattern.defn} is never registered by anything;
-\texttt{InductiveParams} explains why, namely that $\delta$ rules stay in \texttt{defeqs}.}
+\lead{In short} A \texttt{SimplePattern} is \hl{either an $\iota$ redex or a bare constant}.
+\begin{itemize}
+\item $\mathsf{iota}\;rec\;M\;ctor\;N$ unfolds to $(\mathsf{const}\;rec).\mathsf{varN}\;M$
+applied to $(\mathsf{const}\;ctor).\mathsf{varN}\;N$.
+\item $\mathsf{defn}\;head$: the bare constant; never registered by anything, since
+$\delta$ rules stay in \texttt{defeqs} (\ref{def:indparams-defeqs-as-pats}).
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Combinatorics of constructor spines]
@@ -516,18 +435,17 @@ $(\mathsf{const}\;ctor).\mathsf{varN}\;N$, or $\mathsf{defn}\;head$, the bare co
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{76}
 \uses{inductive:pattern-core}
-Every subpattern of $(\mathsf{const}\;c).\mathsf{varN}\;k$ is
-$(\mathsf{const}\;c).\mathsf{varN}\;i$ for some $i \le k$; a spine contains no application
-subpattern; two spines intersect to \texttt{some} only when head and length agree, and are
-equal only then.
-\thesisref{no direct counterpart; the combinatorial content of \S2.6.4 as a rewrite system}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Spines $(\mathsf{const}\;c).\mathsf{varN}\;k$ behave like arities}: every
+subpattern is a shorter spine on $c$, no spine has an application subpattern, and two spines
+intersect (or agree) only when head and length match.
 \end{lemma}
 \begin{proof}
 \leanok
-Induction on $k$ for the subpattern lemma, from which the no-application case follows by
-inversion; \texttt{varN\_const\_inter} is a four-way induction on the two lengths, and
-\texttt{varN\_const\_inj} deduces injectivity from it through \texttt{inter\_self}. These
-four lemmas are exactly what the \texttt{Params} coherence conditions need later.
+\lead{Idea} Induction on $k$ for the subpattern claim, inversion for the no-application
+case; \texttt{varN\_const\_inter} by a four-way induction on the two lengths, and
+\texttt{varN\_const\_inj} from \texttt{inter\_self}.
 \end{proof}
 
 \begin{definition}[The holes a reduct mentions, \texttt{RHS.Uses}]
@@ -536,9 +454,10 @@ four lemmas are exactly what the \texttt{Params} coherence conditions need later
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{170}
 \uses{inductive:pattern-rhs}
-$r.\mathsf{Uses}\;x$ is defined by recursion on the reduct: false at \texttt{fixed},
-equality at \texttt{var}, disjunction at \texttt{app}.
-\thesisref{no direct counterpart; support for \texttt{RHS.Generic}}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $r.\mathsf{Uses}\;x$: \hl{false at \texttt{fixed}, equality at \texttt{var},
+disjunction at \texttt{app}}.
 \end{definition}
 
 \begin{definition}[A generic instance of a rule, \texttt{RHS.Generic}]
@@ -547,15 +466,14 @@ equality at \texttt{var}, disjunction at \texttt{app}.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{181}
 \uses{def:pattern-rhs-uses, inductive:pattern-rhs}
-$r.\mathsf{Generic}\;m_2\;n$ says that every hole $r$ uses is sent by $m_2$ to a de Bruijn
-variable below $n$, that distinct used holes get distinct variables, and that every variable
-below $n$ is hit. The holes $r$ does not use are unconstrained.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), ``the reduction rule is all substitution
-instances of this rule for all the variables left of the turnstile''}
-\reviewnote{This is the modelling idea behind \texttt{VEnv.PatTyped}: the thesis's schematic
-rule, stated in the context $\Gamma, C{:}\kappa, e{::}\varepsilon, b{::}\beta$, becomes one
-typing obligation over a context of exactly the used holes. The docstring is candid that an
-$\iota$ rule's index arguments and constructor parameters are tied to nothing by it.}
+\thesisref{axioms.tex \S2.6.4: all substitution instances of the schematic rule.}
+
+\lead{In short} $r.\mathsf{Generic}\;m_2\;n$: \hl{$m_2$ sends the holes $r$ uses bijectively
+onto the variables below $n$}; unused holes are unconstrained.
+\begin{itemize}
+\item \lead{Caveat} One typing obligation over the used holes only: an $\iota$ rule's index
+arguments and constructor parameters are tied to nothing by it.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[A positive-occurrence form of the side conditions, \texttt{Check.Realizes}]
@@ -564,15 +482,15 @@ $\iota$ rule's index arguments and constructor parameters are tied to nothing by
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{307}
 \uses{inductive:pattern-rhs}
-$ck.\mathsf{Realizes}\;m_1\;m_2\;chk$ says the list $chk$ of triples enumerates exactly the
-\texttt{defeq} entries of $ck$, with each triple's first two components equal to the
-corresponding instantiated sides; the third component is the type at which the two sides are
-to be related.
-\thesisref{no direct counterpart; the device that makes the \S2.6.4 rule an inductive
-constructor}
-\reviewnote{A good design move: \texttt{Check.OK} mentions the definitional-equality relation
-and so cannot occur positively in the \texttt{IsDefEq} inductive, whereas \texttt{Realizes}
-is a pure predicate, which is what makes the new \texttt{IsDefEq.pat} constructor legal.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $ck.\mathsf{Realizes}\;m_1\;m_2\;chk$: \hl{$chk$ lists exactly $ck$'s
+\texttt{defeq} entries}, each triple's first two parts the instantiated sides and the third
+the type relating them.
+\begin{itemize}
+\item \texttt{Check.OK} mentions \texttt{defeq} and so cannot occur positively in
+\texttt{IsDefEq}; \texttt{Realizes} is a pure predicate, making \texttt{IsDefEq.pat} legal.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[Realizer to \texttt{Check.OK}]
@@ -581,15 +499,17 @@ is a pure predicate, which is what makes the new \texttt{IsDefEq.pat} constructo
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{318}
 \uses{def:pattern-check-realizes, inductive:pattern-rhs}
-If $chk$ realizes $ck$ at $(m_1, m_2)$ and every triple of $chk$ has its first two components
-related by \texttt{defeq}, then $ck.\mathsf{OK}\;\mathsf{defeq}\;m_1\;m_2$.
-\thesisref{no direct counterpart; interface to the abstract development}
+\thesisref{no direct counterpart.}
+\begin{itemize}
+\item \lead{Given} $chk$ realizes $ck$ at $(m_1,m_2)$, and \texttt{defeq} relates the two
+components of every triple of $chk$;
+\item \lead{Then} $ck.\mathsf{OK}\;\mathsf{defeq}\;m_1\;m_2$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \leanok
-Induction on $ck$, destructing $chk$ in step and rewriting each side by the realizer's two
-equations. It is what feeds the premises of the \texttt{pat} rule into the
-\texttt{Check.OK}-based Church-Rosser development.
+\lead{Idea} Induction on $ck$, destructing $chk$ and rewriting each side by the realizer's
+equations.
 \end{proof}
 
 \begin{theorem}[\texttt{Check.OK} to realizer]
@@ -598,15 +518,16 @@ equations. It is what feeds the premises of the \texttt{pat} rule into the
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{332}
 \uses{def:pattern-check-realizes}
-From $ck.\mathsf{OK}\;(\lambda a\,b.\;\exists t,\;rel\;a\;b\;t)\;m_1\;m_2$ one obtains a
-realizer $chk$ for $ck$ together with $rel$ at each of its triples.
-\thesisref{no direct counterpart; interface to the abstract development}
+\thesisref{no direct counterpart.}
+\begin{itemize}
+\item \lead{Given} $ck.\mathsf{OK}\;(\lambda a\,b.\;\exists t,\;rel\;a\;b\;t)\;m_1\;m_2$;
+\item \lead{Then} a realizer $chk$ for $ck$, with $rel$ witnessed at each triple.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \leanok
-Induction on $ck$, choosing the type witness out of each existential and consing the triple
-onto the realizer. Together with \ref{thm:pattern-realizes-took} this is exactly the
-interface \texttt{VEnv.toParams} needs and nothing more.
+\lead{Idea} Induction on $ck$, choosing the type witness from each existential and consing
+the triple onto the realizer.
 \end{proof}
 
 \begin{lemma}[Transport lemmas for the pat reduction rule]
@@ -615,21 +536,18 @@ interface \texttt{VEnv.toParams} needs and nothing more.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{354}
 \uses{inductive:pattern-rhs, inductive:pattern-matches, def:pattern-check-realizes, def:closedn, def:instl, fam:subst-basic}
-A reduct is \texttt{ClosedN k} as soon as every hole is, and \texttt{LevelWF U} as soon as
-every hole is and every match level is \texttt{WF U}; conversely matching a closed,
-respectively level-well-formed, expression yields closed, respectively level-well-formed,
-holes (and \texttt{WF U} levels). \texttt{RHS.apply} and \texttt{Matches} commute with level
-instantiation and with arbitrary substitution; \texttt{Realizes} commutes with all four of
-lifting, instantiation, level instantiation and substitution (its lifting and instantiation
-counterparts for \texttt{apply}/\texttt{Matches} being \ref{family:pattern-transport-master}).
-\thesisref{no direct counterpart; regularity plumbing for the \S2.6.4 rule}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Reducts, matches and \texttt{Realizes} respect closedness,
+level-well-formedness, level instantiation and substitution}: a reduct is \texttt{ClosedN k}
+(resp.\ \texttt{LevelWF U}) as soon as every hole is, and matching a closed/level-WF
+expression yields closed/level-WF holes; \texttt{RHS.apply}/\texttt{Matches} commute with
+level instantiation and substitution, \texttt{Realizes} with all four.
 \end{lemma}
 \begin{proof}
 \leanok
-Each is a structural induction on the reduct, on the \texttt{Matches} derivation or on the
-\texttt{Check}, with function extensionality on the hole assignments. The twelve lemmas are
-what make the \texttt{pat} case of every \texttt{IsDefEq} recursion mechanical, and they are
-consumed by \texttt{Theory/Typing/Lemmas.lean} and \texttt{Strong.lean}.
+\lead{Idea} Structural induction on the reduct, the \texttt{Matches} derivation, or the
+\texttt{Check}, with function extensionality on hole assignments.
 \end{proof}
 
 \section{The iota reduct}
@@ -640,10 +558,10 @@ consumed by \texttt{Theory/Typing/Lemmas.lean} and \texttt{Strong.lean}.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{494}
 \uses{inductive:pattern-core, inductive:pattern-matches}
-$\texttt{varN\_pathOf}\;k\;i\;h$ selects argument $i$ of a $k$-ary spine as the path
-$\mathsf{some}^{k-1-i}\,\mathsf{none}$. It is defined by recursion on $k$, the zero case
-being discharged by the absurd hypothesis $i < 0$.
-\thesisref{no direct counterpart; addressing of the \S2.6.4 redex arguments}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $\texttt{varN\_pathOf}\;k\;i\;h$: \hl{argument $i$ of a $k$-ary spine} is the
+path $\mathsf{some}^{k-1-i}\,\mathsf{none}$, by recursion on $k$.
 \end{definition}
 
 \begin{definition}[The holes an iota reduct uses, \texttt{iotaPaths}]
@@ -652,13 +570,11 @@ being discharged by the absurd hypothesis $i < 0$.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{535}
 \uses{def:pattern-varn-pathof, inductive:simple-pattern}
-$\texttt{iotaPaths}\;r\;c\;k\;nind\;cnp\;nf$ lists the recursor spine's first $k$ argument
-holes, of $k+nind$, followed by the constructor spine's last $nf$ holes, of $cnp+nf$. The
-slices are the kernel's: $[0, \texttt{getFirstIndexIdx})$ of the recursor arguments and the
-trailing fields of the constructor.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), the arguments $e$ and $b$ of $e_c\;b\;v$}
-\reviewnote{The two \texttt{pmap}s with their \texttt{omega} side proofs are heavy for what
-they say, but correct.}
+\thesisref{axioms.tex \S2.6.4.}
+
+\lead{In short} $\texttt{iotaPaths}\;r\;c\;k\;nind\;cnp\;nf$: \hl{the recursor's first $k$
+argument holes (of $k{+}nind$), then the constructor's last $nf$ holes (of $cnp{+}nf$)},
+matching the kernel's own slices.
 \end{definition}
 
 \begin{definition}[The iota-rule reduct as a pattern RHS, \texttt{iotaRHS}]
@@ -667,17 +583,15 @@ they say, but correct.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{569}
 \uses{def:pattern-iota-paths, inductive:pattern-rhs}
-$\texttt{iotaRHS'}\;r\;c\;k\;nind\;cnp\;nf\;rhs\;h$ is the closed template $rhs$, as a
-\texttt{fixed} reduct, applied left-nested to the holes of \texttt{iotaPaths};
-\texttt{iotaRHS} specialises $k$ to $np+nm+nmin$ for a recursor with $np$ parameters, $nm$
-motives, $nmin$ minors and $nind$ indices firing on a constructor with $cnp$ parameters and
-$nf$ fields.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), the right-hand side $e_c\;b\;v$, presented
-as Lean's stored rule template applied to the recursor prefix and the fields}
-\reviewnote{Splitting the shape reduction sees (\texttt{iotaRHS'}) from the typed split
-(\texttt{iotaRHS}) is a good separation, and the $cnp$ versus $np$ distinction anticipates
-the auxiliary recursors of nested inductives even though \texttt{VInductDecl.WF} currently
-excludes them.}
+\thesisref{axioms.tex \S2.6.4.}
+
+\lead{In short} $\texttt{iotaRHS'}\;r\;c\;k\;nind\;cnp\;nf\;rhs\;h$: \hl{the closed template
+$rhs$ applied left-nested to the \texttt{iotaPaths} holes}; \texttt{iotaRHS} specialises
+$k=np+nm+nmin$.
+\begin{itemize}
+\item The $cnp$ versus $np$ distinction anticipates nested inductives, excluded from
+\texttt{VInductDecl.WF} for now.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Instantiating a template applied to holes]
@@ -686,16 +600,15 @@ excludes them.}
 \leanok
 \contrib{trproj} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{588}
 \uses{inductive:pattern-rhs, def:mkapps}
-Instantiating $(l.\mathsf{map}\;\mathsf{RHS.var}).\mathsf{foldl}\;\mathsf{RHS.app}\;f$ at a
-match gives $(f.\mathsf{apply}\;m_1\;m_2).\mathsf{mkApps}\,(l.\mathsf{map}\;m_2)$.
-\thesisref{no direct counterpart; computation lemma for \S2.6.4 reducts}
+\thesisref{no direct counterpart.}
+
+\lead{In short} Instantiating $(l.\mathsf{map}\;\mathsf{RHS.var}).\mathsf{foldl}\;\mathsf{RHS.app}\;f$
+at a match gives $(f.\mathsf{apply}\;m_1\;m_2).\mathsf{mkApps}(l.\mathsf{map}\;m_2)$.
 \end{lemma}
 \begin{proof}
 \leanok
-Induction on the hole list, unfolding \texttt{foldl} and \texttt{mkApps} one step at a time.
-\reviewnote{The line blame tags this \texttt{trproj}, but the code is byte-identical on
-\texttt{iota} (ported as commit \texttt{3de1dcb}); it belongs to the $\iota$ story, not the
-projection story.}
+\lead{Idea} Induction on the hole list, unfolding \texttt{foldl} and \texttt{mkApps} one
+step at a time.
 \end{proof}
 
 \begin{theorem}[A saturated constant application matches a spine pattern]
@@ -704,20 +617,18 @@ projection story.}
 \leanok
 \contrib{trproj} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{598}
 \uses{def:pattern-varn-pathof, inductive:pattern-matches, def:mkapps}
-For every $n$ and every argument list of length $n$, the expression
-$(\mathsf{const}\;c\;ls).\mathsf{mkApps}\;args$ matches
-$(\mathsf{const}\;c).\mathsf{varN}\;n$ at levels $ls$, with a hole assignment sending
-$\texttt{varN\_pathOf}\;n\;i$ to $args[i]$.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), recognising a redex}
+\thesisref{axioms.tex \S2.6.4.}
+\begin{itemize}
+\item \lead{Given} any $n$ and argument list of length $n$;
+\item \lead{Then} $(\mathsf{const}\;c\;ls).\mathsf{mkApps}\;args$ matches
+$(\mathsf{const}\;c).\mathsf{varN}\;n$ at levels $ls$, with \texttt{varN\_pathOf}$\;n\;i$
+sent to $args[i]$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \leanok
-Induction on $n$, peeling the last argument off with \texttt{List.eq\_nil\_or\_concat} and
-computing \texttt{varN\_pathOf} at the head by \texttt{dif\_pos}/\texttt{dif\_neg}. It is
-what lets the verified WHNF (\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{108}) and
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1099} present a kernel $\iota$ redex as a
-pattern match. The line blame tags this \texttt{trproj}; the code is identical on
-\texttt{iota}.
+\lead{Idea} Induction on $n$, peeling the last argument with
+\texttt{List.eq\_nil\_or\_concat} and computing \texttt{varN\_pathOf} at the head.
 \end{proof}
 
 \begin{theorem}[The iota reduct on a concrete match]
@@ -726,21 +637,20 @@ pattern match. The line blame tags this \texttt{trproj}; the code is identical o
 \leanok
 \contrib{trproj} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{625}
 \uses{def:pattern-iota-paths, def:pattern-iota-rhs, def:mkapps, def:instl}
-If the recursor spine's holes are $recArgs$ of length $k+nind$ and the constructor spine's
-are $ctorArgs$ of length $cnp+nf$, then
-instantiating the reduct gives $(rhs.\mathsf{instL}\;m_1).\mathsf{mkApps}\,(recArgs.\mathsf{take}\;k \mathbin{+\!\!+} ctorArgs.\mathsf{drop}\;cnp)$.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), the reduct of a closed instance of the
-rule}
+\thesisref{axioms.tex \S2.6.4.}
+\begin{itemize}
+\item \lead{Given} recursor-spine holes $recArgs$ of length $k+nind$, constructor-spine
+holes $ctorArgs$ of length $cnp+nf$;
+\item \lead{Then} instantiating the reduct gives
+$(rhs.\mathsf{instL}\;m_1).\mathsf{mkApps}(recArgs.\mathsf{take}\;k \mathbin{+\!\!+} ctorArgs.\mathsf{drop}\;cnp)$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:pattern-apply-foldl-var}
 \leanok
-Unfold \texttt{iotaRHS'}, apply \ref{thm:pattern-apply-foldl-var}, rewrite the \texttt{map}
-over the two \texttt{pmap}ed ranges, and compare element-wise with
-\texttt{List.ext\_getElem} against \texttt{take} and \texttt{drop}. This is the theorem that
-makes the model's $\iota$ reduct literally equal to the kernel's
-\texttt{inductiveReduceRecCore} reduct, and it is the pivot of that function's correctness
-proof. The line blame tags it \texttt{trproj}; the code is identical on \texttt{iota}.
+\lead{Idea} Unfold \texttt{iotaRHS'}, apply \ref{thm:pattern-apply-foldl-var}, rewrite the
+\texttt{map} over the two \texttt{pmap}ed ranges, compare with \texttt{List.ext\_getElem}:
+identifies the model's reduct with the kernel's \texttt{inductiveReduceRecCore}.
 \end{proof}
 
 \begin{lemma}[What an iota reduct retains of the telescope]
@@ -749,20 +659,16 @@ proof. The line blame tags it \texttt{trproj}; the code is identical on \texttt{
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{511}
 \uses{def:pattern-iota-rhs, def:pattern-iota-paths}
-A reduct of the form \texttt{fixed c} applied left-nested to \texttt{var} holes decomposes
-into head and hole list (\texttt{spine}); for an $\iota$ reduct this yields the template
-together with the numbers of recursor-side and constructor-side holes
-(\texttt{iotaCounts}), which for \texttt{iotaRHS} are the template, $np+nm+nmin$ and $nf$.
-So the reduct depends on the motive/minor split only through their sum.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), commentary on what $e_c\;b\;v$ retains}
+\thesisref{axioms.tex \S2.6.4.}
+
+\lead{In short} A \hl{\texttt{fixed}-headed, left-nested \texttt{var} reduct} decomposes
+into head and hole list (\texttt{spine}); for \texttt{iotaRHS} this gives hole counts
+$np+nm+nmin$ and $nf$ (\texttt{iotaCounts}) -- the reduct sees only the motive/minor sum.
 \end{lemma}
 \begin{proof}
 \leanok
-\texttt{spine\_foldl\_var} is an induction on the hole list; the two counting lemmas are
-\texttt{List.countP} computations over the \texttt{pmap}ed ranges of \texttt{iotaPaths}.
-\reviewnote{None of these eight declarations is referenced outside
-\texttt{Pattern.lean}, and inside it they are used only by each other: about seventy lines
-of purely documentary material, better expressed as a doc comment plus one \texttt{example}.}
+\lead{Idea} \texttt{spine\_foldl\_var} by induction on the hole list; the counting lemmas by
+\texttt{List.countP} over the \texttt{pmap}ed ranges of \texttt{iotaPaths}.
 \end{proof}
 
 \begin{definition}[Template-headed reducts, \texttt{TemplateHeaded}]
@@ -771,18 +677,16 @@ of purely documentary material, better expressed as a doc comment plus one \text
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{690}
 \uses{inductive:pattern-rhs, def:pattern-iota-rhs}
-A reduct is template-headed when it is a \texttt{fixed} closed $\lambda$-abstraction applied
-to any arguments. Every instance of such a reduct is an application or an abstraction
-(a two-case induction on the derivation), hence never a sort and never a $\Pi$-type; and an
-$\iota$ reduct over a $\lambda$-template is template-headed. The predicate is defined and
-proved on its own; it is \texttt{PatWF} (\ref{def:patwf}) that is built from it, not the
-other way round.
-\thesisref{no direct counterpart; the ``a reduction rule computes'' half of
-\texttt{VEnv.PatWF}}
-\reviewnote{This is what separates a registered reduction rule from a definitional axiom: it
-is used in \texttt{Theory/Typing/Lemmas.lean} to show a registered rule cannot rewrite a sort
-or a $\Pi$-type, which the inversion lemmas of the type system need. A well-judged
-invariant.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} A reduct is template-headed when it is a \hl{closed $\lambda$-abstraction
+applied to arguments}; every instance is then an application or an abstraction, never a
+sort or a $\Pi$-type.
+\begin{itemize}
+\item An $\iota$ reduct over a $\lambda$-template is template-headed; \texttt{PatWF}
+(\ref{def:patwf}) is built from this predicate, separating a registered reduction rule from
+a definitional axiom.
+\end{itemize}
 \end{definition}
 
 \section{Registering an inductive block}
@@ -793,19 +697,29 @@ invariant.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{257}
 \uses{def:pattern-iota-rhs, def:venv-addpat, inductive:simple-pattern, def:getmajoridx, struct:vrecursor, struct:vrecrule}
-$env.\mathsf{addRecRule}\;r\;ru$ registers, when $ru.rhs$ is closed, the pattern
-$\mathsf{iota}\;r.name\;M\;ru.ctor\;N$ with $M$ the major index and
-$N = ru.\mathsf{ctorParams} + ru.\mathsf{nfields}$, with reduct \texttt{iotaRHS} and the
-trivial side condition \texttt{Check.true}; otherwise it fails.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), the rule
-$\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b) \rightsquigarrow e_c\;b\;v$}
-\reviewnote{Only the constructor rule of \S2.6.4 is registered. K-like reduction, the
-section's second rule, which the kernel does perform (\texttt{toCtorWhenK},
+\thesisref{axioms.tex \S2.6.4: $\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b) \rightsquigarrow e_c\;b\;v$.}
+
+\lead{In short} $env.\mathsf{addRecRule}\;r\;ru$: \hl{registers the constructor rule as a
+pattern} (fails unless $ru.rhs$ is closed).
+\begin{center}
+\begin{tabular}{p{0.22\linewidth}p{0.21\linewidth}p{0.48\linewidth}}
+\toprule
+Rule & Shape (LHS) & Contractum \\
+\midrule
+constructor (registered) & $\mathrm{rec}_P\;C\;e\;p[b]\;(c\;b)$ & $e_c\;b\;v$, as
+\texttt{iotaRHS} \\
+K-like (not registered) & major on a subsingleton & \texttt{toCtorWhenK}
 \srcloc{Lean4Lean/Inductive/Reduce.lean}{29}, called from
-\srcloc{Lean4Lean/Inductive/Reduce.lean}{110}), is not modelled, and \texttt{VRecursor.k}
-is recorded but unused. Style nit: the major index is spelled out here as
-\texttt{r.numParams + r.numMotives + r.numMinors + r.numIndices} while every lemma about it
-uses \texttt{r.getMajorIdx}.}
+\srcloc{Lean4Lean/Inductive/Reduce.lean}{110} \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
+\begin{itemize}
+\item Registers $\mathsf{iota}\;r.name\;M\;ru.ctor\;N$ ($M$ the major index,
+$N=ru.\mathsf{ctorParams}+ru.\mathsf{nfields}$), side condition \texttt{Check.true};
+\texttt{VRecursor.k} is recorded but unused.
+\item \lead{Caveat} weaker than the kernel for subsingleton eliminators.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The four stages of \texttt{addInduct}]
@@ -814,16 +728,16 @@ uses \texttt{r.getMajorIdx}.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{280}
 \uses{def:ind-add-rec-rule, def:venv-basic, struct:vinductdecl}
-Four \texttt{Option}-monadic folds add, in turn, the type formers as constants, all
-constructors in block order, the recursors, and every recursor rule as an $\iota$ rule; the
-composites \texttt{addTypesCtors} and \texttt{addTypesCtorsRecs} name the prefixes, and
-\texttt{consts} lists the block's name-constant pairs in stage order.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}), ``$\mu t{:}F.\,K$ and its
-constructors are implemented as additional axiomatic constant symbols''}
-\reviewnote{The staging exists precisely so that \texttt{VInductDecl.WF} can type each kind
-of constant in the environment the kernel checks it in, and the docstring is honest that the
-kernel interleaves recursors with their rules, so only the resulting environment agrees, not
-the order.}
+\thesisref{axioms.tex \S2.6.1: $\mu t{:}F.\,K$ as axiomatic constant symbols.}
+
+\lead{In short} Four monadic folds add, in turn, \hl{type formers, constructors, recursors,
+then every rule} as an $\iota$ rule.
+\begin{itemize}
+\item \texttt{addTypesCtors}, \texttt{addTypesCtorsRecs} name the prefixes; \texttt{consts}
+lists the block's name-constant pairs in stage order.
+\item \lead{Caveat} The kernel interleaves recursors with their rules; only the resulting
+environment agrees with this order, not the sequencing.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Extending an environment with an inductive block, \texttt{addInduct}]
@@ -832,12 +746,11 @@ the order.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{316}
 \uses{family:ind-add-stages, struct:venv}
-$env.\mathsf{addInduct}\;decl$ is the chain
+\thesisref{axioms.tex \S2.6.1--\S2.6.4.}
+
+\lead{In short} $env.\mathsf{addInduct}\;decl$: \hl{the chain}
 $\mathsf{addTypes} \gg\!\!= \mathsf{addCtors} \gg\!\!= \mathsf{addRecs} \gg\!\!= \mathsf{addRules}$,
-returning \texttt{none} on a name clash or a non-closed rule reduct.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}) through \S2.6.4 (\texttt{sec:iota})}
-\reviewnote{On \texttt{master} this was \texttt{def VEnv.addInduct := sorry}, an opaque
-\texttt{Option VEnv}, so no downstream statement mentioning it could be proved or refuted.}
+\texttt{none} on a name clash or non-closed rule reduct.
 \end{definition}
 
 \begin{definition}[Well-formedness of a direct mutual inductive block, \texttt{VInductDecl.WF}]
@@ -846,38 +759,42 @@ returning \texttt{none} on a name clash or a non-closed rule reduct.
 \leanok
 \contrib{mixed} \srcloc{Lean4Lean/Theory/Inductive.lean}{335}
 \uses{def:ind-rec-shape, def:ind-rule-shape, def:ind-ctor-result, def:ind-ctor-positive, def:ind-large-elim, def:ind-major-former, def:ind-minor-for, def:ind-field-ctx, family:ind-add-stages, def:pattyped, def:pattern-iota-rhs, inductive:simple-pattern, def:getmajoridx, def:hastype-istype, fam:vlevel-lattice}
-A record of twenty clauses. The type formers, constructors and recursors are typed in the
-stage in which the kernel checks them (\texttt{types\_wf}, \texttt{ctors\_wf},
-\texttt{recs\_wf}); universe parameters are shared; \texttt{universes} asks for one sort
-$\ell$ that is the result sort of every type former of the block and dominates every
-constructor field, $\mathrm{imax}(u,\ell) \le \ell$, with \texttt{LargeElim} whenever some
-recursor takes the extra universe; \texttt{recs\_elim} encodes $\kappa$ by pinning the motive
-sorts; \texttt{rec\_params} and \texttt{rec\_counts} fix the telescope split (one motive per
-type former, one minor per constructor of the block, indices as many as the eliminated
-former has) and \texttt{rec\_shape} the telescope itself; constructors are
-\texttt{CtorResult} and \texttt{CtorPositive} with parameters shared with their former; the
-block is direct (\texttt{recs\_over\_block}, \texttt{rules\_ctor},
-\texttt{types\_have\_rec}); each recursor has exactly one rule per constructor of the former
-it eliminates (\texttt{rules\_nodup}, \texttt{rules\_total}); each reduct has
-\texttt{RuleShape} against the matching minor (\texttt{rule\_shape}); and each $\iota$ rule
-is \texttt{PatTyped} in the stage-2 environment (\texttt{rules\_wf}).
-The attribution is mixed only in a trivial sense: the line blame tags the
-\texttt{types\_have\_rec} field \texttt{trproj}, but that is a line re-wrap and the field
-exists identically on \texttt{iota}.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}), \S2.6.2 (\texttt{sec:large\_elim}),
-\S2.6.3 and \S2.6.4 (\texttt{sec:iota})}
-\reviewnote{This replaces \texttt{master}'s \texttt{def VInductDecl.WF := sorry} and is the
-centrepiece of the contribution. Four limitations are stated in the structure's own
-docstring: nested inductives are excluded; K-like reduction and structure $\eta$ are not
-modelled; and positivity and \texttt{universes} read manifest binders where the kernel
-\texttt{whnf}s. \texttt{rule\_shape}'s field docstring adds a fifth, that the recursive
-arguments are pinned in number only. Two further ones are documented nowhere:
-\texttt{universes} bundles the purely syntactic bound
-\texttt{decl.nparams} $\le$ \texttt{t.type.piArity} into a clause guarded by stage 0
-succeeding, so that arity fact is unavailable if stage 0 fails; and no clause mentions
-\texttt{VRecursor.all}, which is pinned to the kernel's only downstream, by
-\texttt{TrRecursor.all} (\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240}). Above all,
-and also undocumented, no theorem derives this record from the kernel's own checker.}
+\thesisref{axioms.tex \S2.6.1, \S2.6.2, \S2.6.3, \S2.6.4.}
+
+\lead{In short} A record of twenty clauses stating \hl{what the kernel checks of an
+inductive block}, each typed in the stage the kernel checks it in.
+\begin{center}
+\begin{tabular}{p{0.38\linewidth}p{0.55\linewidth}}
+\toprule
+Clause & Meaning \\
+\midrule
+\texttt{types\_wf}, \texttt{ctors\_wf}, \texttt{recs\_wf} & type formers, constructors,
+recursors typed in their own stage \\
+\texttt{universes} & one sort $\ell$, result sort of every former, dominates every field
+($\mathrm{imax}(u,\ell)\le\ell$); \texttt{LargeElim} when a recursor takes the extra one \\
+\texttt{recs\_elim} & encodes $\kappa$ by pinning the motive sorts \\
+\texttt{rec\_params}, \texttt{rec\_counts} & one motive per former, one minor per
+constructor, indices matching the eliminated former \\
+\texttt{rec\_shape} & the recursor telescope itself (\texttt{RecShape}) \\
+(ctor clauses) & constructors are \texttt{CtorResult} and \texttt{CtorPositive}, parameters
+shared with their former \\
+\texttt{recs\_over\_block}, \texttt{rules\_ctor}, \texttt{types\_have\_rec} & the block is
+direct: every recursor eliminates a former of the block \\
+\texttt{rules\_nodup}, \texttt{rules\_total} & one rule per constructor per recursor \\
+\texttt{rule\_shape} & each reduct has \texttt{RuleShape} against its minor \\
+\texttt{rules\_wf} & each $\iota$ rule is \texttt{PatTyped} in the stage-2 environment \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
+\begin{itemize}
+\item \lead{Caveat} Excludes nested inductives and structure $\eta$; positivity and
+\texttt{universes} read manifest binders, not whnf. No clause mentions
+\texttt{VRecursor.all} (\texttt{TrRecursor.all}
+\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240} ties it separately).
+\texttt{universes} also hides the syntactic bound \texttt{decl.nparams}
+$\le$ \texttt{t.type.piArity} inside a clause guarded by stage 0 succeeding, so it is
+unavailable if stage 0 fails.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Consequences of block well-formedness]
@@ -886,24 +803,23 @@ and also undocumented, no theorem derives this record from the kernel's own chec
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Inductive.lean}{430}
 \uses{structure:ind-wf}
-Every constructor of the block has a rule in some recursor of the block, and every rule
-records its recursor's parameter count, $ru.\mathsf{ctorParams} = r.\mathsf{numParams}$.
-\thesisref{no direct counterpart; a small interface for the front end}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Every constructor has a rule}, and every rule records its recursor's
+parameter count, $ru.\mathsf{ctorParams}=r.\mathsf{numParams}$.
 \end{lemma}
 \begin{proof}
 \leanok
-\texttt{ctors\_have\_rules} chains \texttt{types\_have\_rec} with \texttt{rules\_total};
-\texttt{rules\_own\_params} combines \texttt{rules\_ctor}, which says the rule's constructor
-is one of the block's and so carries \texttt{decl.nparams}, with \texttt{rec\_params}. Both
-are consumed by \texttt{Verify/Environment/Basic.lean}, and
-\texttt{rules\_own\_params} is what collapses the $cnp$ versus $np$ distinction of
-\texttt{iotaRHS} for a direct block.
+\lead{Idea} \texttt{ctors\_have\_rules} chains \texttt{types\_have\_rec} with
+\texttt{rules\_total}; \texttt{rules\_own\_params} combines \texttt{rules\_ctor} with
+\texttt{rec\_params}, collapsing the $cnp$ versus $np$ distinction of \texttt{iotaRHS} for a
+direct block.
 \end{proof}
 
 \section{Environment bookkeeping for \texorpdfstring{\texttt{addInduct}}{addInduct}}
 
-This section is \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{1}. On \texttt{master}
-the file contained only \texttt{theorem addInduct\_WF ... := sorry}.
+This section is \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{1}: the environment
+bookkeeping and soundness proof for \texttt{addInduct}.
 
 \begin{lemma}[Generic reasoning principles for monadic folds over environments]
 \label{family:indlem-foldlm}
@@ -911,22 +827,19 @@ the file contained only \texttt{theorem addInduct\_WF ... := sorry}.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{22}
 \uses{struct:venv-le, def:ordered, def:venv-basic}
-For a successful fold $l.\mathsf{foldlM}\;f\;init = \mathsf{some}\;r$: monotonicity if each
-step is monotone; invariance of a step-preserved predicate; propagation of a property
-established at one list element; preservation of \texttt{pats} and of \texttt{defeqs};
-membership-tracking inversion of a pattern present after the fold; existence of a successful
-step for each element; and orderedness of an \texttt{addConst} fold whose constants are all
-well-formed at the start.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} For a successful $l.\mathsf{foldlM}\;f\;init$, generic \hl{monotonicity,
+invariance and preservation lemmas}: from stepwise monotonicity or a step-preserved
+predicate; \texttt{pats}/\texttt{defeqs} preservation; membership-tracking inversion; a
+successful step per element; orderedness of an \texttt{addConst} fold from well-formed
+constants.
 \end{lemma}
 \begin{proof}
 \leanok
-All by induction on the list, splitting the \texttt{Option.bind} at each step;
-\texttt{foldlM\_addConst\_ordered} runs \texttt{foldlM\_inv} with the invariant
-``ordered and above the initial environment''.
-\reviewnote{These are generic over an arbitrary element type and have nothing to do with
-inductives, yet they live in namespace \texttt{Lean4Lean.VEnv} inside a file called
-\texttt{InductiveLemmas}.}
+\lead{Idea} Induction on the list, splitting \texttt{Option.bind} at each step;
+\texttt{foldlM\_addConst\_ordered} runs \texttt{foldlM\_inv} with invariant ``ordered and
+above the initial environment''.
 \end{proof}
 
 \begin{theorem}[Decomposition of a successful \texttt{addInduct}]
@@ -935,15 +848,17 @@ inductives, yet they live in namespace \texttt{Lean4Lean.VEnv} inside a file cal
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{76}
 \uses{def:ind-add-induct, family:ind-add-stages}
-If $env.\mathsf{addInduct}\;decl = \mathsf{some}\;env'$ then there are intermediate
-environments $env_T$, $env_C$, $env_R$ at which the four stages each succeed.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+\begin{itemize}
+\item \lead{Given} $env.\mathsf{addInduct}\;decl = \mathsf{some}\;env'$;
+\item \lead{Then} intermediate environments $env_T$, $env_C$, $env_R$ at which the four
+stages each succeed.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \leanok
-Repeated \texttt{Option.bind\_eq\_some\_iff} after unfolding the composite stage
-definitions. It is the workhorse of almost every other lemma in the file and of the front
-end.
+\lead{Idea} Repeated \texttt{Option.bind\_eq\_some\_iff} after unfolding the composite
+stages.
 \end{proof}
 
 \begin{lemma}[Adding an inductive only grows the environment]
@@ -952,15 +867,16 @@ end.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{32}
 \uses{family:ind-add-stages, struct:venv-le}
-Each stage of \texttt{addInduct}, and \texttt{addInduct} itself, yields an environment above
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Each stage, and \texttt{addInduct} itself, yields an environment above}
 the one it started from.
-\thesisref{no direct counterpart; proof infrastructure}
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-foldlm, thm:indlem-add-induct-stages, fam:addpat}
 \leanok
-\texttt{foldlM\_le} over \texttt{addConst\_le} and \texttt{addPat\_le}, chained through
-\ref{thm:indlem-add-induct-stages} for the composite.
+\lead{Idea} \texttt{foldlM\_le} over \texttt{addConst\_le} and \texttt{addPat\_le}, chained
+through \ref{thm:indlem-add-induct-stages} for the composite.
 \end{proof}
 
 \begin{lemma}[Every recursor rule is registered as an iota rule]
@@ -969,20 +885,19 @@ the one it started from.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{41}
 \uses{def:ind-add-rec-rule, def:pattern-iota-rhs, inductive:simple-pattern}
-After \texttt{addRecRule}, \texttt{addRules} or \texttt{addInduct}, for every recursor $r$ of
-the block and every rule $ru$ of $r$ with closed reduct, the entry keyed by
+\thesisref{axioms.tex \S2.6.4.}
+
+\lead{In short} After \texttt{addRecRule}/\texttt{addRules}/\texttt{addInduct}, \hl{every
+closed rule of every recursor of the block is present in \texttt{pats}} keyed by
 $\mathsf{iota}\;r.name\;r.\mathsf{getMajorIdx}\;ru.ctor\;(ru.\mathsf{ctorParams}+ru.\mathsf{nfields})$
-with reduct \texttt{iotaRHS} and check \texttt{true} is present in \texttt{pats}.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota})}
+with reduct \texttt{iotaRHS} and check \texttt{true}.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-foldlm, thm:indlem-add-induct-stages, fam:addpat}
 \leanok
-\texttt{addPat\_self} for the single step, then \texttt{foldlM\_mono\_of\_mem} twice, over
-the recursors and over their rules, to carry the entry through the remaining fold, and
-\ref{thm:indlem-add-induct-stages} to reach it from \texttt{addInduct}. \texttt{addInduct\_pat}
-is the interface the verified type checker uses to know that a rule it looked up in the
-kernel is really registered in the model.
+\lead{Idea} \texttt{addPat\_self} for one step, then \texttt{foldlM\_mono\_of\_mem} twice
+(recursors, then rules), reached from \texttt{addInduct} via
+\ref{thm:indlem-add-induct-stages}.
 \end{proof}
 
 \begin{lemma}[Each stage preserves orderedness]
@@ -991,20 +906,19 @@ kernel is really registered in the model.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{171}
 \uses{structure:ind-wf, def:ordered, family:ind-add-stages}
-Stages 0 to 2 preserve \texttt{Ordered} because the corresponding clause of
-\texttt{VInductDecl.WF} types the constants in exactly the environment the stage starts
-from; stage 3 preserves it because every registration is an \texttt{Ordered.pat} step.
-\thesisref{no direct counterpart; the admissibility half of \S2.6.1 to \S2.6.4}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Stages 0-2 preserve \texttt{Ordered}} because the matching
+\texttt{VInductDecl.WF} clause types the constants in the stage's own environment; stage 3
+because every registration is an \texttt{Ordered.pat} step.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-foldlm, inductive:pattern-template-headed, family:ind-shape-corollaries, def:patwf, fam:patwf-mono}
 \leanok
-\texttt{foldlM\_addConst\_ordered} for the three constant stages. For
-\texttt{addRules\_ordered}, a doubly nested \texttt{foldlM\_inv} with invariant
-``ordered and above $env_R$'': the \texttt{PatWF} obligation is \texttt{rules\_wf} moved
-forward by \texttt{PatTyped.mono}, together with \texttt{RuleShape.lam} and
-\texttt{iotaRHS\_templateHeaded} for the template shape. This is where the staging of
-\texttt{VInductDecl.WF} pays off: the three constant stages are one to three lines each.
+\lead{Idea} \texttt{foldlM\_addConst\_ordered} for the constant stages;
+\texttt{addRules\_ordered} nests \texttt{foldlM\_inv} (invariant ``ordered above $env_R$''),
+with \texttt{PatWF} from \texttt{rules\_wf} via \texttt{PatTyped.mono} and template shape
+from \texttt{RuleShape.lam}, \texttt{iotaRHS\_templateHeaded}.
 \end{proof}
 
 \begin{theorem}[Soundness of \texttt{addInduct}]
@@ -1013,21 +927,17 @@ forward by \texttt{PatTyped.mono}, together with \texttt{RuleShape.lam} and
 \leanok
 \contrib{mixed} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{229}
 \uses{structure:ind-wf, def:ind-add-induct, def:ordered}
-Extending an \texttt{Ordered} environment with an inductive declaration well-formed in it
-yields an \texttt{Ordered} environment. The statement line is \texttt{master}'s; the record
-it refers to and the proof are the \texttt{iota} branch's.
-\thesisref{axioms.tex \S2.6.1 (\texttt{sec:inductive}) through \S2.6.4 (\texttt{sec:iota}),
-admissibility of an inductive block}
+\thesisref{axioms.tex \S2.6.1--\S2.6.4.}
+\begin{itemize}
+\item \lead{Given} an \texttt{Ordered} environment and a declaration well-formed in it;
+\item \lead{Then} \hl{extending it with \texttt{addInduct} stays \texttt{Ordered}}.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{family:indlem-stage-ordered}
 \leanok
-Split the final \texttt{Option.bind} of \texttt{addInduct}, then apply
-\texttt{addTypesCtorsRecs\_ordered} followed by \texttt{addRules\_ordered}.
-\reviewnote{This is the headline result of the branch for this file: \texttt{master}
-declared exactly this statement with \texttt{sorry}. It is proved only relative to the new
-\texttt{VInductDecl.WF}, which is itself part of the contribution and remains an assumption
-on the front-end side.}
+\lead{Idea} Split the final \texttt{Option.bind} of \texttt{addInduct}, apply
+\texttt{addTypesCtorsRecs\_ordered} then \texttt{addRules\_ordered}.
 \end{proof}
 
 \begin{lemma}[Which extensions touch pats and which touch defeqs]
@@ -1036,23 +946,19 @@ on the front-end side.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{246}
 \uses{def:venv-basic, def:vdecl-wf, family:ind-add-stages}
-\texttt{addConst}, \texttt{addConsts}, \texttt{addDefEq}, \texttt{addDefEqs},
-\texttt{addQuot} and the three constant stages of \texttt{addInduct} leave \texttt{pats}
-unchanged; \texttt{addConst}, \texttt{addConsts} and all four stages leave \texttt{defeqs}
-unchanged. In particular an inductive block contributes $\iota$ rules and never a
-definitional axiom.
-\thesisref{no direct counterpart; the separation \S2.6.4 needs from \S2.5}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \texttt{addConst}/\texttt{Consts}, \texttt{addDefEq}/\texttt{Eqs},
+\texttt{addQuot} and the constant stages leave \texttt{pats} unchanged; the constant
+operations and all four stages leave \texttt{defeqs} unchanged: \hl{an inductive block
+contributes $\iota$ rules, never a definitional axiom}.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-foldlm, thm:indlem-add-induct-stages}
 \leanok
-Case analysis on \texttt{addConst} followed by \texttt{foldlM\_pats\_preserved} or
+\lead{Idea} Case analysis on \texttt{addConst}, then \texttt{foldlM\_pats\_preserved} or
 \texttt{foldlM\_defeqs\_preserved}, with \ref{thm:indlem-add-induct-stages} for the
-composites. This is exactly the separation the \texttt{Params} instance needs.
-\reviewnote{\texttt{addQuot\_le}, \texttt{addQuot\_pats} and the \texttt{addDefEqs} lemmas
-are about other declaration kinds and sit oddly in a file called \texttt{InductiveLemmas};
-the three \texttt{defeqs} lemmas for rules are tagged \texttt{trproj} by the blame but exist
-identically on \texttt{iota}.}
+composites.
 \end{proof}
 
 \begin{lemma}[Full specification of a successful \texttt{addConst} fold]
@@ -1061,21 +967,17 @@ identically on \texttt{iota}.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{325}
 \uses{def:venv-basic, struct:venv}
-A successful \texttt{addConst} sets exactly its own name, which was fresh. In a successful
-fold: every registered name was fresh at the start; every name is bound in the result to its
-own constant; the naming function is injective on the list and the names have no duplicates;
-any constant bound at the end was bound before or is one of the fold's; two steps commute;
-and the result is invariant under permuting the list.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} A successful \texttt{addConst} sets exactly its own fresh name; in a
+successful fold, \hl{every registered name was fresh, is bound to its own constant, and the
+naming is injective with no duplicates}; earlier bindings persist, two steps commute, and
+the fold is permutation-invariant.
 \end{lemma}
 \begin{proof}
 \leanok
-Induction on the list throughout. \texttt{addConst\_comm} is a \texttt{VEnv.ext}
-computation using that the second name was fresh, and \texttt{addConst\_foldlM\_perm} is an
-induction on the permutation using it. The permutation and inversion lemmas are what let the
-front end reconcile the kernel's per-type insertion order with the model's four-stage order.
-\reviewnote{\texttt{nodup\_map\_inj\_on} is a pure \texttt{List} lemma declared as
-\texttt{Lean4Lean.VEnv.nodup\_map\_inj\_on}.}
+\lead{Idea} Induction on the list throughout; \texttt{addConst\_comm} and
+\texttt{addConst\_foldlM\_perm} use that the second name was fresh.
 \end{proof}
 
 \begin{lemma}[Stages 0 to 2 are one \texttt{addConst} fold]
@@ -1084,16 +986,16 @@ front end reconcile the kernel's per-type insertion order with the model's four-
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{410}
 \uses{family:ind-add-stages}
-$decl.\mathsf{addTypesCtorsRecs}\;env$ equals the \texttt{addConst} fold over
-$decl.\mathsf{consts}$.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $decl.\mathsf{addTypesCtorsRecs}\;env$ \hl{equals the \texttt{addConst} fold
+over $decl.\mathsf{consts}$}.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-addconst-spec}
 \leanok
-\texttt{simp} with \texttt{List.foldlM\_append} and \texttt{List.foldlM\_map}, then
-\texttt{rfl}. It is what lets the whole \texttt{addConst\_foldlM} toolkit apply to the block
-at once.
+\lead{Idea} \texttt{simp} with \texttt{List.foldlM\_append}/\texttt{\_map}, then
+\texttt{rfl}.
 \end{proof}
 
 \begin{lemma}[What each stage binds]
@@ -1102,16 +1004,17 @@ at once.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{532}
 \uses{family:ind-add-stages, struct:venv}
-After its own stage, every type former, constructor and recursor of the block is bound to its
-own constant; constructors and recursors were unbound beforehand; names within each kind have
-no duplicates, and two recursors of the block with the same name coincide.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} After its stage, \hl{every former, constructor and recursor is bound to its
+own constant}; constructors/recursors were unbound before; names within each kind have no
+duplicates; same-named recursors of the block coincide.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-addconst-spec}
 \leanok
-Instances of the \texttt{addConst\_foldlM} family after unfolding the stage definition, with
-\texttt{List.mem\_flatMap} for the constructor stage.
+\lead{Idea} Instances of the \texttt{addConst\_foldlM} family after unfolding the stage
+definition, with \texttt{List.mem\_flatMap} for constructors.
 \end{proof}
 
 \begin{lemma}[Origin of a registered pattern]
@@ -1120,20 +1023,18 @@ Instances of the \texttt{addConst\_foldlM} family after unfolding the stage defi
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{577}
 \uses{def:ind-add-rec-rule, def:ind-add-induct, def:pattern-iota-rhs, inductive:simple-pattern}
-A pattern entry present after \texttt{addRecRule} or \texttt{addInduct} is either one that was
-already there, or exactly the $\iota$ entry of one rule of one recursor of the block: key
-\texttt{SimplePattern.iota} \emph{and} reduct \texttt{SimplePattern.iotaRHS}, both read off
-that rule. The unprimed version records only the key.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), the converse reading of the rule set}
+\thesisref{axioms.tex \S2.6.4.}
+
+\lead{In short} A pattern present after \texttt{addRecRule}/\texttt{addInduct} \hl{was
+already there, or is exactly the $\iota$ entry of one rule of one recursor} of the block
+(key and reduct both). The unprimed version records only the key.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-pat-registration, family:indlem-foldlm, family:indlem-pats-defeqs-preserved}
 \leanok
-Inversion of \texttt{addPat} for the single step; then \texttt{foldlM\_pats\_inv\_mem} nested
-twice with the per-recursor and per-rule motives spelled out, and the three constant stages
-rewritten away by the \texttt{pats}-preservation lemmas.
-\reviewnote{The dependent-equality formulation is heavy, but it is what pins the reduct and
-not only the key; the primed and unprimed pair is a sensible interface split.}
+\lead{Idea} Inversion of \texttt{addPat} for one step, then \texttt{foldlM\_pats\_inv\_mem}
+nested over recursors and rules, with the constant stages rewritten away by the
+\texttt{pats}-preservation lemmas.
 \end{proof}
 
 \begin{lemma}[The recursors of a block, seen from \texttt{addInduct}]
@@ -1142,16 +1043,16 @@ not only the key; the primed and unprimed pair is a sensible interface split.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{660}
 \uses{def:ind-add-induct, struct:vrecursor}
-A recursor of \texttt{decl} is not already bound in \texttt{env}, is bound to its own constant
-in the result, and two recursors of the block sharing a name are equal.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} A recursor of \texttt{decl} \hl{was unbound in $env$, is bound to its own
+constant in the result}, and same-named recursors of the block are equal.
 \end{lemma}
 \begin{proof}
 \uses{thm:indlem-add-induct-stages, family:indlem-find-fresh-nodup, family:indlem-stage-le}
 \leanok
-Thread \ref{thm:indlem-add-induct-stages} and the stage lemmas through monotonicity of the
-environment order. These are exactly the facts \ref{thm:indparams-patsiota-induct} needs to
-rule out a name clash between an old registered recursor and a new one.
+\lead{Idea} Thread \ref{thm:indlem-add-induct-stages} and the stage lemmas through
+monotonicity of the environment order.
 \end{proof}
 
 \begin{theorem}[The constructor an iota rule fires on is registered with the right arity]
@@ -1160,19 +1061,19 @@ rule out a name clash between an old registered recursor and a new one.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{687}
 \uses{structure:ind-wf, def:ind-ctor-shape}
-For a well-formed block, the constructor of every recursor rule is registered in the stage-1
-environment, and hence in the result of \texttt{addInduct}, with a type of
-$\mathsf{CtorShape}\,(ru.\mathsf{ctorParams} + ru.\mathsf{nfields})$.
-\thesisref{no direct counterpart; the environment-level residue of \S2.6.1}
+\thesisref{no direct counterpart.}
+\begin{itemize}
+\item \lead{Given} a well-formed block;
+\item \lead{Then} \hl{every rule's constructor is post-\texttt{addInduct} registered with
+type} $\mathsf{CtorShape}\,(ru.\mathsf{ctorParams}+ru.\mathsf{nfields})$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{family:ind-shape-corollaries, family:indlem-find-fresh-nodup, thm:indlem-add-induct-stages}
 \leanok
-Read \texttt{rules\_ctor} to find the constructor in the block, look it up with
-\texttt{addCtors\_find}, and convert \texttt{CtorResult} to \texttt{CtorShape} with
-\texttt{CtorResult.ctorShape} after rewriting $ru.\mathsf{ctorParams} = decl.\mathsf{nparams}$;
-the second statement carries the result forward along the remaining stages. This is the
-bridge that ultimately separates recursor heads from constructor heads.
+\lead{Idea} Read \texttt{rules\_ctor} to find the constructor, look it up with
+\texttt{addCtors\_find}, convert \texttt{CtorResult} to \texttt{CtorShape}; carry forward
+along the remaining stages.
 \end{proof}
 
 \begin{theorem}[Injectivity of the iota redex shape]
@@ -1181,15 +1082,16 @@ bridge that ultimately separates recursor heads from constructor heads.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{713}
 \uses{inductive:simple-pattern}
-If two $\mathsf{iota}$ redexes have the same underlying \texttt{Pattern}, their recursor
-names, spine arities, constructor names and constructor arities agree.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Two $\mathsf{iota}$ redexes with the same underlying \texttt{Pattern}}
+agree in recursor name, spine arity, constructor name and constructor arity.
 \end{theorem}
 \begin{proof}
 \uses{family:pattern-spine-combinatorics}
 \leanok
-Injection on the \texttt{app} node, then \texttt{Pattern.varN\_const\_inj} on each spine.
-Small, but used throughout \texttt{InductiveParams} and in the front end.
+\lead{Idea} Injection on the \texttt{app} node, then \texttt{Pattern.varN\_const\_inj} on
+each spine.
 \end{proof}
 
 \begin{lemma}[Registered reducts are closed]
@@ -1198,23 +1100,22 @@ Small, but used throughout \texttt{InductiveParams} and in the front end.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{737}
 \uses{def:ind-add-rec-rule, def:closedn}
-A successful \texttt{addRecRule} registered a closed reduct, and after a successful
-\texttt{addRules} every rule reduct of the declaration is closed.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} A successful \texttt{addRecRule} \hl{registered a closed reduct}, and after
+a successful \texttt{addRules} every rule reduct of the declaration is closed.
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-foldlm}
 \leanok
-Inversion of the \texttt{if} in \texttt{addRecRule}, lifted through
-\texttt{foldlM\_step\_success} twice. It is what lets the front end produce the closedness
-argument of \texttt{iotaRHS} without \texttt{VInductDecl.WF} carrying it.
+\lead{Idea} Inversion of the \texttt{if} in \texttt{addRecRule}, lifted through
+\texttt{foldlM\_step\_success} twice.
 \end{proof}
 
 \section{A Params instance from the registered rules}
 
-This section is \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{1}. Its goal is to
-instantiate the abstract parameter record the Church-Rosser development is stated over with
-an environment's own registered $\iota$ rules.
+This section is \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{1}: an instance of the
+Church-Rosser development's parameter record, from an environment's own $\iota$ rules.
 
 \begin{lemma}[The only application node of an iota redex]
 \label{family:indparams-iota-subpattern}
@@ -1222,15 +1123,17 @@ an environment's own registered $\iota$ rules.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{26}
 \uses{inductive:simple-pattern, inductive:pattern-core}
-Any application subpattern of $(\mathsf{iota}\;r\;M\;c\;N).\mathsf{toPattern}$ is the
-top-level one, whose factors are the recursor spine and the constructor spine.
-\thesisref{no direct counterpart; coherence of the rule set}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Any application subpattern is the top-level one} of
+$(\mathsf{iota}\;r\;M\;c\;N).\mathsf{toPattern}$, factoring into the recursor and constructor
+spines.
 \end{lemma}
 \begin{proof}
 \uses{family:pattern-spine-combinatorics}
 \leanok
-Case analysis on the \texttt{Subpattern} derivation, the \texttt{appL} and \texttt{appR}
-cases being excluded by \texttt{not\_app\_subpattern\_varN\_const}.
+\lead{Idea} Case analysis on the \texttt{Subpattern} derivation; the \texttt{appL}/\texttt{appR}
+cases are excluded by \texttt{not\_app\_subpattern\_varN\_const}.
 \end{proof}
 
 \begin{lemma}[Inversion lemmas for pattern intersection at an application]
@@ -1239,16 +1142,14 @@ cases being excluded by \texttt{not\_app\_subpattern\_varN\_const}.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{43}
 \uses{inductive:pattern-core}
-An application pattern does not intersect a constant; it intersects a \texttt{var} only
-through its function part; and two applications intersect componentwise.
-\thesisref{no direct counterpart; coherence of the rule set}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{An application never intersects a constant}; it meets a \texttt{var}
+only through its function part; two applications intersect componentwise.
 \end{lemma}
 \begin{proof}
 \leanok
-\texttt{simp [Pattern.inter]} after case-splitting on the recursive intersections.
-\reviewnote{Three \texttt{Pattern} lemmas declared with \texttt{\_root\_} inside
-\texttt{namespace VEnv}; they belong next to \texttt{Pattern.inter} in
-\texttt{Pattern.lean}.}
+\lead{Idea} \texttt{simp [Pattern.inter]} after case-splitting the recursive intersections.
 \end{proof}
 
 \begin{lemma}[Only inductive declarations change pats]
@@ -1257,17 +1158,17 @@ through its function part; and two applications intersect componentwise.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{69}
 \uses{def:vdecl-wf, def:ind-add-induct, structure:ind-wf}
-Each \texttt{VDecl.WF} step either leaves \texttt{pats} unchanged (axiom, def, mutual def,
-opaque, example, quot) or is the \texttt{addInduct} of a declaration well-formed at that
-point.
-\thesisref{no direct counterpart; the invariant that \texttt{pats} holds exactly the $\iota$
-rules}
+\thesisref{no direct counterpart.}
+
+\lead{In short} Each \texttt{VDecl.WF} step \hl{either leaves \texttt{pats} unchanged, or is
+an \texttt{addInduct}} of a declaration well-formed at that point (the non-inductive kinds:
+axiom, def, mutual def, opaque, example, quot).
 \end{lemma}
 \begin{proof}
 \uses{family:indlem-pats-defeqs-preserved}
 \leanok
-Case analysis on the constructors of \texttt{VDecl.WF}, each non-inductive case discharged by
-the corresponding \texttt{pats}-preservation lemma. It is the induction step of both
+\lead{Idea} Case analysis on the constructors of \texttt{VDecl.WF}, each non-inductive case
+by the matching \texttt{pats}-preservation lemma; the induction step of both
 \ref{thm:indparams-wf-pats-origin} and \ref{thm:indparams-wf-patsiota}.
 \end{proof}
 
@@ -1277,22 +1178,21 @@ the corresponding \texttt{pats}-preservation lemma. It is the induction step of 
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{93}
 \uses{def:venv-wf, def:ind-add-induct, structure:ind-wf, def:pattern-iota-rhs}
-If $env.\mathsf{WF'}\;ds$ and $env.\mathsf{pats}\;p\;rr$, then some suffix of $ds$ begins with
-an inductive declaration $decl$ well-formed in the environment $env_0$ reached there, with
-$env_0.\mathsf{addInduct}\;decl = \mathsf{some}\;env_1$ and $env_1 \le env$, and $(p, rr)$ is
-exactly the $\iota$ entry of one rule of one recursor of $decl$.
-\thesisref{axioms.tex \S2.6.4 (\texttt{sec:iota}), locating the declaration a rule came from}
+\thesisref{axioms.tex \S2.6.4.}
+\begin{itemize}
+\item \lead{Given} $env.\mathsf{WF'}\;ds$ and $env.\mathsf{pats}\;p\;rr$;
+\item \lead{Then} \hl{some suffix of $ds$ begins with an inductive declaration} $decl$
+well-formed at the environment $env_0$ reached there, with $env_0.\mathsf{addInduct}\;decl =
+\mathsf{some}\;env_1 \le env$, and $(p,rr)$ is exactly the $\iota$ entry of one rule of
+$decl$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{family:indparams-pats-eq-or-induct, family:indlem-pats-origin}
 \leanok
-Induction on the \texttt{WF'} chain, using \texttt{pats\_eq\_or\_induct'} at each step and
-\texttt{addInduct\_pats\_origin'} in the inductive case, carrying the environment-order
-witness forward.
-\reviewnote{Its own docstring calls it the first step of the deferred $\iota$
-subject-reduction proof (\texttt{VEnv.WF.patsStrong},
-\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}, still \texttt{sorry}). Nothing uses it
-yet, so its value is entirely as groundwork for that open obligation.}
+\lead{Idea} Induction on the \texttt{WF'} chain, using \texttt{pats\_eq\_or\_induct'} at
+each step and \texttt{addInduct\_pats\_origin'} in the inductive case.
+\lead{Caveat} Groundwork for \texttt{VEnv.WF.patsStrong}, still \texttt{sorry}.
 \end{proof}
 
 \begin{definition}[The pattern-registry invariant, \texttt{PatsIota}]
@@ -1301,16 +1201,17 @@ yet, so its value is entirely as groundwork for that open obligation.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{133}
 \uses{inductive:simple-pattern, def:recheaded, def:ctorheaded, struct:venv}
-Four fields. \texttt{shape}: every registered pattern is an $\mathsf{iota}$ redex whose
-recursor head is a registered constant with a \texttt{RecHeaded} type. \texttt{arity}: the
-recursor name determines the spine arity. \texttt{ctor\_shape}: the constructor is a
-registered constant with a \texttt{CtorHeaded} type. \texttt{functional}: a pattern
-determines its reduct.
-\thesisref{no direct counterpart; the population invariant behind the \texttt{Params}
-instance}
-\reviewnote{Well chosen: exactly strong enough to discharge the five structural
-\texttt{Params} conditions and weak enough to be preserved by \texttt{addInduct}. The
-\texttt{arity} field is the non-obvious one.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} Four fields \hl{tying every registered pattern to a real recursor and
+constructor}.
+\begin{itemize}
+\item \texttt{shape}: every registered pattern is an $\mathsf{iota}$ redex whose recursor
+head is a registered, \texttt{RecHeaded} constant.
+\item \texttt{arity}: the recursor name determines the spine arity.
+\item \texttt{ctor\_shape}: the constructor is a registered, \texttt{CtorHeaded} constant.
+\item \texttt{functional}: a pattern determines its reduct.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[A recursor head is never a constructor head]
@@ -1319,18 +1220,16 @@ instance}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{148}
 \uses{structure:indparams-patsiota, def:recheaded, def:ctorheaded}
-Under \texttt{PatsIota}, the recursor name of one registered $\iota$ redex differs from the
-constructor name of any registered $\iota$ redex.
-\thesisref{no direct counterpart; coherence of the rule set}
+\thesisref{no direct counterpart.}
+
+\lead{In short} Under \texttt{PatsIota}, \hl{a recursor name never equals a constructor
+name} of any registered $\iota$ redex.
 \end{theorem}
 \begin{proof}
 \uses{thm:indlem-iota-topattern-inj}
 \leanok
-Both names would resolve to the same registered constant, whose type would be both
+\lead{Idea} Both names would resolve to one constant whose type would be both
 \texttt{RecHeaded} and \texttt{CtorHeaded}, contradicting \texttt{RecHeaded.not\_ctorHeaded}.
-\reviewnote{The separation rests on the type shapes of the constants, not on any tagging in
-\texttt{VEnv.constants}, which is precisely why the same trick does not extend to $\delta$
-rules.}
 \end{proof}
 
 \begin{lemma}[\texttt{PatsIota} survives a non-inductive step]
@@ -1339,14 +1238,15 @@ rules.}
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{161}
 \uses{structure:indparams-patsiota, struct:venv-le}
-\texttt{PatsIota} is preserved by any environment extension that leaves \texttt{pats}
-unchanged and only grows \texttt{constants}.
-\thesisref{no direct counterpart; proof infrastructure}
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{Preserved by any extension} that leaves \texttt{pats} unchanged and only
+grows \texttt{constants}.
 \end{lemma}
 \begin{proof}
 \leanok
-Rewrite each \texttt{pats} hypothesis by the equation and transport the constant lookups
-along the environment order.
+\lead{Idea} Rewrite each \texttt{pats} hypothesis by the equation and transport the constant
+lookups along the environment order.
 \end{proof}
 
 \begin{theorem}[\texttt{PatsIota} survives \texttt{addInduct}]
@@ -1355,22 +1255,19 @@ along the environment order.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{181}
 \uses{structure:indparams-patsiota, def:ind-add-induct, structure:ind-wf}
-If $env$ satisfies \texttt{PatsIota} and $decl$ is well-formed in $env$, then the result of
-$env.\mathsf{addInduct}\;decl$ satisfies \texttt{PatsIota}.
-\thesisref{no direct counterpart; the inductive step of the registry invariant}
+\thesisref{no direct counterpart.}
+\begin{itemize}
+\item \lead{Given} $env$ satisfies \texttt{PatsIota} and $decl$ is well-formed in $env$;
+\item \lead{Then} \hl{$env.\mathsf{addInduct}\;decl$ satisfies \texttt{PatsIota}}.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{family:indlem-pats-origin, family:indlem-addinduct-consts, thm:indlem-rules-ctor-shape, thm:indlem-iota-topattern-inj, family:ind-shape-corollaries, family:indlem-addconst-spec}
 \leanok
-By \texttt{addInduct\_pats\_origin} each entry is old or new. A new entry is keyed by a
-recursor of the block, whose type is \texttt{RecHeaded} by \texttt{rec\_shape.recHeaded} and
-whose constructor is registered with \texttt{CtorShape} by \texttt{addInduct\_rule\_ctor}; an
-old entry's recursor cannot be a new one because \texttt{addInduct\_rec\_fresh} says the new
-names were unbound; and two new entries with the same key come from the same recursor, by
-\texttt{addInduct\_recs\_name\_inj}, and from the same rule, by \texttt{rules\_nodup} with
-\texttt{nodup\_map\_inj\_on}, so their reducts coincide. At about fifty lines this is the
-most substantial proof in the group and the one that actually consumes the
-\texttt{VInductDecl.WF} clauses.
+\lead{Idea} By \texttt{addInduct\_pats\_origin} each entry is old or new: a new entry keys a
+block recursor (\texttt{RecHeaded}) whose constructor is \texttt{CtorShape}-registered; an
+old entry's recursor cannot be new (\texttt{addInduct\_rec\_fresh}); two new entries sharing
+a key share a recursor and a rule (\texttt{rules\_nodup}), so their reducts coincide.
 \end{proof}
 
 \begin{theorem}[Every well-formed environment satisfies the registry invariant]
@@ -1379,14 +1276,15 @@ most substantial proof in the group and the one that actually consumes the
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{232}
 \uses{structure:indparams-patsiota, def:venv-wf}
-$env.\mathsf{WF}$ implies $env.\mathsf{PatsIota}$.
-\thesisref{no direct counterpart; the registry invariant, globally}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $env.\mathsf{WF}$ \hl{implies $env.\mathsf{PatsIota}$}.
 \end{theorem}
 \begin{proof}
 \uses{thm:indparams-patsiota-induct, thm:indparams-patsiota-of-le, family:indparams-pats-eq-or-induct}
 \leanok
-Induction on the \texttt{WF'} chain: the empty environment has no registered patterns, and
-each step is either \texttt{PatsIota.of\_le} or \texttt{PatsIota.induct}, according to
+\lead{Idea} Induction on the \texttt{WF'} chain: the empty environment has no registered
+patterns, and each step is \texttt{PatsIota.of\_le} or \texttt{PatsIota.induct} by
 \texttt{pats\_eq\_or\_induct}.
 \end{proof}
 
@@ -1396,24 +1294,20 @@ each step is either \texttt{PatsIota.of\_le} or \texttt{PatsIota.induct}, accord
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{249}
 \uses{class:cr-params, def:venv-wf, inductive:pattern-core}
-For a well-formed environment: every registered pattern is a \texttt{SimplePattern}; if a
-subpattern of one registered redex intersects another registered redex then the two redexes
-and the subpattern all coincide and the reducts agree; the recursor spine of a redex has no
-application subpattern of its own; a variable slot of one recursor spine never intersects
-another recursor spine; and a subpattern of one recursor spine never intersects a subpattern
-of another constructor spine.
-\thesisref{no direct counterpart; the coherence conditions of the abstract development}
+\thesisref{no direct counterpart.}
+
+\lead{In short} For a well-formed environment, \hl{every registered pattern is a
+\texttt{SimplePattern} and coherent with every other}: an intersecting subpattern forces two
+redexes, it, and their reducts to coincide; a recursor spine has no application subpattern
+and never intersects another recursor or constructor spine.
 \end{lemma}
 \begin{proof}
 \uses{thm:indparams-wf-patsiota, thm:indparams-patsiota-rec-ne-ctor, family:pattern-spine-combinatorics, family:indparams-inter, family:indparams-iota-subpattern}
 \leanok
-All five reduce through \texttt{PatsIota.shape} to the spine combinatorics.
-\texttt{pat\_uniq} splits on where the subpattern sits: at the top, \texttt{functional}
-closes; inside the recursor spine, the arity would drop below the one \texttt{arity} fixes;
-inside the constructor spine, a recursor would be a constructor. \texttt{pat\_app\_l\_uniq}
-and \texttt{pat\_app\_uniq} are \texttt{varN\_const\_inter} plus \texttt{arity},
-respectively \texttt{rec\_ne\_ctor}. These are the real content of the instance and they
-need no extra hypotheses.
+\lead{Idea} All five reduce through \texttt{PatsIota.shape} to the spine combinatorics:
+\texttt{pat\_uniq} splits on where the subpattern sits (top closes by \texttt{functional};
+inside a spine, arity or \texttt{rec\_ne\_ctor} closes it); the \texttt{app} cases follow
+from \texttt{varN\_const\_inter}.
 \end{proof}
 
 \begin{definition}[Every definitional axiom is realised by a registered pattern, \texttt{DefEqsAsPats}]
@@ -1422,21 +1316,19 @@ need no extra hypotheses.
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{378}
 \uses{inductive:pattern-matches, inductive:pattern-rhs, def:hastype-istype, class:cr-params}
-$env.\mathsf{DefEqsAsPats}\;U$ asserts, in the shape of the \texttt{Params} field
-\texttt{extra\_pat}, that for every $env.\mathsf{defeqs}\;df$ and every well-formed level
-instantiation there is a registered pattern matching the instantiated left-hand side whose
-side conditions hold and whose reduct is the instantiated right-hand side.
-\thesisref{no direct counterpart; the gap between \texttt{defeqs} and \texttt{pats}}
-\reviewnote{The 27-line docstring (\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{351})
-is the most useful documentation in the group. It explains that $\delta$ rules and the
-quotient rule live in \texttt{defeqs}, why registering \texttt{SimplePattern.defn} would
-require a new environment invariant separating definition names from recursor and
-constructor names, and why the quotient redex is not a \texttt{SimplePattern} at all. The
-consequence, stated plainly, is that \texttt{DefEqsAsPats} fails for any environment
-containing a single \texttt{def} or \texttt{quot}. Two thirds of it (lines 355, 362--377) is
-tagged \texttt{trproj} by the blame and is, unlike every other \texttt{trproj}-tagged block
-in this group, genuinely absent from \texttt{iota}, where the hypothesis is called a
-``design hypothesis'' and the $\delta$ analysis is missing.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} $env.\mathsf{DefEqsAsPats}\;U$: \hl{every definitional axiom has a
+registered-pattern surrogate}, the shape the \texttt{Params} field \texttt{extra\_pat}
+needs.
+\begin{itemize}
+\item For every $env.\mathsf{defeqs}\;df$ and well-formed level instantiation, a registered
+pattern matches the instantiated left side with its side conditions and reduct the
+instantiated right side.
+\item \lead{Caveat} $\delta$ rules and the quotient rule live in \texttt{defeqs}, not
+\texttt{pats} (docstring \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{351}); fails
+for any environment with a single \texttt{def} or \texttt{quot}.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The Params instance induced by an environment, \texttt{toParams}]
@@ -1445,16 +1337,16 @@ in this group, genuinely absent from \texttt{iota}, where the hypothesis is call
 \leanok
 \contrib{iota} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}
 \uses{family:indparams-params-sides, thm:pattern-ok-exists-realizer, def:indparams-defeqs-as-pats, class:cr-params, rule:isdefeq-pat}
-For a well-formed $env$ satisfying $\mathsf{DefEqsAsPats}\;U$, $env.\mathsf{toParams}$ is a
-\texttt{Params} structure whose abstract reduction relation is $env.\mathsf{pats}$: the five
-structural conditions come from \ref{family:indparams-params-sides}, \texttt{pat\_wf} is
-\texttt{IsDefEq.pat} applied to a realizer extracted by
-\ref{thm:pattern-ok-exists-realizer}, \texttt{pat\_env} is the identity, and
-\texttt{extra\_pat} is the hypothesis.
-\thesisref{no direct counterpart; the bridge to the Church-Rosser development}
-\reviewnote{This is the point of the file: the abstract development had no instance at all
-before. Its value is limited by \texttt{DefEqsAsPats}, which as it stands restricts
-\texttt{toParams} to environments with no definitional axiom whatsoever.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} For $env$ well-formed and $\mathsf{DefEqsAsPats}\;U$, \hl{a \texttt{Params}
+structure whose abstract reduction relation is $env.\mathsf{pats}$}.
+\begin{itemize}
+\item The five structural conditions come from \ref{family:indparams-params-sides};
+\texttt{pat\_wf} is \texttt{IsDefEq.pat} applied to a realizer from
+\ref{thm:pattern-ok-exists-realizer}; \texttt{pat\_env} is the identity; \texttt{extra\_pat}
+is the hypothesis.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[\texttt{DefEqsAsPats} holds vacuously without definitional axioms]
@@ -1463,14 +1355,14 @@ before. Its value is limited by \texttt{DefEqsAsPats}, which as it stands restri
 \leanok
 \contrib{trproj} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{413}
 \uses{def:indparams-defeqs-as-pats}
-An environment whose \texttt{defeqs} relation is empty satisfies
+\thesisref{no direct counterpart.}
+
+\lead{In short} \hl{An environment with no \texttt{defeqs}} satisfies
 $\mathsf{DefEqsAsPats}\;U$ for every $U$.
-\thesisref{no direct counterpart}
 \end{lemma}
 \begin{proof}
 \leanok
-One line: \texttt{absurd} on the \texttt{defeqs} hypothesis. The line blame tags this
-\texttt{trproj}; identical code is on \texttt{iota}.
+\lead{Idea} \texttt{absurd} on the \texttt{defeqs} hypothesis.
 \end{proof}
 
 \begin{definition}[A Params instance for a single inductive block, \texttt{inductParams}]
@@ -1479,15 +1371,15 @@ One line: \texttt{absurd} on the \texttt{defeqs} hypothesis. The line blame tags
 \leanok
 \contrib{trproj} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{419}
 \uses{def:indparams-toparams, thm:indparams-defeqs-as-pats-vacuous, family:indlem-pats-defeqs-preserved, def:venv-wf}
-For a declaration well-formed in the empty environment with
-$\mathsf{addInduct}\;\emptyset\;decl = \mathsf{some}\;env$, \texttt{inductParams} is the
-\texttt{Params} instance at $env$: well-formedness is witnessed by the one-declaration chain,
-and \texttt{DefEqsAsPats} holds vacuously because \texttt{addInduct} adds no definitional
-axiom.
-\thesisref{no direct counterpart; an inhabitation witness}
-\reviewnote{The only witness that \texttt{Params} is inhabitable at all, which is genuinely
-useful as a sanity check, but the environment is a toy: one inductive block and nothing
-else. The line blame tags it \texttt{trproj}; identical on \texttt{iota}.}
+\thesisref{no direct counterpart.}
+
+\lead{In short} For $decl$ well-formed in the empty environment with
+$\mathsf{addInduct}\;\emptyset\;decl=\mathsf{some}\;env$, \hl{the \texttt{Params} instance at
+$env$}: well-formedness from the one-declaration chain, \texttt{DefEqsAsPats} vacuous since
+\texttt{addInduct} adds no definitional axiom.
+\begin{itemize}
+\item \lead{Caveat} The only witness that \texttt{Params} is inhabitable.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Church-Rosser for a one-block environment]
@@ -1496,150 +1388,34 @@ else. The line blame tags it \texttt{trproj}; identical on \texttt{iota}.}
 \leanok
 \contrib{trproj} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{426}
 \uses{def:indparams-induct-params, thm:isdefeq-church-rosser, def:crdefeq, def:normaleq, def:onctx}
-In an environment obtained by adding one well-formed inductive block to the empty
-environment, definitionally equal terms in a well-formed context are related by
-\texttt{CRDefEq}: they have parallel reduction sequences meeting at \texttt{NormalEq} terms.
-\thesisref{no direct counterpart; a demonstration that the instance can be used}
+\thesisref{no direct counterpart.}
+
+\lead{In short} In an environment built by adding one well-formed block to the empty
+environment, \hl{definitionally equal terms in a well-formed context are \texttt{CRDefEq}}:
+parallel reduction sequences meeting at \texttt{NormalEq} terms.
 \end{lemma}
 \begin{proof}
 \leanok
-Instantiate \texttt{inductParams} and apply \texttt{IsDefEq.church\_rosser}.
+\lead{Idea} Instantiate \texttt{inductParams} and apply \texttt{IsDefEq.church\_rosser}.
 \axfoot{sorryAx via VEnv.NormalEq.parRed (ChurchRosser.lean:1193 and :1212, master);
 Classical.choice; Quot.sound; propext}
-\reviewnote{The statement reads as a finished result and is not one.
-\texttt{IsDefEq.church\_rosser} routes through \texttt{NormalEq.parRed}, which still contains
-two \texttt{sorry}s, so the conclusion is conditional on them; the docstring says nothing
-about that. Nothing consumes the theorem.}
 \end{proof}
 
-\section{Contribution summary}
-
-The $\iota$ contribution to this group does four things. First, it replaces two
-\texttt{sorry}-definitions by a real specification: \ref{def:ind-add-induct} stages the
-environment extension into type formers, constructors, recursors and rules, and
-\ref{structure:ind-wf} states in twenty clauses what the kernel checks, each clause typed in
-the environment the kernel checks it in and each documented with its thesis reference. The
-syntactic half of that record is \ref{def:ind-ctor-result} to \ref{def:ind-rule-shape}, whose
-de Bruijn arithmetic is correct and is exercised against real kernel declarations by
-\texttt{Tests/IotaShape.lean}. Second, it makes the $\iota$ rule a first-class reduction rule:
-\ref{def:pattern-rhs-generic} turns the thesis's ``all substitution instances'' parenthesis
-into one typing obligation, \ref{def:pattern-check-realizes} makes the side conditions a
-positive predicate so that the new \texttt{IsDefEq.pat} constructor is legal,
-\ref{inductive:pattern-template-headed} records that a registered rule computes, and
-\ref{def:pattern-iota-rhs} with \ref{thm:pattern-iota-rhs-apply} identify the model's reduct
-with the kernel's \texttt{inductiveReduceRecCore} reduct argument slice for argument slice.
-Third, \ref{thm:indlem-add-induct-wf} proves that adding a well-formed block preserves
-orderedness, with \ref{family:indlem-pat-registration} and \ref{family:indlem-pats-origin}
-giving both directions of ``\texttt{pats} holds exactly the block's $\iota$ rules''. Fourth,
-\ref{structure:indparams-patsiota} to \ref{def:indparams-toparams} build the first concrete
-instance of the parameter record the Church-Rosser development is stated over.
-
-What remains open. Nothing derives \ref{structure:ind-wf} from
-\texttt{Lean4Lean/Inductive/Add.lean}, the repository's own re-implementation of the kernel's
-inductive checker, so \texttt{TrEnv'.induct} still takes it as a hypothesis; two of the
-model's deliberate deviations, manifest binders in positivity and the exclusion of nested
-inductives, actively obstruct closing that gap. \ref{def:indparams-toparams} applies only to
-environments with no definitional axiom, so the only instance built,
-\ref{def:indparams-induct-params}, is a toy. \ref{thm:indparams-wf-pats-origin} is groundwork
-for \texttt{VEnv.WF.patsStrong}, which is still \texttt{sorry}. And K-like reduction is not
-modelled at all, so for subsingleton eliminators the model's reduction relation is strictly
-weaker than the kernel's.
-
-\section{Review notes}
+\section*{Caveats}
 \label{sec:ind-review}
 
 \begin{itemize}
-\item \textbf{High.} \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{583}: nothing derives
-\texttt{VInductDecl.WF} from the kernel's own inductive checker. \texttt{TrEnv'.induct} takes
-\texttt{decl.WF env} as a hypothesis and \texttt{Lean4Lean/Inductive/Add.lean} is never
-related to it, so the refinement chain still has an assumption at the hardest declaration
-kind. This is better than \texttt{master}, where the predicate was \texttt{sorry} and the
-assumption was uninformative, and \texttt{Tests/IotaShape.lean} validates the record by
-\texttt{decide} on concrete kernel data, but that is evidence, not a proof. The contribution
-should be described as specified and validated, not verified.
-\item \textbf{High.} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{426}:
-\texttt{IsDefEq.crDefEq\_of\_induct} is presented as Church-Rosser for such an environment,
-but \texttt{IsDefEq.church\_rosser} depends on the two \texttt{sorry}s in
-\texttt{NormalEq.parRed} (\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193} and
-\srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1212}). The docstring gives no hint that
-the conclusion is conditional, and no other declaration uses the theorem.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}:
-\texttt{toParams} is a \texttt{Params} instance only for environments satisfying
-\texttt{DefEqsAsPats}, that is, containing no \texttt{def}, \texttt{mutualDef} or
-\texttt{quot} at all. Every realistic Lean environment fails it, so the Church-Rosser
-development is still not connected to the model's own well-formed environments. Documented at
-length in the \texttt{DefEqsAsPats} docstring, but it is the main limitation of the file.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Inductive.lean}{174}:
-\texttt{VExpr.RuleShape} pins only the number of arguments the reduct passes to the minor
-premise after the fields, not their shape, where the thesis requires
-$v_i = \lambda x{::}\xi_i.\;\mathrm{rec}_P\;C\;e\;\pi_i[b,x]\;(u_i\;x)$. Together with
-\texttt{rules\_wf}, which only forces them to be well-typed, \texttt{VInductDecl.WF} accepts
-$\iota$ rules the kernel would never generate. Flagged in the docstring, but it caps what any
-soundness theorem proved against this model can mean.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Inductive.lean}{257}: K-like reduction is not
-modelled. \texttt{addRecRule} registers only the constructor rule and \texttt{VRecursor.k} is
-recorded but never used, while the kernel does perform it (\texttt{toCtorWhenK},
-\srcloc{Lean4Lean/Inductive/Reduce.lean}{29}, called from
-\srcloc{Lean4Lean/Inductive/Reduce.lean}{110}). For K-like recursors the model's reduction
-relation is strictly weaker than the kernel's and the verified WHNF cannot be shown complete
-for them.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Inductive.lean}{93}:
-\texttt{FieldPositive}, \texttt{CtorPositive} and \texttt{WF.universes} read the manifest
-$\Pi$-binders of a field type, whereas the kernel reduces to weak head normal form at each
-step of \texttt{checkPositivity} (\srcloc{Lean4Lean/Inductive/Add.lean}{189}). The model is
-therefore strictly stricter than the kernel: a declaration whose field type is a reducible
-definition unfolding to a $\Pi$ passes the kernel and fails \texttt{VInductDecl.WF}.
-Documented, but it is an obstacle to ever discharging the first item above.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Theory/Inductive.lean}{335}:
-\texttt{recs\_over\_block} and \texttt{rules\_ctor} require every recursor to eliminate one of
-the block's own type formers, which excludes nested inductives. \texttt{Environment.addInductive}
-does add such blocks, so \texttt{TrEnv'} can never be constructed for an environment containing
-one. Documented as future work, namely modelling the kernel's \texttt{ElimNestedInductive} pass.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Inductive.lean}{196}: dead code.
-\texttt{VExpr.RecShape.one\_le\_numMotives} (line 196),
-\texttt{VExpr.RecShape.majorFormer?\_eq} (line 202) and
-\texttt{VInductDecl.LargeElim.shape} (line 242) are referenced nowhere in the repository, and
-so is the whole \texttt{Pattern.RHS.spine} and \texttt{iotaCounts} cluster at
-\srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{509} to 678, eight declarations and about
-seventy lines used only by each other.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{451}: placement and
-naming. \texttt{nodup\_map\_inj\_on} is a pure \texttt{List} lemma declared as
-\texttt{Lean4Lean.VEnv.nodup\_map\_inj\_on}; the generic \texttt{foldlM} and
-\texttt{addConst\_foldlM} toolkit and the \texttt{addQuot} and \texttt{addDefEqs} lemmas,
-which are about quotients and definitions, all live in a file named \texttt{InductiveLemmas};
-and \texttt{VEnv.addRecRule} (\srcloc{Lean4Lean/Theory/Inductive.lean}{259}) spells the major
-index out instead of using \texttt{r.getMajorIdx}, which every lemma about it does use.
-Similarly \texttt{Pattern.inter\_app\_const} and its two siblings are \texttt{\_root\_}
-\texttt{Pattern} lemmas declared inside \texttt{namespace VEnv}.
-\item \textbf{Low.} \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{283}: redundancy.
-\texttt{Pattern.Matches.uniq} (line 143) and \texttt{Pattern.matches\_determ} (line 283) are
-the same statement proved twice; both are pre-existing \texttt{master} code that the branches
-left untouched (\texttt{git diff master} on this file is 493 insertions and no deletions), so
-the duplication is inherited rather than introduced.
-Similarly \texttt{MotiveShape}'s ``ends in a sort'' clause is
-subsumed by \texttt{VInductDecl.WF.recs\_elim}, which pins the exact sort, and
-\texttt{WF.universes} bundles the purely syntactic bound
-\texttt{decl.nparams} $\le$ \texttt{t.type.piArity} into a clause guarded by stage 0
-succeeding.
-\item \textbf{Low, fidelity.} \srcloc{Lean4Lean/Theory/Inductive.lean}{75}:
-\texttt{ValidIndApp} drops the kernel's exact-arity check on the occurrence's arguments,
-\texttt{args.size == params.size + nindices[i]}
-(\srcloc{Lean4Lean/Inductive/Add.lean}{159}), although its docstring claims to mirror
-\texttt{isValidIndApp?}; \texttt{FieldInIndices}
-(\srcloc{Lean4Lean/Theory/Inductive.lean}{107}) searches only the arguments past
-\texttt{nparams} where the kernel searches all of them
-(\srcloc{Lean4Lean/Inductive/Add.lean}{275}), the two agreeing only by an argument about
-\texttt{CtorResult} that is recorded nowhere; and \texttt{LargeElim} demands a typing at
-$\mathsf{sort}\;0$ where the kernel tests \texttt{isAlwaysZero} on the inferred level
-(\srcloc{Lean4Lean/Inductive/Add.lean}{271}), which agree only up to level defeq and
-uniqueness of typing.
-\item \textbf{Low, undocumented limitations.}
-\srcloc{Lean4Lean/Theory/Inductive.lean}{351}: \texttt{WF.universes} hides the purely
-syntactic bound \texttt{decl.nparams} $\le$ \texttt{t.type.piArity} inside a clause guarded
-by \texttt{addTypes} succeeding, so the arity fact is unavailable when stage 0 fails; and no
-clause of \texttt{VInductDecl.WF} mentions \texttt{VRecursor.all}, which the model's own
-well-formedness therefore never uses (the refinement pins it to the kernel's separately,
-\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{240}). Unlike the nested-inductive, K-like,
-$\eta$, \texttt{whnf} and \texttt{rule\_shape} limitations, neither is recorded in the
-source.
+\item Nothing derives \ref{structure:ind-wf} from the kernel's own inductive checker
+(\texttt{Lean4Lean/Inductive/Add.lean}); it remains a hypothesis, checked only by
+\texttt{decide} on concrete kernel data (\texttt{Tests/IotaShape.lean}).
+\item K-like reduction is not modelled (\ref{def:ind-add-rec-rule} registers only the
+constructor rule), so for subsingleton eliminators the model is weaker than the kernel.
+\item \ref{structure:ind-wf} excludes nested inductives and reads manifest binders for
+positivity and universes, stricter than the kernel's whnf-based check.
+\item \ref{def:ind-rule-shape} pins a rule's recursive calls only in number, not in shape, so
+\ref{structure:ind-wf} accepts $\iota$ rules the kernel would never generate.
+\item \ref{def:indparams-toparams} applies only to environments with no definitional axiom;
+the one instance built, \ref{def:indparams-induct-params}, is a single inductive block.
+\item Lemma~\ref{thm:indparams-cr-defeq-of-induct} is conditional: \texttt{IsDefEq.church\_rosser}
+depends on two \texttt{sorry}s in \texttt{NormalEq.parRed} (see the \texttt{axfoot} above).
 \end{itemize}

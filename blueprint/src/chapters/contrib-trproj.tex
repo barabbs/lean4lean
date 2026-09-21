@@ -1,532 +1,155 @@
-\chapter{Review of the trproj contribution}
+\chapter{Contribution: structure projections (trproj)}
 \label{chap:contrib-trproj}
 
-This chapter reviews the \texttt{trproj} branch as a whole: what it set out to do, how it is built,
-how it relates to the thesis and to the \texttt{iota} branch it sits on, and what a maintainer
-would still have to accept on faith. It is a prose chapter: it introduces no new definitions or
-theorems of its own and refers to the nodes of Chapters~\ref{chap:proj}, \ref{chap:trexpr},
-\ref{chap:trenv}, \ref{chap:typechecker}, \ref{chap:kernel} and \ref{chap:inductive} by cross
-reference. Every number below is taken from a file under \texttt{.blueprint-work/understand/} named
-at the point it is used, or from a \texttt{grep}/\texttt{git} command run directly against the
-\texttt{trproj} checkout at \texttt{20ec229}; none is invented.
+\section{Goal}
 
-\section{Goal and scope}
+\begin{itemize}
+\item \lead{Goal} Replace \texttt{TrProj} (\ref{def:trproj}), the relation translating a kernel
+projection \texttt{.proj S i e} into the model, with a real definition, and prove as many of its
+seven inherited structural lemmas as the definition allows.
+\item \lead{Why} on master \texttt{TrProj := sorry} is opaque, not merely unproved: nothing can be
+constructed in it or refuted about it (\srcloc{Lean4Lean/Verify/Typing/Expr.lean}{68}).
+\item \lead{Caveat} while \texttt{TrProj} stayed opaque, every declaration whose type merely
+mentioned \texttt{TrExprS} or \texttt{TrExpr} carried \texttt{sorryAx} by construction: an
+environment containing a structure projection was permanently out of reach of \texttt{TrEnv}.
+\end{itemize}
 
-The model expression type \texttt{VExpr} (\ref{ind:vexpr}) has no projection node. Before this
-branch, the clause of \texttt{TrExprS} that should relate a kernel projection \texttt{.proj S i e}
-to its model translation was routed through
-\begin{quote}
-\texttt{def TrProj : ∀ (Γ : List VExpr) (structName : Name) (idx : Nat) (e : VExpr), VExpr → Prop
-:= sorry}
-\end{quote}
-(master, \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{68}) — an \emph{opaque} definition, not merely
-an unproved theorem: nothing could be constructed in it or refuted about it. The seven structural
-lemmas about it (\texttt{weak'}, \texttt{weak'\_inv}, \texttt{defeqDFC}, \texttt{wf},
-\texttt{uniq}, \texttt{instN}, \texttt{instL}) were \texttt{sorry} as well, so every declaration of
-\texttt{Lean4Lean.Verify} whose statement merely mentions \texttt{TrExprS} or \texttt{TrExpr}
-carried \texttt{sorryAx} by construction. \texttt{trproj}'s stated goal (\texttt{trproj-commission.md};
-recorded in \texttt{understand/contrib-trproj.md}(a)) was to give \texttt{TrProj} a real
-definition and discharge as many of the seven lemmas as the definition allows, so that
-environments containing Lean's prelude — \texttt{Prod.fst}, \texttt{HAdd.hAdd} and everything else
-whose body is a \texttt{.proj} node — stop being permanently out of reach of \texttt{TrEnv}.
-
-The branch is 24 commits over \texttt{iota..trproj} (2026-08-26 to 2026-09-10), touching 17 files
-with $+2273/-170$ lines; the total footprint against \texttt{master} is 50 files and
-$+7763/-363$ (\texttt{understand/contrib-trproj.md}, header table). Per-line blame over
-\texttt{.blueprint-work/blame/} tags roughly 2645 of those lines \texttt{P} (trproj-only), against
-roughly 5000 \texttt{I} (iota) and the remainder \texttt{M} (master) — the branch sits strictly on
-top of \texttt{iota}, reusing its registered-$\iota$-rule machinery (\ref{rule:isdefeq-pat},
-\ref{structure:ind-wf}) rather than duplicating it.
-
-\section{Design}
+\section{What it adds}
 \label{sec:contrib-trproj-design}
 
-The design decision, unchanged since the first commit, is that a projection is not a new syntactic
-form but an application of the recursor the kernel already generates for the structure:
-$P_i = S.\mathrm{rec}\;(uss\,i)\;ps\;(\lambda x.\,F_i[f_j := P_j\,x])\;(\lambda f_0\dots f_{n-1}.\,f_i)$, with the earlier projection \emph{functions} $P_j$ chained into field $i$'s
-motive so that a dependent field type is expressible. The full derivation and the source layout are
-Chapter~\ref{chap:proj}'s subject; this section only traces how the pieces fit into the branch's
-own story.
+The design: a projection is not a new syntactic form but an application of the recursor the
+kernel already generates for the structure, $P_i = S.\mathrm{rec}\;(uss\,i)\;ps\;(\lambda
+x.\,F_i[f_j := P_j\,x])\;(\lambda f_0\dots f_{n-1}.\,f_i)$, chaining earlier fields' projection
+functions into later fields' motives so a dependent field type is expressible.
 
-\texttt{Theory/Proj.lean} (\srcloc{Lean4Lean/Theory/Proj.lean}{1}, 449 lines, entirely
-\texttt{trproj}, no \texttt{sorry}) builds the expansion — \ref{def:proj-field-selector} through
-\ref{def:proj-fn}, its type (\ref{def:proj-motive-body}, \ref{def:proj-ty}) and the arity pin
-\ref{def:proj-binder-arity} — and proves the substitution metatheory each builder needs, once
-against \texttt{Subst} (\ref{def:subst}) rather than once per operator (commit \texttt{d7ec0fa}:
-$+101/-304$ lines in the file, 405 lines of combined churn, net $-203$, 652 to 449 lines;
-\texttt{claims-trproj.md} \#21 corrects the earlier reports that quoted 405 itself as the net
-change). \texttt{TrProjCtor}
-(\ref{struct:trprojctor}, \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{90}) is the consumer: an
-eight-field \texttt{Prop}-valued structure — \texttt{pat}, \texttt{params\_length}, \texttt{ctor},
-\texttt{field\_lt}, \texttt{minor\_arity}, \texttt{major\_ty}, \texttt{fn\_ty}, \texttt{eq}, verified
-directly against \srcloc{Lean4Lean/Verify/Typing/Expr.lean}{90-131} — that names the constructor,
-the per-field level list \texttt{uss}, the parameter list and the field-type telescope explicitly,
-where the first design existentially bound them all and could not even state which constructor a
-projection resolves against. \texttt{TrProj} (\ref{def:trproj}) hides that data existentially, and
-\texttt{TrExprS.proj} is re-threaded onto it unchanged except for two new arguments,
-\texttt{env} and \texttt{U} — \texttt{TrProj} is no longer purely syntactic, because
-\texttt{major\_ty} and \texttt{fn\_ty} are \texttt{HasType} side conditions carried inside the
-translation relation, a design asymmetry with every other clause of \texttt{TrExprS} that the
-branch's own closing questions flag for the maintainer.
+\par\smallskip\noindent
+\begin{tabular}{p{0.30\linewidth}p{0.62\linewidth}}
+\toprule
+Item & What it does \\
+\midrule
+\texttt{Theory/Proj.lean} & Builds the expansion -- field selector, motive, motive type, arity pin
+(\ref{def:proj-field-selector}--\ref{def:proj-binder-arity}) -- and its substitution metatheory,
+proved once against \texttt{Subst} (\ref{def:subst}) rather than per builder. \\
+\texttt{TrProj} (\ref{def:trproj}) & The real definition above, hiding the recursor application's
+data existentially. \\
+\texttt{TrProjCtor} (\ref{struct:trprojctor}) & An eight-field witness naming the constructor, the
+per-field level list, the parameters and the field-type telescope a projection resolves against;
+the design it replaced could not even state which constructor. \\
+\texttt{inferProj.WF} & Split into a scoped lemma (\ref{thm:vtc-inferproj-struct}) and a general one
+(\ref{thm:vtc-inferproj}); the split also fixes a master statement bug that equated the struct's
+own translation with the projection's. \\
+\texttt{inductiveReduceRecCore} (\ref{def:kernel-iota-core}) & Extracts the executable kernel's
+pure $\iota$ step out of \texttt{inductiveReduceRec} (\ref{def:kernel-inductive-reduce-rec}),
+behaviour preserving; exercises the registered-$\iota$-rule interface (\ref{thm:tr-env-iota-rec}). \\
+Test modules & \texttt{Tests/ProjShape.lean}: the expansion against the real kernel, ten
+structure/field pairs plus two negative controls. \texttt{Tests/ProjInhabit.lean}:
+\texttt{TrProjCtor} inhabited on the model side, for a plain block and a dependent
+(\texttt{Sigma}-shaped) one. \\
+\bottomrule
+\end{tabular}\par\smallskip
 
-Of \texttt{TrProj}'s seven inherited lemmas, five are proved: \ref{thm:trproj-weak},
-\ref{thm:trproj-defeqdfc}, \ref{thm:trproj-mono} (new, required by \texttt{TrExprS.mono}),
-\ref{thm:trproj-wf}, \ref{thm:trproj-instn} and \ref{thm:trproj-instl} — six declarations, since
-\texttt{weak'} and \texttt{weakN} share \ref{thm:trproj-weak}. Two remain open:
-\ref{thm:trproj-weak-inv}, blocked on the master admission
-\texttt{VEnv.IsDefEqU.weakN\_iff} (\ref{thm:isdefequ-weakn-iff}), and \ref{thm:trproj-uniq}, the
-load-bearing one: \texttt{TrExprS.uniq} inducts through it, so the branch's own uniqueness layer
-inherits \texttt{sorryAx} from a gap it introduced. \ref{thm:tr-env-proj-defeq}
-(\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}) is the headline theorem: a
-continuous, roughly 130-line tactic proof (confirmed \texttt{sorry}-free by
-\texttt{grep -n -w sorry} over the file, which returns nothing) that the recursor expansion of
-projection $i$ reduces to \texttt{fields[i]} when the major premise is definitionally a saturated
-constructor spine. Its hypotheses are exactly what \texttt{inferProj} and \texttt{reduceProjCore}
-actually check — non-mutual, single-constructor, non-indexed — rather than the recursor's raw
-telescope split, and that split (\ref{thm:tr-env-structure-rec}) is \emph{derived} from the
-kernel's structure facts rather than assumed, closing review finding F07 of the branch's own
-2026-09-07 review.
+\begin{itemize}
+\item \lead{Caveat} \texttt{TrProj} is not purely syntactic: \texttt{major\_ty} and
+\texttt{fn\_ty} are \texttt{HasType} side conditions carried inside the translation relation,
+unlike every other clause of \texttt{TrExprS}.
+\end{itemize}
 
-The type-checker side (Chapter~\ref{chap:typechecker}) gets two things. \texttt{inferProj.WF} is
-split into \ref{thm:vtc-inferproj-struct} (new, scoped to what \texttt{TrProjCtor} covers) and
-\ref{thm:vtc-inferproj} (general, and now honestly documented as not provable as stated); both
-remain \texttt{sorry}. The split also \emph{fixed} a latent bug in master's statement: master's
-\texttt{inferProj.WF} concluded $\exists\,ty',\,c.\mathtt{TrTyping}\;(.proj\;st\;i\;e)\;ty\;e'\;ty'$
-— asserting that $e'$, the translation of the \emph{struct}, is the translation of the
-\emph{projection} — with \texttt{ty'} auto-bound; \texttt{trproj} restates it as
-$\exists\,e''\,ty',\,\dots\,e''\,ty'$. Separately, \texttt{inductiveReduceRecCore}
-(\ref{def:kernel-iota-core}, \srcloc{Lean4Lean/Inductive/Reduce.lean}{75}) extracts the pure
-$\iota$ step of the \emph{executable} kernel's \texttt{inductiveReduceRec}
-(\ref{def:kernel-inductive-reduce-rec}) into its own definition, with the caller reduced to
-\texttt{return inductiveReduceRecCore info ls recArgs major}. Diffing master against \texttt{trproj}
-directly shows this is byte-for-byte the original body with \texttt{majorIdx} recomputed as
-\texttt{rval.getMajorIdx} where the caller had bound \texttt{info.getMajorIdx} — behaviour
-preserving, not a semantic change. \ref{thm:vtc-iota-reduce-core} then proves
-\texttt{inductiveReduceRecCore.WF} about it: this is $\iota$-consumer content (it exercises the
-registered-$\iota$-rule interface \ref{thm:tr-env-iota-rec} of Chapter~\ref{chap:trenv}), landed on
-\texttt{trproj} by commit \texttt{6fd8a1d}, and the merge \texttt{20ec229} confirms \texttt{iota}
-independently re-landed the same 21 lines.
+\section{Main results}
 
-Two test modules complete the picture, both entirely \texttt{trproj} and both \texttt{sorry}-free:
-\texttt{Tests/ProjShape.lean} (185 lines) runs the expansion against the real Lean kernel — 10
-structure/field pairs plus two negative controls (a wrong level list, a reflexive structure) —
-and \texttt{Tests/ProjInhabit.lean} (597 lines) inhabits \texttt{TrProjCtor} on the model side, on
-a plain two-field block and a \texttt{Sigma}-shaped dependent block, through
-\texttt{VEnv.addInduct}, with four \texttt{\#guard\_msgs in \#print axioms} pins. \texttt{trproj}
-also contributes 15 lines to the two \texttt{iota} specification-test files (11 in
-\texttt{Tests/ShapeDecide.lean}, 4 in \texttt{Tests/IotaShape.lean}; verified against the per-line
-blame, correcting an earlier note that had counted 4).
+\begin{itemize}
+\item \stTainted{} \ref{thm:tr-env-proj-defeq} (\texttt{TrEnv.proj\_defeq}) -- the headline
+theorem: the recursor expansion of projection $i$ reduces to \texttt{fields[i]} when the major
+premise is a saturated constructor spine, over the telescope split \ref{thm:tr-env-structure-rec}
+(\stProved{}, derived from the kernel's own structure facts, not assumed as a hypothesis). A
+complete, non-circular proof, derived from the registered $\iota$ rule (\ref{rule:isdefeq-pat})
+rather than assumed; its own body is sorry-free, but its \texttt{sorryAx} cone inherits master's
+type-former injectivity gaps and \ref{thm:wf-patsstrong}.
+\item \stProved{} \ref{thm:trproj-weak}, \ref{thm:trproj-wf}, \ref{thm:trproj-instn},
+\ref{thm:trproj-instl} -- four of \texttt{TrProj}'s seven inherited structural lemmas.
+\item \stProved{} \ref{thm:trproj-mono} -- a new obligation this contribution introduced for
+itself, required by \texttt{TrExprS.mono}.
+\item \stTainted{} \ref{thm:trproj-defeqdfc} -- the fifth inherited lemma; proved, but its
+\texttt{sorryAx} cone includes \ref{thm:wf-patsstrong}.
+\item \stTainted{} \ref{thm:vtc-iota-reduce-core} (\texttt{inductiveReduceRecCore.WF}) -- the first
+internal consumer of the registered-$\iota$-rule interface (\ref{thm:tr-env-iota-rec}); inherits
+\texttt{sorryAx} from \ref{thm:trproj-uniq}.
+\item \stProved{} 614 of the 663 declarations whose type mentions \texttt{TrExprS}/\texttt{TrExpr}
+are now \texttt{sorryAx}-free, up from zero while \texttt{TrProj} was a \texttt{sorry} definition;
+\texttt{TrProj} and \texttt{TrProjCtor} themselves print no axiom beyond \texttt{propext}.
+\end{itemize}
+
+\section{What is not proved}
+
+\par\smallskip\noindent
+\begin{tabular}{p{0.23\linewidth}lp{0.58\linewidth}}
+\toprule
+Item & Status & Why \\
+\midrule
+\ref{thm:trproj-weak-inv} & \stSorry{} & Blocked on master's own open
+\texttt{VEnv.IsDefEqU.weakN\_iff} (\ref{thm:isdefequ-weakn-iff}). \\
+\ref{thm:trproj-uniq} & \stSorry{} & Load-bearing: \texttt{TrExprS.uniq} inducts through it, so the
+whole translation's uniqueness layer inherits \texttt{sorryAx} from this one gap.
+\srcloc{Lean4Lean/Verify/Typing/Lemmas.lean}{995} \\
+\ref{thm:vtc-inferproj-struct} & \stSorry{} & The bridge from a real kernel projection to a
+\texttt{TrProjCtor} witness, scoped to what \texttt{TrProjCtor} covers.
+\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{398} \\
+\ref{thm:vtc-inferproj} & \stSorry{} & The general case; its own statement documents that it is not
+provable as stated. \srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{410} \\
+\ref{thm:vtc-reduceprojcore} & \stSorry{} & \ref{thm:tr-env-proj-defeq}'s intended consumer inside
+the type checker. \srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{145} \\
+\ref{thm:add-decl-wf} (\texttt{inductDecl} case) & \stSorry{} & No declaration builds an
+\texttt{AddInduct} witness from a real inductive declaration, so every result above is conditional
+on one. \srcloc{Lean4Lean/Verify/Environment.lean}{208} \\
+\ref{thm:wf-patsstrong} & \stSorry{} & Not owned by this contribution; taints
+\ref{thm:trproj-defeqdfc} and \ref{thm:tr-env-proj-defeq} through
+\texttt{VEnv.IsDefEqU.betaN}. \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334} \\
+\bottomrule
+\end{tabular}\par\smallskip
 
 \section{Relation to the thesis}
 
-\texttt{Theory/Proj.lean}'s module docstring cites the thesis twice, and both citations are
-individually accurate but need to be read for what they are, not for what the commit history
-originally claimed. The \emph{shape} of the expansion — a projection defined by applying the
-recursor with a chosen motive — is the thesis's $\mathrm{inv}_x : \mathrm{acc}\;x \to \forall y.\, y<x\to\mathrm{acc}\;y$ (typesys.tex, the undecidability-of-conversion section), built from
-$\mathrm{rec}_{\mathrm{acc}}$ with a specific, non-constant motive; \texttt{unique.tex:109}
-generalises the idiom further than the branch's own notes credit it: ``these
-$\mathrm{inv}_i$ projection operators can be defined using the recursor, like we demonstrated for
-\texttt{acc}'' (\texttt{understand/claims-trproj.md} \#33). The \emph{dependent typing} of the
-motive, $P_i\,e : F_i[f_j := P_j\,e]$, is attributed to the primitive $\Sigma$-projection rule
-$\pi_2\,p : \beta[\pi_1\,p/x]$ of \texttt{Wtypes.tex} \S5.1, and the per-field level list
-\texttt{uss} to \texttt{axioms.tex} \S2.6.3's remark that the recursor's motive universe is fresh
-per use.
-
-The point the task brief and \texttt{thesis-map.md} both insist on is exactly this: \emph{the
-thesis has no treatment of Lean's \texttt{Expr.proj} at all}. \texttt{grep -c '\textbackslash proj'}
-over every \texttt{.tex} file in \texttt{lean-type-theory} returns zero. Structures, structure
-$\eta$ and \texttt{inferProj} are never mentioned. The $\pi_2$ rule the docstring borrows belongs to
-\texttt{Wtypes.tex} \S5, the chapter that \emph{replaces} general inductive types by eight
-primitives (including $\Sigma$) plus a \texttt{good} predicate and subsingleton eliminators into a
-parameterised \texttt{Acc} — a system lean4lean does not formalise at all
-(\texttt{thesis-map.md} \S2, table row ``\S5 W-types — nothing''). So the ``dependent motive'' the
-branch's commit \texttt{811a52a} titles ``define TrProj by the thesis's dependent motive'' is a
-borrowed \emph{idiom} applied to a system the thesis never builds a projection theory for, not an
-inherited \emph{result} transported from one. \texttt{Theory/Proj.lean}'s own docstring has since
-been softened to call this ``the dependent typing \emph{shape}'' of the thesis's primitive
-projections, which is accurate; the commit title that started the confusion was not corrected.
-Two further ironies, noted by both \texttt{thesis-map.md} and the branch's own review: $\mathrm{inv}_x$
-is introduced in the thesis to prove conversion \emph{undecidable}, and is reused here as the
-representation of every structure projection; and \texttt{Wtypes.tex} \S5.1 admits an $\eta$ rule,
-$(\pi_1 x, \pi_2 x)\equiv x$, precisely because it has \emph{no} recursors for $\Sigma$ to fall
-back on — the exact rule this branch cannot state, because \texttt{IsDefEq} (\ref{def:isdefeq})
-has no structure-$\eta$ clause. The three-way disagreement is worth stating plainly: the thesis's
-soundness model has $\Sigma$-$\eta$; the real Lean kernel has structure $\eta$
-(\texttt{tryEtaStructCore}, \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{227}, still
-\texttt{sorry} on both \texttt{master} and \texttt{trproj}); the lean4lean model built by this
-branch has neither, and none of the three positions justifies either of the others.
-
-What genuinely \emph{is} a contribution, independent of the borrowed vocabulary, is that
-\ref{thm:tr-env-proj-defeq} \emph{derives} the thesis's computation rule $\pi_i(a,b)\equiv a_i$
-from the registered $\iota$ rule rather than assuming it — the theorem fires the same
-$\iota$-registry machinery \texttt{iota} built for ordinary recursion
-(\ref{rule:isdefeq-pat}) and $\beta$-reduces through \ref{def:proj-field-selector}, so the
-projection computation is a genuine consequence of the model's existing rules, not a new axiom.
-
-\section{History and churn}
-
-The branch reworked its central design decision twice, each time because the previous version was
-diagnosed as wrong before it caused a false theorem, not after. \textbf{M1} (\texttt{f252c3c}
-through \texttt{b6a5a38}, 2026-08-26 to 08-28) shipped \texttt{TrProj} with a \emph{free}
-existential motive; commit \texttt{7a5e96d} then pinned it to a \emph{constant} motive
-$\lambda\_.\,\mathit{fieldTy}$, because on a neutral major premise well-typedness constrains the
-motive only on constructor-shaped inputs, so two witnesses with motives agreeing on constructors
-but differing on a variable would both satisfy \texttt{TrProj} while not being defeq — making
-\texttt{TrProj.uniq} false. Commit \texttt{b6a5a38} then introduced \texttt{TrProjCtor} because the
-\emph{previous} statement of \texttt{TrEnv.proj\_defeq} was unprovable: the $\iota$ rule's
-constructor name and the spine's constructor name were unrelated. \textbf{M2}
-(\texttt{7f62db2}, 2026-09-03) is a documentation-only commit recording a dead end: the
-\texttt{rec\_reg} route could not establish that a recursor is a \emph{structure} recursor, because
-the $\iota$ key records only the \emph{sum} $\mathit{numMotives}+\mathit{numMinors}+\mathit{numIndices}$.
-\textbf{M3} (\texttt{fc9fbfc} through \texttt{f7dabf1}, 2026-09-04) is the decisive rework: commit
-\texttt{811a52a} replaced the constant motive with the current chained \emph{dependent} one,
-because the constant motive cannot type a dependent field such as \texttt{Sigma.snd}; commit
-\texttt{83860e9} turned \texttt{proj\_defeq} into a real theorem, still over the raw telescope
-split as a hypothesis. \texttt{f7dabf1} is the commit the project's own 2026-09-07 review was run
-against.
-
-\textbf{M4} (\texttt{2a901f4} through \texttt{6fd8a1d}, 2026-09-08) is the review response: eleven
-commits, eight of them answering named findings, six of which are worth naming individually:
-\texttt{e9fefbe} turns \texttt{TrProjCtor} from a positionally
-destructured existential into the current named-field structure (F13) and deletes two zero-use
-wrappers (F29); \texttt{e202975} restates \texttt{proj\_defeq} on the kernel's structure facts
-instead of the telescope-split hypothesis (F07); \texttt{273cd2c} splits \texttt{inferProj.WF} into
-the scoped and general lemmas and documents the general one as not provable as stated (B3/F03);
-\texttt{acd6b46} adds the sorry-free inhabitation tests (F19); \texttt{d7ec0fa} re-derives every
-builder from \texttt{subst} (F12); \texttt{6fd8a1d} splits \texttt{inductiveReduceRecCore} and
-proves \texttt{inductiveReduceRecCore.WF}, the first real consumer of the $\iota$ interface
-(answering the $\iota$ half of F09; the \emph{projection} half is still unanswered, \S\ref{sec:contrib-trproj-consumers}).
-\textbf{M5} (\texttt{20ec229}, 2026-09-10) is the final merge with \texttt{iota}: trivial, one line
-changed, since \texttt{iota} had independently re-landed the M4 kernel-refactor content.
-
-No commit in \texttt{iota..trproj} is a literal \texttt{git revert}; the rework is by replacement.
-\texttt{hygiene-review.md} quantifies the cost: non-merge commits on the branch total
-$+11439/-3399$ against a net $+7762/-363$ over the whole \texttt{master..trproj} range, so roughly
-3000 lines the branch itself wrote were later removed inside the branch — about 27\% of what was
-written. The worst offenders by commit count are \texttt{Verify/Environment/Lemmas.lean} (22
-commits, $+1734/-678$) and \texttt{Theory/Typing/InductiveParams.lean} (14 commits, over half
-rewritten); a whole file, \texttt{Theory/Pattern.lean}, was created over four commits and then
-deleted (\texttt{cb920e1}/\texttt{3bbdb22}) and does not exist at the tip. Two pairs of commits
-share a patch-id or subject line (\texttt{655dd3f}/\texttt{75ffde9}, \texttt{7a68882}/\texttt{6fd8a1d}),
-evidence of re-merging a rebased \texttt{iota} without squashing — the kind of thing an upstream
-maintainer would ask to be cleaned up before review. Since the repository's own workflow
-squash-merges branches, none of this history reaches upstream if the branch is ever proposed; the
-cost is review time inside this project, not permanent record.
-
-\section{Claims audit}
-
-\texttt{understand/claims-trproj.md} independently re-checked every claim
-\texttt{contrib-trproj.md} attributes to the branch's own documentation
-(\texttt{PR\_trproj.md}, \texttt{TRPROJ\_CONTRIBUTION.md}, \texttt{trproj-commission.md},
-\texttt{downstream-asks-commission.md}) against the \texttt{20ec229} checkout, using
-\texttt{git grep/diff/show/log/blame} and \texttt{lake env lean} re-elaboration; of 50 claims, 28
-came back \textbf{TRUE}, 12 \textbf{PARTIAL}, 8 \textbf{FALSE} and 2 \textbf{UNVERIFIABLE} without a
-downstream repo. The headline technical claims all check out exactly as stated: \texttt{TrProj} is
-a real definition, \ref{thm:tr-env-proj-defeq} is proved, the sorry census, the axiom cone and the
-two test files are as described. What follows is the audit of what does \emph{not} check out
-cleanly, restated as a description list; verdicts are the claims file's own.
-
-\begin{description}
-\item[\textbf{TRPROJ\_CONTRIBUTION.md — FALSE where cited.}]
-It is not a description of this branch: the file is dated 2026-08-28 and documents the
-\emph{abandoned} constant-motive design from M1. It quotes a \texttt{TrProj} definition that no
-longer exists, advertises \texttt{TrEnv.pats\_iota\_inv} and two \texttt{TrProjCtor} wrappers
-deleted in M4, counts 15 \texttt{IOTA-TODO} and 3 \texttt{PROJ-TODO} markers where
-\texttt{git grep} at \texttt{20ec229} finds zero, and cites three \texttt{PROJ-TODO} line numbers
-one of which now names a \emph{proved} theorem (\ref{thm:tr-env-proj-defeq}). It should not be
-handed to a reviewer as a current description.
-\item[\textbf{``every lemma about it was sorry on master'' — PARTIAL.}]
-\texttt{TrProj.weakN} was already proved on master (a one-line \texttt{simpa} off the sorried
-\texttt{weak'}), and \texttt{TrProj.mono} did not exist on master at all. Seven of \texttt{TrProj}'s
-eight master-era lemmas were \texttt{sorry}, not eight, and \ref{thm:trproj-mono} is a genuinely new
-obligation the branch introduced for itself (required by \texttt{TrExprS.mono}).
-\item[\textbf{the constant-motive scope note — FALSE, stale.}]
-``The constant motive is correct for non-dependent fields; dependent fields are out of scope'' is
-\texttt{TRPROJ\_CONTRIBUTION.md} \S A1 describing the design \texttt{811a52a} replaced eight days
-later. The current motive is the chained dependent one, and
-\texttt{Tests/ProjShape.lean:120-145} exercises \texttt{Sigma.snd}, \texttt{PSigma} and
-\texttt{Subtype}.
-\item[\textbf{``the general inferProj.WF keeps its statement'' — FALSE.}]
-It does not. Master's version asserted, via an auto-bound implicit, that the translation of the
-\emph{struct} is the translation of the \emph{projection}; \texttt{trproj} corrected this to an
-existential over the projection's own translation (\S\ref{sec:contrib-trproj-design} above). The
-branch fixed a latent statement bug in a master theorem, and \texttt{PR\_trproj.md} itself denies
-having touched it.
-\item[\textbf{``no new trust'' for TrProj.defeqDFC — PARTIAL.}]
-\ref{thm:trproj-defeqdfc}'s computed \texttt{sorryAx} cone includes \texttt{VEnv.WF.patsStrong}
-(\ref{thm:wf-patsstrong}), a gap the \emph{same author's} \texttt{iota} branch introduces, not only
-master's pre-existing $\Pi$/sort-injectivity gaps (\ref{thm:injectivity-open}). ``No new trust
-beyond master'' is the wrong claim; the accurate one is ``no trust beyond what \texttt{iota}
-already added.''
-\item[\textbf{``DELIVERED, do not re-open'' — PARTIAL, misleading as to reach.}]
-\texttt{downstream-asks-commission.md}'s verdict on \texttt{TrEnv.proj\_defeq} is true as to proof
-status: the theorem is sorry-free in its own body. It is misleading as to reach: the theorem has
-zero consumers inside lean4lean (\S\ref{sec:contrib-trproj-consumers}), and the same document's
-further claim that it is ``consumed downstream today'' by \texttt{lean-to-lambdabox} could not be
-confirmed — that repo pins \texttt{lean4lean} at exactly \texttt{20ec229} but its current branch
-mentions neither \texttt{proj\_defeq} nor an \texttt{of\_trEnv} lemma outside a scratch file.
-\item[\textbf{the four upstreaming blockers B1--B4 — FALSE as stated, superseded in substance.}]
-\texttt{contrib-trproj.json}'s ``not upstreamable as it stands'' verdict names B4 (does not build
-against current master) as unresolved; it is not: \texttt{git merge-base --is-ancestor master
-trproj} succeeds. B1/B2's mechanized counterexamples
-(\texttt{review-artifacts/counterexamples/cexA.lean}, \texttt{cexB.lean}) no longer elaborate
-against the redesigned \texttt{VInductDecl.WF} — the spec changed under them. What genuinely
-remains is the residual obligation, not the counterexample: \ref{thm:wf-patsstrong} is still
-\texttt{sorry} and gates every strong-system consumer, including this branch's own
-\ref{thm:trproj-defeqdfc} and \ref{thm:tr-env-proj-defeq}.
-\end{description}
-
-Two findings the claims audit flags as \textbf{underclaimed} are worth carrying into the
-assessment. First, because master's \texttt{TrProj} was a \texttt{sorry} \emph{definition}, every
-master declaration whose type merely mentioned \texttt{TrExprS}/\texttt{TrExpr} carried
-\texttt{sorryAx} by construction; \texttt{claims-trproj.md} \#45 reports 663
-\texttt{Lean4Lean.*} declarations whose type mentions these relations, of which 614 are now
-\texttt{sorryAx}-free — a change in the trust status of most of \texttt{Verify}, undersold by the
-branch's own ``five sorries closed'' framing. Second, the kernel-to-model bridge
-(\ref{thm:tr-env-structure-rec}, \texttt{TrEnv.ctor\_arity}, \texttt{TrEnv.pats\_iota\_inv\_shape})
-is itself \texttt{sorryAx}-free; all of \ref{thm:tr-env-proj-defeq}'s inherited taint enters through
-\texttt{VEnv.IsDefEqU.betaN}, i.e.\ through master's unique-typing layer plus
-\ref{thm:wf-patsstrong}, not through anything this branch built.
-
-\section{Proof and code hygiene}
-
-\texttt{hygiene-review.md}'s whole-diff review (\texttt{master..trproj}, $+7762/-363$ over 49
-files) and the per-chapter adversarial reviews of \texttt{proj}, \texttt{trexpr}, \texttt{trenv},
-\texttt{typechecker}, \texttt{syntax} and \texttt{kernel} agree on the overall picture: this is
-substantive, carefully engineered work with a specific, bounded set of defects, not the pattern
-hygiene-review.md's own closing section calls ``slop'' (grandiose docstrings over trivial lemmas,
-\texttt{simp}-spam, \texttt{decide}/\texttt{omega} papering over unchecked statements). Concretely:
-
 \begin{itemize}
-\item \textbf{Statement quality.} \ref{thm:vtc-inferproj}'s own docstring says it is not provable
-as stated, yet \texttt{inferType'.WF} consumes it unconditionally
-(\texttt{hygiene-review.md} (a), \textbf{HIGH}) — keeping a knowingly-false statement on the
-soundness theorem's import path is worse than master's admittedly-also-wrong version, and the
-\texttt{typechecker} chapter review independently confirms the same headline weakness. Lower down,
-\texttt{VExpr.projTy} (\ref{def:proj-ty}) is documented as ``the kernel's \texttt{inferProj}
-result'' but its docstring's own identity to \texttt{projMotiveBody} is never proved, and
-\texttt{TrProjCtor} types the projection through \texttt{projMotiveBody} instead — the \texttt{proj}
-chapter review confirms this identity has no proof anywhere in the repository.
-\item \textbf{Proof brittleness.} \ref{thm:tr-env-proj-defeq}, at 131 lines the branch's longest
-proof, and \texttt{inductiveReduceRecCore.WF} (\ref{thm:vtc-iota-reduce-core}), at 124, both lean
-heavily on \texttt{omega}/\texttt{decide}: the branch's \texttt{omega} density is $2.0\%$ of code
-lines against master's $0.4\%$, and \texttt{decide} $1.1\%$ against $0.2\%$
-(\texttt{hygiene-review.md} baseline table), concentrated in exactly these two proofs. Three of
-\ref{thm:trproj-weak}, \texttt{instN} and \texttt{instL} each rebuild the same eight-field
-\texttt{TrProjCtor} record by hand rather than through a shared lemma — the ``prove once against
-\texttt{subst}'' factoring stops at the \texttt{Theory/Proj.lean} builder level and is not carried
-up into \texttt{Verify/Typing/Lemmas.lean} (\texttt{trexpr} chapter review, confirmed).
-\item \textbf{Documentation volume.} Contributed \texttt{Theory/} code runs $25.3\%$ comment
-lines against master's $1.7\%$ in the same directory, with a 56-line module header on the 449-line
-\texttt{Proj.lean} and a 27-line docstring on a 5-line definition
-(\texttt{Theory/Typing/InductiveParams.lean:351}, iota-side) — \texttt{hygiene-review.md} calls
-this ``the single loudest AI-authored-looking signal in the diff,'' while noting the content itself
-is substantive (derivations, thesis section numbers, explicit statements of what is not modelled)
-rather than restatement.
-\item \textbf{Unused declarations.} \texttt{unused-contrib.md}'s original, hand-verified count is
-\textbf{31} zero-reference declarations out of 875 contributed (19 iota, 12 trproj), a $3.5\%$
-rate, lower than the $11.2\%$ consumer-less rate the same resolver finds in upstream master's own
-core. A later mechanical regeneration of the same script instead reports 78 out of 889 ($8.8\%$;
-$10.3\%$ iota, $6.2\%$ trproj); the report flags this itself as an artefact, not a new finding —
-the regenerated \texttt{decls.tsv} mislabels 28 user-written \texttt{instance}s as \texttt{def},
-and the rerun adds 19 further entries never individually re-verified by hand — so 31 is the figure
-this chapter relies on. On the trproj side specifically, the confirmed dead declarations are the
-two witness theorems \texttt{trProj0}/\texttt{trProjDep1} in \texttt{Tests/ProjInhabit.lean} (built
-and checked, but read by nothing), two never-projected test-fixture fields (\texttt{V3.h},
-\texttt{Refl.next}), \texttt{projMotiveBody\_zero} and \texttt{instFields\_nil} (\texttt{@[simp]},
-never invoked explicitly), and the two open, unreferenced \texttt{sorry}s
-\texttt{VEnv.IsDefEq.crDefEq\_of\_induct} and \ref{thm:vtc-inferproj-struct}. (\texttt{VExpr.projTy}
-is not on the dead list itself; it is reached only from two \texttt{example}s in
-\texttt{Tests/ProjShape.lean}.) The resolver's headline finding is about wiring, not volume:
-\ref{thm:tr-env-proj-defeq} itself, the branch's headline theorem, has no consumer beyond an
-axiom-profile test (\S\ref{sec:contrib-trproj-consumers}).
-\item \textbf{Orphaned master code.} \texttt{trproj}'s generalisation of \texttt{lift'\_inst\_hi}
-into \texttt{lift'\_instN\_hi} (\ref{fam:proj-fn-subst} territory in Chapter~\ref{chap:proj}) left
-a six-declaration master cluster in \texttt{Theory/VExpr.lean}
-(\texttt{lift\_r\_one}, \texttt{Subst.lift\_r\_comm}, \texttt{Subst.trunc},
-\texttt{Subst.Depth.\{one,id\}}, \texttt{Subst.Depth}) with no live consumer, without removing it
-— \texttt{unused-contrib.md} \S5 calls this ``the one place where the branches made the host repo
-measurably worse rather than merely not-better.'' The \texttt{syntax} chapter review independently
-confirms only \texttt{consN\_cons} of the four-lemma block it moved is used.
-\item \textbf{Test discipline (positive).} Both test modules re-elaborate clean and validate the
-design on two independent axes — \texttt{ProjShape.lean} against the real kernel's own
-\texttt{addDeclCore}/\texttt{whnf}/\texttt{isDefEq}, \texttt{ProjInhabit.lean} against the model's
-\texttt{VEnv.addInduct} — which \texttt{hygiene-review.md} calls ``the strongest evidence against a
-`slop' reading of the branch.'' The \texttt{proj} chapter review qualifies this: the two negative
-controls are weaker than they look (a \texttt{try}/\texttt{catch} wrapper that passes vacuously on
-any internal failure, and a ``some clause fails'' check that does not pin \emph{which} clause), and
-neither hand-built environment in \texttt{ProjInhabit.lean} is ever shown well-formed, so the
-witnesses show the premises of \ref{struct:trprojctor} are jointly satisfiable, not that they hold
-in a well-formed environment.
-\item \textbf{Formatting and naming.} Zero added lines exceed 100 columns, zero carry trailing
-whitespace, and contributed declarations are \emph{shorter} on average than master's in the same
-directories (5.6--7.5 code lines per declaration against master's 8.5--12.0). Naming follows
-upstream convention throughout, and the branch's preference for named-field
-\texttt{structure ... : Prop} (\texttt{TrProjCtor}, \texttt{AddInduct}, \texttt{TrIndType}) over
-master's existential-chain style is a real, if stylistically visible, improvement.
+\item \lead{Caveat} Carneiro's thesis never treats \texttt{Expr.proj}: structures, structure
+$\eta$ and \texttt{inferProj} go unmentioned throughout.
+\item \lead{Idea} the expansion's \hl{shape} borrows the thesis's
+$\mathrm{inv}_x:\mathrm{acc}\,x\to\forall y.\,y<x\to\mathrm{acc}\,y$ (typesys.tex's
+undecidability-of-conversion section, built from $\mathrm{rec}_{\mathrm{acc}}$ with a non-constant
+motive), generalised by unique.tex: ``these $\mathrm{inv}_i$ projection operators can be defined
+using the recursor, like we demonstrated for \texttt{acc}''.
+\item \lead{Idea} the motive's dependent typing, $P_i\,e : F_i[f_j := P_j\,e]$, follows the shape
+of the primitive $\Sigma$-projection rule $\pi_2\,p : \beta[\pi_1\,p/x]$ (Wtypes.tex \S5.1); the
+per-field level list \texttt{uss} follows axioms.tex \S2.6.3's remark that the recursor's motive
+universe is fresh per use.
+\item \lead{Caveat} Wtypes.tex's own system -- eight primitives, a \texttt{good} predicate, and
+subsingleton eliminators into a parameterised \texttt{Acc} -- is not formalised here at all; the
+borrowed idiom is a shape, not an inherited result.
+\item \lead{Caveat} Wtypes.tex's $\Sigma$ carries an $\eta$ rule, $(\pi_1 x,\pi_2 x)\equiv x$,
+precisely because it has no recursor for $\Sigma$ to fall back on -- the one rule this model cannot
+state, since \texttt{IsDefEq} (\ref{def:isdefeq}) has no structure-$\eta$ clause. Three positions
+disagree: the thesis has $\Sigma$-$\eta$; the real kernel has structure $\eta$
+(\texttt{tryEtaStructCore}, \srcloc{Lean4Lean/Verify/TypeChecker/IsDefEq.lean}{227}, still
+\stSorry{}); this model has neither.
+\item \lead{Then} independent of the borrowed vocabulary, \ref{thm:tr-env-proj-defeq}
+\hl{derives} the thesis's computation rule $\pi_i(a,b)\equiv a_i$ from the registered $\iota$ rule
+(\ref{rule:isdefeq-pat}), rather than assuming it.
 \end{itemize}
 
-\section{Sorry and axiom impact}
-
-Directly verified against the \texttt{20ec229} checkout: \texttt{Verify/Typing/Lemmas.lean} carries
-exactly two \texttt{sorry}s, at lines 747 (\ref{thm:trproj-weak-inv}) and 995
-(\ref{thm:trproj-uniq}); \texttt{Verify/TypeChecker/InferType.lean} carries exactly two, at lines
-398 and 410 (\ref{thm:vtc-inferproj-struct}, \ref{thm:vtc-inferproj}); and
-\texttt{Verify/Environment/Lemmas.lean} carries none at all (\texttt{grep -n -w sorry} on the file
-is empty), so \ref{thm:tr-env-proj-defeq} really is a complete proof. Against master's projection-side
-tally of one \texttt{sorry} definition plus seven \texttt{sorry} lemmas plus
-\texttt{inferProj.WF}'s own \texttt{sorry} (nine sites total), the branch closes six (the
-definition and five of the seven lemmas) and adds one new one
-(\ref{thm:vtc-inferproj-struct}), leaving four open: \ref{thm:trproj-weak-inv},
-\ref{thm:trproj-uniq}, \ref{thm:vtc-inferproj-struct} and \ref{thm:vtc-inferproj}
-(\texttt{claims-trproj.md} \#7). \texttt{understand/contrib-trproj.md}'s sorry census for the whole
-non-\texttt{Experimental} tree, applying the convention of discounting comment and docstring hits,
-is master 23, \texttt{iota} 21, \texttt{trproj} 16.
-
-\texttt{git diff master..trproj | grep -E '\textasciicircum+\textbackslash s*(axiom|opaque)'} finds
-no new axiom or opaque declaration, and \texttt{native\_decide} does not occur anywhere in the
-diff; both facts were re-checked directly against the branch and hold. What the branch does add,
-inherited from \texttt{iota}, is a new load-bearing \texttt{sorry}: \ref{thm:wf-patsstrong}
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}). Because \texttt{VEnv.WF.orderedStrong} is
-built from it via a \texttt{CoeOut} instance, \ref{thm:trproj-defeqdfc} and
-\ref{thm:tr-env-proj-defeq} both carry \texttt{sorryAx} for this reason, not for any gap in their
-own proofs — the axiom cone of \ref{thm:tr-env-proj-defeq} traces, via
-\texttt{VEnv.IsDefEqU.betaN}, to exactly \ref{thm:injectivity-open}'s two members
-($\Pi$-injectivity and sort-injectivity, both pre-existing master admissions) plus
-\ref{thm:wf-patsstrong}. \ref{thm:trproj-uniq}'s open \texttt{sorry} is the more direct debt: it
-propagates through \texttt{TrExprS.uniq} into \texttt{TrExprS.defeqDFC} and every builder of
-\texttt{TrExpr} (Chapter~\ref{chap:trexpr}'s \texttt{family:trexpr-builders}), and separately
-reaches \ref{thm:vtc-iota-reduce-core}, so the branch's one $\iota$-side proof also carries the
-projection side's open gap. Read against master's baseline, the qualitative change is larger than
-the sorry count suggests: because \texttt{TrProj} was a \texttt{sorry} \emph{definition} on master,
-\texttt{TrExprS} itself was \texttt{sorryAx}-tainted for every caller; \texttt{\#print axioms
-Lean4Lean.TrExprS} now returns \texttt{[propext, Classical.choice, Quot.sound]}, and
-\texttt{TrProj}/\texttt{TrProjCtor} return \texttt{[propext]} alone (\texttt{claims-trproj.md}
-\#45).
-
-\section{Consumers: is proj\_defeq used anywhere?}
+\section{Open items}
 \label{sec:contrib-trproj-consumers}
 
-No. \texttt{grep -rn proj\_defeq --include="*.lean" Lean4Lean}, run directly against the checkout,
-returns six lines: the theorem's own signature
-(\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}; its doc-comment above never repeats
-the name), two docstring
-mentions in \texttt{Verify/Typing/Expr.lean} (lines 96 and 115, both prose explaining
-\texttt{TrProjCtor}'s fields, not code that calls the theorem), and three lines in
-\texttt{Tests/ProjInhabit.lean} (582, 587, 595) that are a \texttt{\#guard\_msgs in \#print axioms}
-assertion about its axiom footprint — an axiom-profile check, not a use of the theorem's
-conclusion. There is no in-library consumer.
-
-The theorem's three intended consumers are all still \texttt{sorry}:
-\texttt{reduceProjCore.WF} (\ref{thm:vtc-reduceprojcore},
-\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143}, \texttt{sorry} at line 145 — note that
-\texttt{reduceProj.WF} (\ref{thm:vtc-reduceproj}) one declaration below it \emph{is} proved, by
-delegating to \texttt{reduceProjCore.WF}, a distinction an earlier internal note got backwards),
-\ref{thm:vtc-inferproj-struct} and \ref{thm:vtc-inferproj}. Its premise \texttt{TrProjCtor} is only
-ever inhabited by hand, on the two fixtures of \texttt{Tests/ProjInhabit.lean}; the general
-construction that would inhabit it from an arbitrary kernel-accepted projection is exactly
-\ref{thm:vtc-inferproj-struct}, still open. Nor is \ref{thm:tr-env-proj-defeq} reached from outside
-lean4lean: \texttt{lean-to-lambdabox} pins this checkout at exactly \texttt{20ec229}
-(\texttt{lake-manifest.json}) but a search of its current branch for \texttt{of\_trEnv} or
-\texttt{TrEnv.proj\_defeq} returns nothing outside one scratch file
-(\texttt{claims-trproj.md} \#25). The kernel-to-model bridge lemmas the proof itself depends on —
-\ref{thm:tr-env-structure-rec}, \texttt{TrEnv.ctor\_arity}, \texttt{TrEnv.pats\_iota\_inv\_shape} —
-have, symmetrically, no consumer \emph{other than} \ref{thm:tr-env-proj-defeq} itself. And the
-\texttt{AddInduct} hypothesis every one of these theorems is stated about is itself never
-discharged: \texttt{addDecl.WF}'s \texttt{inductDecl} case (\ref{thm:add-decl-wf}) is still
-\texttt{sorry} at \srcloc{Lean4Lean/Verify/Environment.lean}{208}, and no declaration anywhere in
-the repository constructs an \texttt{AddInduct} witness from
-\texttt{Environment.addInductive} — confirmed by grepping every \texttt{AddInduct} occurrence in
-the tree, all of which eliminate it, none of which introduce it. So \ref{thm:tr-env-proj-defeq} is,
-today, a real theorem about a hypothesis nobody has yet built.
-
-This is the one place where the $\iota$ half of the branch's own work fares better:
-\ref{thm:vtc-iota-reduce-core} \emph{does} have a real consumer relationship to
-\ref{thm:tr-env-iota-rec}, the registered-$\iota$-rule interface \texttt{iota} built, discharging
-half of review finding F09 (``prove at least one internal consumer''). The \emph{projection} half
-of that same finding — a real consumer of \ref{thm:tr-env-proj-defeq} — remains unanswered.
-
-\section{Upstream situation}
-
-Nothing in this branch has ever been proposed upstream. \texttt{upstream-comparison.md} confirms
-that no upstream commit, PR or issue in the relevant window touches inductives, $\iota$ or
-projections beyond a documentation note (\texttt{3adf6da6}, ``docs: justify the projection
-divergence by the generated recursor'') and an unrelated checker performance change
-(\texttt{62441418}, \texttt{lazyDeltaProjReduction}); \texttt{git log} on upstream's default branch
-in the same window shows no commit by the maintainer that touches
-\texttt{Verify/Typing/Expr.lean} or \texttt{Verify/Typing/Lemmas.lean}'s \texttt{TrProj} lemmas.
-The files this branch adds outright — \texttt{Theory/Proj.lean} (449 lines),
-\texttt{Tests/ProjInhabit.lean} (597), \texttt{Tests/ProjShape.lean} (185), and the
-\texttt{TrProj}/\texttt{TrProjCtor} rewrite in \texttt{Verify/Typing/Expr.lean} — exist in no
-upstream pull request. \texttt{trproj} is 52 commits ahead of \texttt{master} and 24 ahead of
-\texttt{iota}, and \texttt{git merge-base --is-ancestor master trproj} succeeds, so a textual merge
-would go through; that is a low bar, since \texttt{master}'s own state at the relevant commit still
-has \texttt{AddInduct} as a constructorless \texttt{inductive} and \texttt{TrProj := sorry}, so
-almost anything merges cleanly against a placeholder.
-
-\texttt{upstream-comparison.md}'s size argument applies here as much as to \texttt{iota}: at
-$+7762/-363$ over 49 files, \texttt{trproj} (together with the \texttt{iota} it depends on, at
-$+5628/-331$ over 45 files) sits in the size band the maintainer has previously pushed back on for
-unrelated PRs, and it changes three existing interfaces at once
-(\texttt{VEnv}'s arity, \texttt{TrProj}'s arity, \texttt{addDecl.WF}'s case split). Set against
-that: this is, by the hole-closing count, the more valuable of the two branches per line changed —
-it retires the \texttt{TrProj} \texttt{sorry} definition plus five of its seven lemma
-\texttt{sorry}s — and its closing questions to a maintainer (quoted in
-\texttt{understand/contrib-trproj.md} (e)) are specific and well posed: whether \texttt{TrProj}'s
-typing side conditions are acceptable inside a translation relation, whether a real
-\texttt{VExpr} projection node with its own $\iota$/$\eta$ rules would be preferred instead, and
-whether \texttt{TrProjCtor}'s scope restriction (non-mutual, single-constructor, non-recursive,
-non-indexed) is the right cut. \texttt{trproj} cannot be upstreamed before \texttt{iota} is, since
-it depends on \texttt{iota}'s registered-$\iota$-rule interface throughout; and \texttt{iota}'s own
-open blockers — \ref{thm:wf-patsstrong} chief among them — are therefore also blockers for this
-branch, inherited rather than introduced.
-
-\section{Assessment}
-
-\textbf{What is solid.} The design decision is right for this model and cheap in the sense that
-matters most: it adds no rule to \texttt{IsDefEq} (\ref{def:isdefeq}), so none of the model's
-existing metatheory has to be redone, and a projection computes because the structure's own
-$\iota$ rule computes. \ref{thm:tr-env-proj-defeq} is a genuine, complete, non-circular proof of
-the thesis-adjacent computation rule, derived rather than postulated. The two design corrections
-(free motive, then constant motive, then chained dependent motive) each closed a real defect
-identified \emph{before} it produced a false theorem, which is the right way to make mistakes in a
-verification project. The test discipline — real-kernel validation in
-\texttt{Tests/ProjShape.lean}, sorry-free model-side inhabitation in \texttt{Tests/ProjInhabit.lean}
-— is better than most of the surrounding repository, upstream included. No new axiom, no
-\texttt{native\_decide}, no line over 100 columns, contributed proofs shorter on average than
-master's.
-
-\textbf{What is open.} \ref{thm:trproj-uniq} is the single highest-value remaining item: it is the
-one \texttt{sorry} this branch owns that gates \texttt{TrExprS.uniq} and, through it, a large
-fraction of \texttt{Verify}. \ref{thm:vtc-inferproj-struct} and \ref{thm:vtc-inferproj} are the
-bridge from a real kernel projection to a \texttt{TrProjCtor} witness, and neither exists; until one
-does, \ref{thm:tr-env-proj-defeq} is evidence about a satisfiable specification, not a theorem
-about anything the checker does. And \ref{thm:add-decl-wf}'s \texttt{inductDecl} case being
-\texttt{sorry} means every result in this chapter and in Chapter~\ref{chap:trenv} that mentions
-\texttt{AddInduct} is conditional on a hypothesis nothing yet constructs — the branch, like
-\texttt{iota} beneath it, has built the specification and its consequences without yet building the
-thing that would make either fire on a real inductive declaration.
-
-\textbf{What is weak.} \texttt{TRPROJ\_CONTRIBUTION.md} is stale to the point of being actively
-misleading and should not circulate. The thesis attribution in the earliest commit titles overclaims
-what \texttt{Theory/Proj.lean}'s current, more careful docstring already corrects. Documentation
-volume in the contributed \texttt{Theory/} files is out of proportion with upstream's own norms,
-though not with its substance. And \texttt{lift'\_inst\_hi}'s generalisation left a small cluster
-of master code newly dead without removing it — a real, if minor, regression in tidiness that an
-upstream reviewer would flag on sight.
-
-\textbf{Priority order for closing the open ends.} (1) \ref{thm:trproj-uniq} — it is this branch's
-own load-bearing gap, its residual (unique typing of the projection function, type-former
-injectivity, functionality of the $\iota$ registry) is precisely named in the theorem's own
-docstring, and closing it removes \texttt{sorryAx} from the uniqueness layer of the entire
-translation. (2) \ref{thm:add-decl-wf}'s \texttt{inductDecl} case — without a producer for
-\texttt{AddInduct}, neither this chapter's theorems nor Chapter~\ref{chap:trenv}'s apply to any
-concrete environment, and this is shared, prerequisite work for \texttt{iota} as much as for
-\texttt{trproj}. (3) \ref{thm:vtc-inferproj-struct} — inhabiting it in general, even under the
-scope restriction \texttt{TrProjCtor} already imposes, is what would let a real kernel projection
-ever reach \ref{thm:tr-env-proj-defeq}. (4) \ref{thm:wf-patsstrong} — not owned by this branch, but
-the single admission that taints \ref{thm:trproj-defeqdfc} and \ref{thm:tr-env-proj-defeq} alike,
-and closing it benefits every chapter in this development, not only this one. (5) Housekeeping:
-retire \texttt{TRPROJ\_CONTRIBUTION.md} or mark it superseded, restore a consumer for the six
-declarations \texttt{lift'\_inst\_hi}'s move orphaned, and rebase away the duplicated commits before
-proposing anything upstream.
+\begin{enumerate}
+\item \ref{thm:trproj-uniq} -- the highest-value gap. Its residual is unique typing of the
+projection function, type-former injectivity, and functionality of the $\iota$ registry; closing
+it removes \texttt{sorryAx} from the translation's whole uniqueness layer.
+\item \ref{thm:add-decl-wf}'s \texttt{inductDecl} case -- without a producer for
+\texttt{AddInduct}, no result above applies to a concrete environment; prerequisite work shared
+with the $\iota$ contribution (Chapter~\ref{chap:contrib-iota}).
+\item \ref{thm:vtc-inferproj-struct} -- inhabiting it, even under \texttt{TrProjCtor}'s scope
+restriction (non-mutual, single-constructor, non-recursive, non-indexed), is what would let a real
+kernel projection reach \ref{thm:tr-env-proj-defeq}.
+\item \ref{thm:wf-patsstrong} -- not owned by this contribution, but the one admission that taints
+\ref{thm:trproj-defeqdfc} and \ref{thm:tr-env-proj-defeq} alike.
+\item \lead{Caveat} \ref{thm:tr-env-proj-defeq} has no consumer today: its three intended
+consumers (\ref{thm:vtc-reduceprojcore}, \ref{thm:vtc-inferproj-struct}, \ref{thm:vtc-inferproj})
+are all still \stSorry{}, and \texttt{TrProjCtor} is inhabited only by hand, on two test fixtures.
+\end{enumerate}

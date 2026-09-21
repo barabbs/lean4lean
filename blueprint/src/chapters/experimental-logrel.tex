@@ -1,69 +1,28 @@
 \chapter{Experimental: logical relations}
 \label{chap:experimental-logrel}
 
-This chapter covers four modules of \texttt{Lean4Lean/Experimental/} that attack one question by
-semantic means. The question is whether the abstract type theory of \texttt{SExpr} (Chapter
-\ref{chap:experimental-reduction}) has \emph{definitional inversion}: sort injectivity, $\Pi$
-injectivity, and the impossibility of a sort being definitionally equal to a $\Pi$. The answer is
-obtained by building a finitary model, a logical relation indexed by finite approximations of terms
-called \emph{shapes}, and reading the three inversion facts off the fundamental theorem of that
-relation.
-
-The files are
-\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1} (6100 lines, the shape algebra, the shape
-interpretation, its soundness proof and the logical relation itself),
-\srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{1} (473 lines, adequacy and the three
-inversion results),
-\srcloc{Lean4Lean/Experimental/LogRel.lean}{1} (379 lines, an earlier abandoned attempt in the
-\texttt{logrel-mltt} Kripke style) and
-\srcloc{Lean4Lean/Experimental/CoinductiveLogRel.lean}{1} (61 lines, a scratch note). All four are
-byte-for-byte identical on \texttt{master} and at \texttt{trproj} HEAD, and are Mario Carneiro's
-apart from two toolchain-bump commits by Kim Morrison; the \texttt{iota} and \texttt{trproj}
-branches contribute \emph{zero} lines to any of them, and no node in this chapter carries an
-attribution badge. The group is relevant to the review of those branches only as context: it exhibits the house style
-(very large single-block tactic proofs, sparse docstrings, environments axiomatised through a
-\texttt{Params} class) against which the contributions are measured.
-
-\textbf{Thesis correspondence.} The thesis proves unique typing (\texttt{unique.tex}, Theorem
-\texttt{thm:unique}) by stratifying the judgement as $\vdash_n$ by conversion-alternation depth,
-showing that definitional inversion at level $n$ implies unique typing there
-(\texttt{thm:utype}), and then proving definitional inversion at $n+1$ (\texttt{thm:1dinv}) through
-a Church--Rosser theorem for a $\kappa$-reduction split off from proof irrelevance
-(\texttt{unique.tex} \S\texttt{sec:kappa}). The \texttt{ShapeLogRel} pair is a complete alternative
-to that route: no $\vdash_n$ stratification and no Church--Rosser theorem, because proof
-irrelevance is absorbed into the model (a proof simply has shape $\bot$). The shape hierarchy is
-the finitary, syntactic analogue of the tagged types $T_n$ and $\mathrm{tag}(t)$ of
-\texttt{soundness.tex} (line 325), and \texttt{SoundTy}/\texttt{SoundEq} are literally the two
-bullets of \texttt{soundness.tex} Theorem \texttt{thm:sound2} (line 351), the tagged restatement
-of Theorem \texttt{thm:sound} (which has three bullets, none of them about equality of
-interpretations).
-
-\textbf{Notation.} $\Gamma \vdash M \equiv N : A$ is the \texttt{SExpr} definitional equality,
-$\Gamma \vdash M : A$ its typing judgement and $\Gamma \vdash M \to^{*}_{\mathrm{wh}} N$ its
-weak-head reduction (\texttt{WHRedS}). Shapes are ordered by $\le$ (``carries at least as much
-information as''), joined by $\sqcup$, and $m : a$ denotes the shape-level typing judgement. All
-declarations live in namespace \texttt{Lean4Lean.SExpr} and are parameterised by a
-\texttt{[Params]} instance.
-
-\textbf{Assessment.} The design idea is strong and is a genuine methodological advance over the
-thesis: replacing reduction-theoretic machinery by a finite approximation model in which proof
-irrelevance is absorbed rather than quarantined, so that semantic unique typing
-(\ref{thm:expa-strongsound-uniq}) drops out unconditionally. Against that stand four serious
-problems. The headline results are not proved: \texttt{LR.adequacy} has a live \texttt{sorry} in
-its \texttt{const} case, and everything from \texttt{LE\_Interp.strongSound}
-(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5054}) onwards additionally rests on
-\texttt{SExpr.IsDefEq.strong} (a \texttt{sorry}) and on the genuine \texttt{axiom
-Params.extra\_pat}, none of which is flagged anywhere in these files. The taint is sharply
-delimited and the chapter should be read with that in mind: exactly 23 of the 818 declarations of
-\texttt{ShapeLogRel.lean} carry \texttt{sorryAx}, and every one of them is declared at line 5054
-or later, so the whole shape algebra, the shape-typing judgement, the interpretation relation and
-semantic unique typing (\ref{thm:expa-strongsound-uniq}) are sorry-free. The proofs are
-effectively unreviewable: seven exceed one hundred lines as single uncommented tactic blocks, and
-the successor step of the relation is a 238-line structure-instance term. Documentation is thin and
-badly targeted (13 docstrings in 6100 lines, none on the pivotal definitions). And
-\texttt{LogRel.lean} and \texttt{CoinductiveLogRel.lean} are dead branches that are still compiled
-by the \texttt{Lean4Lean.Experimental} library glob and collide, by name, with three other modules
-in the same directory.
+\section*{At a glance}
+\begin{itemize}
+\item \lead{Goal} Prove definitional inversion for \texttt{SExpr} -- sort injectivity, $\Pi$
+injectivity, and no sort is a $\Pi$ -- via a finitary semantic model, without the Church--Rosser
+route of Chapter~\ref{chap:experimental-reduction}'s abstract theory.
+\item \lead{Main results} Theorem~\ref{thm:expa-strongsound-uniq} (semantic unique typing);
+Theorem~\ref{thm:expa-forallE-inv} ($\Pi$ injectivity); Theorem~\ref{thm:expa-sort-forallE-inv}
+(sort $\neq$ $\Pi$); Theorem~\ref{thm:expa-sort-inv} (sort injectivity).
+\item \lead{Status} \stExperimental{} a research module, off the verified path.
+\stSorry{} Theorem~\ref{thm:expa-lr-adequacy}, the fundamental theorem, has a literal \texttt{sorry}
+in its \texttt{const} case. \stTainted{} everything from Theorem~\ref{thm:expa-le-interp-strongsound}
+on, including the three injectivity theorems above.
+\item \lead{Lean files} \texttt{Experimental/ShapeLogRel.lean},
+\texttt{Experimental/ShapeLogRelAdequacy.lean} (live); \texttt{Experimental/LogRel.lean},
+\texttt{Experimental/CoinductiveLogRel.lean} (abandoned attempts, below).
+\item \lead{Thesis} \texttt{unique.tex} (definitional inversion, unique typing) and
+\texttt{soundness.tex} (the tagged-type ZFC model this development replaces).
+\item \lead{Where} $\Gamma\vdash M\equiv N:A$ is \texttt{SExpr} definitional equality,
+$\to^{*}_{\mathrm{wh}}$ its weak-head reduction (\texttt{WHRedS}); shapes order by $\le$, join by
+$\sqcup$; $m:a$ is the shape-level typing judgement; all declarations live under a
+\texttt{[Params]} instance in namespace \texttt{Lean4Lean.SExpr}.
+\end{itemize}
 
 \section{The shape algebra}
 
@@ -72,38 +31,37 @@ in the same directory.
 \lean{Lean4Lean.SExpr.Shape0,Lean4Lean.SExpr.ShapeS,Lean4Lean.SExpr.Shape,Lean4Lean.SExpr.ShapeFun}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{41}
-A stratified family of finite approximations of terms and types, defined by recursion on a level
-index: $\mathtt{Shape}\ 0 = \mathtt{Shape0}$ has only $\bot$ and $\mathtt{sort}\ r$, where the
-boolean $r$ distinguishes $\mathrm{Prop}$ ($r = \mathtt{false}$) from $\mathrm{Type}$
-($r = \mathtt{true}$); $\mathtt{Shape}\ (n{+}1) = \mathtt{ShapeS}(\mathtt{Shape}\ n)$ adds
-$\mathtt{forallE}\ a\ f$ (a domain shape plus a table $f$), $\mathtt{lam}\ f$,
-$\mathtt{ctor}\ c\ l$ and $\mathtt{indTy}$. Here
-$\mathtt{ShapeFun}\ n = \mathtt{List}(\mathtt{Shape}\ n \times \mathtt{Shape}\ n)$ is a finite
-tabulation of a monotone function on shapes.
-\thesisref{\texttt{soundness.tex} line 325, the sets $T_n \subseteq U_n$ of syntactically tagged
-types with $\mathrm{tag}(t)$, introduced to obtain a ZFC analogue of unique typing; the level index
-$n$ plays the role of the universe index.}
-\reviewnote{\texttt{Shape} is an \texttt{@[implicit\_reducible] def} by recursion on
-\texttt{Nat} rather than an inductive family indexed by the level. That choice is the single
-largest source of the file's length: almost every lemma below is restated at level $0$, at level
-$n{+}1$, and then again for \texttt{WShape} and \texttt{TShape}.}
+\thesisref{\texttt{soundness.tex} line 325: the tagged types $T_n\subseteq U_n$ with universe index $n$.}
+
+\lead{In short} A stratified family of \hl{finite approximations} of terms and types, indexed by a
+level.
+\begin{itemize}
+\item $\mathtt{Shape}\ 0 = \mathtt{Shape0}$: only $\bot$ and $\mathtt{sort}\ r$ ($r=\mathtt{false}$
+for $\mathrm{Prop}$, $\mathtt{true}$ for $\mathrm{Type}$).
+\item $\mathtt{Shape}\ (n{+}1) = \mathtt{ShapeS}(\mathtt{Shape}\ n)$: adds $\mathtt{forallE}\ a\ f$,
+$\mathtt{lam}\ f$, $\mathtt{ctor}\ c\ l$, $\mathtt{indTy}$.
+\item $\mathtt{ShapeFun}\ n = \mathtt{List}(\mathtt{Shape}\ n\times\mathtt{Shape}\ n)$: a finite table
+tabulating a monotone function on shapes.
+\end{itemize}
 \end{definition}
 
-\begin{definition}[Level-polymorphic constructors and smart constructors]
+\begin{definition}[Level-polymorphic and smart constructors]
 \label{def:expa-shape-ctors}
 \lean{Lean4Lean.SExpr.Shape.bot,Lean4Lean.SExpr.Shape.sort,Lean4Lean.SExpr.Shape.prop,Lean4Lean.SExpr.Shape.type,Lean4Lean.SExpr.ShapeFun.bot,Lean4Lean.SExpr.Shape.lam',Lean4Lean.SExpr.Shape.ctor',Lean4Lean.SExpr.Shape.trim,Lean4Lean.SExpr.IsStruct}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{59}
 \uses{def:expa-shape}
-The constructors $\bot$ and $\mathtt{sort}\ r$ are defined by recursion on the level so that they
-exist at every $n$, with $\mathtt{prop} = \mathtt{sort}\ \mathtt{false}$ and
-$\mathtt{type} = \mathtt{sort}\ \mathtt{true}$; $\mathtt{ShapeFun.bot} = [(\bot,\bot)]$. The smart
-constructors collapse uninformative shapes: $\mathtt{lam}'\ f = \bot$ when every output of $f$ is
-$\le \bot$, and $\mathtt{ctor}'\ c\ l = \bot$ when $c$ is an eta-constructor
-($\mathtt{IsStruct}\ c$, i.e.\ $\mathtt{Params.classify}\ c$ is an \texttt{etaCtor}) and every field
-of $l$ is $\le \bot$. $\mathtt{trim}$ applies them recursively.
-\reviewnote{\texttt{Shape.trim} (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{820}) has no
-consumer anywhere in the group; it is dead code.}
+\lead{In short} $\bot$ and $\mathtt{sort}\ r$ exist at every level; \hl{smart constructors} collapse
+uninformative shapes to $\bot$.
+\begin{itemize}
+\item $\mathtt{prop} = \mathtt{sort}\ \mathtt{false}$, $\mathtt{type} = \mathtt{sort}\ \mathtt{true}$,
+$\mathtt{ShapeFun.bot} = [(\bot,\bot)]$.
+\item $\mathtt{lam}'\ f = \bot$ when every output of $f$ is $\le\bot$.
+\item $\mathtt{ctor}'\ c\ l = \bot$ when $c$ is an eta-constructor ($\mathtt{IsStruct}\ c$) and every
+field of $l$ is $\le\bot$.
+\item $\mathtt{trim}$ (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{820}) applies both
+recursively.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Compatibility of shapes]
@@ -112,13 +70,15 @@ consumer anywhere in the group; it is dead code.}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{72}
 \uses{def:expa-shape}
-A decidable, \texttt{Bool}-valued relation $s \mathbin{\mathtt{Compat}} t$ defined by structural
-recursion: $\bot$ is compatible with everything, two sorts are compatible iff their flags agree,
-and two shapes with the same head are compatible iff their components are. On tables,
-$\mathtt{Compat}\ f\ f'$ means $\forall x \in f,\ \forall y \in f'$, compatible inputs force
-compatible outputs. It is symmetric (\texttt{Compat.comm}, \texttt{Compat.symm}); that it is
-equivalent to having a common upper bound is proved only later, at the well-formed level
-(\ref{def:expa-wshape-join}).
+\lead{In short} A decidable relation $s\mathbin{\mathtt{Compat}}t$: \hl{do two shapes agree wherever
+both say anything}?
+\begin{itemize}
+\item $\bot$ is compatible with everything; two sorts, iff same flag; matching heads, iff components
+are.
+\item Tables: $\mathtt{Compat}\ f\ f'$ iff every compatible pair of inputs forces compatible outputs.
+\item Symmetric (\texttt{comm}, \texttt{symm}); equivalent to a common upper bound only once shapes
+are well formed (\ref{def:expa-wshape-join}).
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The information order on shapes]
@@ -127,14 +87,14 @@ equivalent to having a common upper bound is proved only later, at the well-form
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{123}
 \uses{def:expa-shape,def:expa-shape-compat}
-A decidable preorder $s \le t$, read ``$t$ carries at least as much information as $s$'', with
-$\bot$ least and matching heads compared componentwise. On tables,
-$\mathtt{ble}\ f\ f'$ holds when every entry $(x,y)$ of $f$ is dominated by some entry $(x',y')$ of
-$f'$ with $x' \le x$ and $y \le y'$. Comes with \texttt{LE} and \texttt{DecidableRel} instances,
-reflexivity and transitivity.
-\reviewnote{The order is only a preorder: two tables can dominate each other without being equal.
-Consequently many downstream lemmas come in order-equivalence form, taking both $s \le t$ and
-$t \le s$ (see \ref{thm:expa-hastype-mono}), which doubles their statements.}
+\lead{In short} A decidable \hl{preorder} $s\le t$, ``$t$ carries at least as much information as
+$s$''.
+\begin{itemize}
+\item $\bot$ is least; matching heads compare componentwise.
+\item Tables: $\mathtt{ble}\ f\ f'$ holds when every entry $(x,y)$ of $f$ is dominated by some entry
+$(x',y')$ of $f'$ with $x'\le x$ and $y\le y'$.
+\item \texttt{LE} and \texttt{DecidableRel} instances; reflexive and transitive.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Inversion and monotonicity for the shape order]
@@ -142,25 +102,29 @@ $t \le s$ (see \ref{thm:expa-hastype-mono}), which doubles their statements.}
 \lean{Lean4Lean.SExpr.Shape.bot_le,Lean4Lean.SExpr.Shape.le_bot,Lean4Lean.SExpr.Shape.le_sort,Lean4Lean.SExpr.Shape.sort_le,Lean4Lean.SExpr.Shape.le_indTy,Lean4Lean.SExpr.Shape.indTy_le,Lean4Lean.SExpr.Shape.forallE_le,Lean4Lean.SExpr.Shape.forallE_le_forallE,Lean4Lean.SExpr.Shape.lam_le,Lean4Lean.SExpr.Shape.lam_le_lam,Lean4Lean.SExpr.Shape.LE.rfl,Lean4Lean.SExpr.Shape.LE.of_eq,Lean4Lean.SExpr.ShapeFun.LE.rfl,Lean4Lean.SExpr.ShapeFun.LE.trans,Lean4Lean.SExpr.Shape.Compat.mono,Lean4Lean.SExpr.Shape.Compat.mono_r,Lean4Lean.SExpr.ShapeFun.Compat.mono_r}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{143}
-A family of routine inversion lemmas characterising when a shape of each head form lies below or
-above another: $s \le \bot \iff s = \bot$, $s \le \mathtt{sort}\ r \iff s = \bot \vee
-s = \mathtt{sort}\ r$, $\mathtt{sort}\ r \le s \iff s = \mathtt{sort}\ r$, and analogously for
-$\mathtt{indTy}$, $\mathtt{forallE}$ and $\mathtt{lam}$; together with reflexivity, transitivity
-and monotonicity of compatibility in the order.
+
+\lead{In short} Routine inversions: which shapes lie below or above one of a given head form.
+\begin{center}
+\begin{tabular}{p{0.43\linewidth}p{0.49\linewidth}}
+\toprule
+Statement & Reads \\
+\midrule
+$s\le\bot$ & iff $s=\bot$ \\
+$s\le\mathtt{sort}\ r$ & iff $s=\bot$ or $s=\mathtt{sort}\ r$ \\
+$\mathtt{sort}\ r\le s$ & iff $s=\mathtt{sort}\ r$ \\
+$s\le\mathtt{indTy}$, $\mathtt{indTy}\le s$ & analogous \\
+$\mathtt{forallE}$, $\mathtt{lam}$ pairs & analogous, componentwise \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
+Plus reflexivity, transitivity, and monotonicity of \texttt{Compat} in the order.
 \end{lemma}
 \begin{proof}
 \uses{def:expa-shape-le}
 \leanok
-Each is a \texttt{cases}/\texttt{simp} on the shape constructors at level $n{+}1$, with level $0$
-handled separately because \texttt{Shape} is defined by recursion on the level.
+\lead{Idea} \texttt{cases}/\texttt{simp} on the shape constructors, level $0$ handled separately from
+$n{+}1$.
 \end{proof}
-
-\begin{remark}
-The same inversion lemmas are restated for \texttt{WShape}
-(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1242}) and again for \texttt{TShape}
-(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1889}). Three near-identical copies; a
-\texttt{Shape}-only development with one systematic transfer lemma would have been much shorter.
-\end{remark}
 
 \begin{definition}[Lifting a shape to another level]
 \label{def:expa-shape-lift}
@@ -168,15 +132,14 @@ The same inversion lemmas are restated for \texttt{WShape}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{284}
 \uses{def:expa-shape,def:expa-shape-le}
-$\mathtt{lift}\ m : \mathtt{Shape}\ n \to \mathtt{Shape}\ m$ rebuilds a shape at level $m$,
-truncating to $\bot$ what does not fit (everything but $\bot$ and sorts when $m = 0$). For
-$n \le m$ it is a full embedding: $\mathtt{lift}_n = \mathrm{id}$,
-$\mathtt{lift}_{m} \circ \mathtt{lift}_{k} = \mathtt{lift}_{m}$, it reflects and preserves $\le$,
-is injective, and preserves compatibility. The proofs are inductions on the level difference and on
-the shape.
-\thesisref{\texttt{soundness.tex} line 325 ff., the $(\mathtt{ulift}, m, A) \in T_n$ clause with
-$\mathrm{tag}((\mathtt{ulift},m,A)) = \mathrm{tag}(A)$: lifting a tagged type to a higher universe
-without changing its meaning.}
+\thesisref{\texttt{soundness.tex} line 325 ff.: the $(\mathtt{ulift},m,A)$ clause, lifting a tagged type without changing its meaning.}
+
+\lead{In short} $\mathtt{lift}\ m$ rebuilds a shape at level $m$, \hl{truncating to $\bot$} what does
+not fit.
+\begin{itemize}
+\item For $n\le m$: a full embedding -- identity at $n=m$, composes, reflects and preserves $\le$,
+injective, preserves compatibility.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Partial lowering of shapes]
@@ -185,18 +148,16 @@ without changing its meaning.}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{421}
 \uses{def:expa-shape-lift}
-A partial inverse of \texttt{lift}:
-$\mathtt{plift} : \mathtt{Shape}\ n \to \mathtt{Shape}\ m \times \mathtt{Option}(\mathtt{Shape}\ m)$
-returns the best $m$-level approximation from below together with, when one exists, an exact
-$m$-level preimage; $\mathtt{olift}$ is the \texttt{Option} component alone. The characterising
-property is a Galois connection, for $n \le m$. In one direction (\texttt{le\_plift}),
-$t \le (\mathtt{plift}\ s).1 \iff \mathtt{lift}_m\ t \le s$; dually (\texttt{plift\_le}),
-$(\exists z,\ (\mathtt{plift}\ s).2 = \mathtt{some}\ z \wedge z \le t) \iff s \le \mathtt{lift}_m\ t$.
-Proved by induction on the shape through the \texttt{Option} monad.
-\reviewnote{Because those proofs \texttt{simp} through the elaborated \texttt{do} notation, the
-whole file pins \texttt{set\_option backward.do.legacy true} at
-\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{10}, referencing leanprover/lean4\#13305 and
-digama0/lean4lean\#31. That is a file-wide back-compatibility switch for a localised problem.}
+\lead{In short} A \hl{partial inverse} of \texttt{lift}: the best approximation from below, plus an
+exact preimage when one exists.
+\begin{itemize}
+\item $\mathtt{plift} : \mathtt{Shape}\ n \to \mathtt{Shape}\ m \times \mathtt{Option}(\mathtt{Shape}\
+m)$; $\mathtt{olift}$ is its \texttt{Option} component.
+\item Galois connection, for $n\le m$: $t \le (\mathtt{plift}\ s).1 \iff \mathtt{lift}_m\ t \le s$
+(\texttt{le\_plift}); dually for \texttt{plift\_le} via the \texttt{Option} witness.
+\item \texttt{set\_option backward.do.legacy true}, \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{10}:
+a Lean 4.32 \texttt{do}-elaborator compatibility switch these proofs need.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Join of shapes]
@@ -205,13 +166,15 @@ digama0/lean4lean\#31. That is a file-wide back-compatibility switch for a local
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{745}
 \uses{def:expa-shape-le,def:expa-shape-compat}
-A total binary operation computed structurally: $\bot$ is a unit, two sorts join to themselves when
-their flags agree and to $\bot$ otherwise, matching heads are joined componentwise, and mismatched
-heads give $\bot$. Two tables are joined by collecting, for every pair of entries with compatible
-inputs, the entry $(j, f(j) \sqcup f'(j))$ where $j$ is the join of the two inputs
-(\texttt{ShapeFun.mem\_join} characterises membership in the result). It commutes with
-\texttt{lift}. It is a least upper bound only on compatible arguments; that fact is proved at the
-well-formed level (\ref{thm:expa-wshape-join-prop}).
+\lead{In short} A total binary operation, \hl{well behaved only on compatible arguments}.
+\begin{itemize}
+\item $\bot$ a unit; two sorts join to themselves if flags agree, else $\bot$; matching heads join
+componentwise; mismatched heads give $\bot$.
+\item Tables: join collects, for every compatible input pair, the entry $(j, f(j)\sqcup f'(j))$ at
+their joined input $j$ (\texttt{mem\_join} characterises membership); commutes with \texttt{lift}.
+\item A least upper bound only on compatible arguments; proved at the well-formed level
+(\ref{thm:expa-wshape-join-prop}).
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Well-formed shapes]
@@ -220,15 +183,16 @@ well-formed level (\ref{thm:expa-wshape-join-prop}).
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{829}
 \uses{def:expa-shape,def:expa-shape-join}
-A table is well formed when it (a) contains an entry with input $\bot$, (b) is closed under joins
-of compatible inputs up to order-equivalence, (c) is monotone ($x_1 \le y_1$ implies
-$x_2 \le y_2$), and (d) has well-formed components. A shape is well formed when its tables are,
-with two extra side conditions: a $\mathtt{lam}\ f$ requires $f$ to be \texttt{NonZero} (some
-output not $\le \bot$), and a $\mathtt{ctor}\ c\ l$ requires $l$ to be \texttt{ListNonZero}
-whenever $\mathtt{IsStruct}\ c$. Well-formedness is preserved and reflected by \texttt{lift}.
-\reviewnote{These \texttt{NonZero} side conditions are exactly what makes $\mathtt{lam}'$ and
-$\mathtt{ctor}'$ collapse to $\bot$, and they are what encodes proof irrelevance at the shape level.
-This is the key design idea of the whole development and it is documented nowhere in the file.}
+\lead{In short} The side conditions that make $\mathtt{lam}'$/$\mathtt{ctor}'$ collapse to $\bot$ --
+\hl{how proof irrelevance enters the model}.
+\begin{itemize}
+\item A table is well formed when it: has an entry at input $\bot$; is closed under joins of
+compatible inputs up to order-equivalence; is monotone; has well-formed components.
+\item A shape is well formed when its tables are, plus: $\mathtt{lam}\ f$ needs $f$ \texttt{NonZero}
+(some output not $\le\bot$); $\mathtt{ctor}\ c\ l$ needs $l$ \texttt{ListNonZero} when
+$\mathtt{IsStruct}\ c$.
+\item Preserved and reflected by \texttt{lift}.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Well-formed shapes as a subtype, with a custom eliminator]
@@ -237,17 +201,16 @@ This is the key design idea of the whole development and it is documented nowher
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{928}
 \uses{def:expa-shape-wf}
-$\mathtt{WShape}\ n$ is the subtype of well-formed $\mathtt{Shape}\ n$ and $\mathtt{WShapeFun}\ n$
-the subtype of well-formed tables, equipped with a \texttt{Membership} instance, extensionality,
-the lifted constructors (with $\mathtt{lam}$ taking the \texttt{NonZero} proof and $\mathtt{lam}'$
-falling back to $\bot$), and the hand-written case analysers $\mathtt{casesOn}'$ (at level $n{+}1$)
-and $\mathtt{casesOn}$ (at any level), which present a well-formed shape as one of
-$\bot$/sort/forallE/lam/ctor/indTy with the side conditions already unpacked.
-\reviewnote{The two docstrings on these eliminators are among only 13 docstrings in 6100 lines. The
-\texttt{WShape} layer then duplicates essentially every \texttt{Shape} lemma
-(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1055}--1400): pure boilerplate caused by defining
-\texttt{Shape} by \texttt{Nat}-recursion plus a separate \texttt{WF} predicate instead of one
-well-formed-by-construction inductive family.}
+\lead{In short} $\mathtt{WShape}\ n$, the subtype of well-formed shapes, with hand-written case
+analysers that \hl{unpack the side conditions}.
+\begin{itemize}
+\item \texttt{Membership} instance, extensionality, lifted constructors ($\mathtt{lam}$ takes the
+\texttt{NonZero} proof, $\mathtt{lam}'$ falls back to $\bot$).
+\item $\mathtt{casesOn}'$ (level $n{+}1$) and $\mathtt{casesOn}$ (any level) present a well-formed
+shape as $\bot$/sort/forallE/lam/ctor/indTy.
+\item Restates the \texttt{Shape} order/lift/join API for the subtype
+(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1055}).
+\end{itemize}
 \end{definition}
 
 \begin{definition}[Application of a shape function to a shape]
@@ -256,15 +219,14 @@ well-formed-by-construction inductive family.}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{717}
 \uses{def:expa-shape-join,def:expa-shape-le,def:expa-wshape}
-$f\ @\ x$ first truncates the table to the entries whose input is $\le x$ (\texttt{trunc}) and then
-takes the output of the entry whose input dominates all the others (\texttt{maxBelow}, defaulting
-to $\bot$). For a well-formed table that maximum exists, because the table is closed under joins of
-compatible inputs. The operation is extended to $\mathtt{Shape}$ (returning $\bot$ unless the head
-is a $\mathtt{lam}$), to $\mathtt{WShape}$ and to $\mathtt{TShape}$, and is shown monotone in both
-arguments, compatible with lifting, and compatible with joins.
-\reviewnote{The definition is scattered: \texttt{ShapeFun.app} at line 721, the well-formedness
-lemma \texttt{ShapeFun.WF.app} at \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2270},
-\texttt{Shape.app} at 2292 and \texttt{WShape.app} at 2304.}
+\lead{In short} $f\ @\ x$: \hl{truncate, then take the maximum}.
+\begin{itemize}
+\item \texttt{trunc} keeps entries whose input is $\le x$; \texttt{maxBelow} returns the output of the
+entry dominating all others, defaulting to $\bot$; for a well-formed table this maximum exists
+(\texttt{ShapeFun.WF.app}, \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2270}).
+\item Extended to \texttt{Shape} ($\bot$ unless the head is $\mathtt{lam}$), \texttt{WShape} and
+\texttt{TShape}; monotone in both arguments, compatible with lifting and with joins.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[Compatible well-formed shapes have a least upper bound]
@@ -273,59 +235,40 @@ lemma \texttt{ShapeFun.WF.app} at \srcloc{Lean4Lean/Experimental/ShapeLogRel.lea
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1557}
 \uses{def:expa-shape-join,def:expa-wshape}
-For $x, y : \mathtt{WShape}\ n$: (i) if $x$ and $y$ have any common upper bound then they are
-compatible, and (ii) if they are compatible then $x.1 \sqcup y.1$ is well formed and is a least
-upper bound, i.e.\ $x.1 \sqcup y.1 \le z \iff x \le z \wedge y \le z$ for every well-formed $z$.
+\lead{In short} For $x,y:\mathtt{WShape}\ n$, \hl{compatibility and a common upper bound coincide},
+and the join realises it.
+\begin{itemize}
+\item \lead{Given} $x$ and $y$ have a common upper bound.
+\item \lead{Then} $x$ and $y$ are compatible; conversely, if compatible, $x.1\sqcup y.1$ is well
+formed and $x.1\sqcup y.1\le z \iff x\le z\wedge y\le z$ for every well-formed $z$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{def:expa-shape-wf,def:expa-shape-app}
 \leanok
-Induction on the level $n$. The successor case is factored into the \texttt{WShape.join\_prop}
-namespace (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1391}), which takes the inductive
-hypothesis as a section \texttt{variable} and proves the function-table case (\texttt{ih\_fun}) via
-a maximum-element argument (\texttt{exists\_max}) and truncation (\texttt{wf\_trunc},
-\texttt{trunc\_compat}).
+\lead{Idea} Induction on the level. \lead{Steps}
+\begin{enumerate}
+\item Successor case factored into a local namespace
+(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1391}) with the inductive hypothesis as a section
+variable.
+\item Function-table case via a maximum-element argument and truncation.
+\end{enumerate}
 \end{proof}
 
-\begin{remark}
-The \texttt{variable (ih : ...)} plus \texttt{include ih} idiom used to thread the induction
-hypothesis through a 160-line namespace makes the helper lemmas (\texttt{exists\_max},
-\texttt{app\_core}, \texttt{of\_compat}) look like standalone results with undocumented
-hypotheses. \texttt{WShape.join\_prop.join\_mem'} also shadows the earlier
-\texttt{WShapeFun.join\_mem'} (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1374}).
-\end{remark}
-
-\begin{definition}[Join on well-formed shapes and the Join relation]
+\begin{definition}[Join on well-formed shapes and the \texttt{Join} relation]
 \label{def:expa-wshape-join}
 \lean{Lean4Lean.SExpr.WShape.join,Lean4Lean.SExpr.WShape.Join,Lean4Lean.SExpr.WShape.Compat.iff,Lean4Lean.SExpr.WShape.Join.mk,Lean4Lean.SExpr.WShape.Join.iff,Lean4Lean.SExpr.WShapeFun.join,Lean4Lean.SExpr.WShapeFun.Join,Lean4Lean.SExpr.WShapeFun.ofElems}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1627}
 \uses{thm:expa-wshape-join-prop}
-$x \sqcup y$ on well-formed shapes is the underlying join when $x$ and $y$ are compatible and $\bot$
-otherwise, so that the result is again well formed. The relational form
-$\mathtt{Join}\ x\ y\ z$ says $\forall w,\ z \le w \iff x \le w \wedge y \le w$;
-\texttt{Join.mk} produces it from compatibility, \texttt{Join.iff} translates between the two
-presentations, and \texttt{Compat.iff} characterises compatibility as existence of a common upper
-bound.
-\reviewnote{Both the function \texttt{join} and the relation \texttt{Join} are carried everywhere
-with \texttt{Join.iff} to translate, doubling the API surface for little apparent benefit.}
+\lead{In short} $x\sqcup y$ on well-formed shapes: the underlying join if compatible, else $\bot$ --
+\hl{always well formed}.
+\begin{itemize}
+\item Relational form $\mathtt{Join}\ x\ y\ z$: $\forall w,\ z\le w\iff x\le w\wedge y\le w$.
+\item \texttt{Join.mk} builds it from compatibility; \texttt{Join.iff} translates between the two
+forms; \texttt{Compat.iff} reads compatibility off a common upper bound.
+\end{itemize}
 \end{definition}
-
-\begin{remark}
-\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1665}
-\emph{Dead: well-formedness under partial lowering.} The claim that for a well-formed
-$x : \mathtt{WShape}\ n$ the approximation $(\mathtt{plift}\ x.1).1$ is well formed at level $m$,
-and so is any exact preimage $(\mathtt{plift}\ x.1).2$ (\ref{def:expa-shape-plift}), has no
-declaration in the compiled environment. The statement and its abandoned 58-line induction on $m$
-and $n$ sit inside a block comment spanning lines 1665--1732, together with three further commented
-stubs for \texttt{ShapeFun.WF'.plift}, \texttt{Shape.WF.plift} and \texttt{ShapeFun.WF.plift} at
-lines 1725--1731; the live development never needs the result. All ten textual \texttt{sorry}
-occurrences (spread over eight lines) and the one \texttt{stop} in \texttt{ShapeLogRel.lean} live
-in this dead block, which makes a naive \texttt{grep sorry} of the file misleading in both
-directions: the file has no live \texttt{sorry}, yet everything from
-\ref{thm:expa-le-interp-strongsound} onwards is tainted through
-\texttt{Lean4Lean/Experimental/SExpr.lean}.
-\end{remark}
 
 \begin{definition}[Level-erased shapes]
 \label{def:expa-tshape}
@@ -333,17 +276,17 @@ directions: the file has no live \texttt{sorry}, yet everything from
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1819}
 \uses{def:expa-wshape,def:expa-shape-lift,def:expa-wshape-join}
-$\mathtt{TShape} = \Sigma n,\ \mathtt{WShape}\ n$ forgets the level. Order, compatibility and join
-are defined by lifting both arguments to the maximum of their two levels;
-\texttt{TShape.LE.def} says that any common upper bound of the two levels may be used instead. The
-decomposition lemmas turn $\le$ between two $\mathtt{forallE}$ (resp.\ $\mathtt{lam}'$) shapes into
-componentwise inequalities after lifting.
-\thesisref{\texttt{soundness.tex} line 325 ff.: \texttt{TShape} is the analogue of
-$\bigcup_n T_n$, and its order mirrors the $(\mathtt{ulift},m,A)$ clause identifying a tagged type
-with its lift.}
-\reviewnote{This is a third full copy of the order/join/compatibility API.
-\texttt{TShape.type} exists (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1887}) but
-\texttt{TShape.prop} does not, an asymmetry with both \texttt{Shape} and \texttt{WShape}.}
+\thesisref{\texttt{soundness.tex} line 325 ff.: $\mathtt{TShape}$ is $\bigcup_n T_n$, its order mirroring the $(\mathtt{ulift},m,A)$ clause.}
+
+\lead{In short} $\mathtt{TShape}=\Sigma n,\ \mathtt{WShape}\ n$ \hl{forgets the level}.
+\begin{itemize}
+\item Order, compatibility, join: lift both arguments to the max of their levels; any common upper
+bound of the levels works instead (\texttt{LE.def}).
+\item Decomposition lemmas turn $\le$ between two $\mathtt{forallE}$ (resp.\ $\mathtt{lam}'$) shapes
+into componentwise inequalities after lifting.
+\item $\mathtt{TShape.type}$ exists (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1887}); no
+$\mathtt{TShape.prop}$ counterpart.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Head-form discrimination for level-erased shapes]
@@ -351,23 +294,22 @@ with its lift.}
 \lean{Lean4Lean.SExpr.TShape.sort_not_le_lam',Lean4Lean.SExpr.TShape.forallE_not_le_lam',Lean4Lean.SExpr.TShape.ctor_not_le_lam',Lean4Lean.SExpr.TShape.indTy_not_le_lam',Lean4Lean.SExpr.TShape.lam_not_le_forallE,Lean4Lean.SExpr.TShape.sort_not_le_forallE,Lean4Lean.SExpr.TShape.sort_not_le_ctor',Lean4Lean.SExpr.TShape.forallE_not_le_ctor',Lean4Lean.SExpr.TShape.lam_not_le_ctor',Lean4Lean.SExpr.TShape.indTy_not_le_forallE,Lean4Lean.SExpr.TShape.indTy_not_le_sort,Lean4Lean.SExpr.TShape.ctor_not_le_forallE}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1928}
-Twelve lemmas asserting that shapes with distinct non-$\bot$ head constructors are incomparable in
-the \texttt{TShape} order; for example $\neg\,(\mathtt{sort}\ r) \le \mathtt{lam}'\ f$ and
-$\neg\,(\mathtt{forallE}\ a\ f_1) \le \mathtt{lam}'\ f_2$.
+
+\lead{In short} Shapes with \hl{distinct non-$\bot$ head constructors} are incomparable in the
+\texttt{TShape} order: twelve instances, e.g.\ $\neg(\mathtt{sort}\ r)\le\mathtt{lam}'\ f$,
+$\neg(\mathtt{forallE}\ a\ f_1)\le\mathtt{lam}'\ f_2$.
+\begin{itemize}
+\item \lead{Caveat} Not exhaustive: e.g.\ \texttt{indTy\_not\_le\_ctor'} and
+\texttt{ctor\_not\_le\_sort} are missing; only the pairs later proofs need are covered.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:expa-tshape}
 \leanok
-Each unfolds \texttt{TShape.LE.def} at a common level, rewrites the lift of the two head forms, and
-\texttt{simp}s the resulting \texttt{Shape.ble} computation to \texttt{False}; the
-$\mathtt{lam}'$ cases additionally split on whether the smart constructor collapsed to $\bot$.
+\lead{Idea} Unfold \texttt{TShape.LE.def} at a common level, rewrite the lifted head forms, and
+\texttt{simp} \texttt{Shape.ble} to \texttt{False}; the $\mathtt{lam}'$ cases split on smart-constructor
+collapse.
 \end{proof}
-
-\begin{remark}
-The grid is not systematic: there is no \texttt{indTy\_not\_le\_ctor'} and no
-\texttt{ctor\_not\_le\_sort}. Only the instances the downstream proofs happened to need were
-proved, so a reader cannot tell which omissions are deliberate.
-\end{remark}
 
 \begin{definition}[Singleton shape functions]
 \label{def:expa-shape-single}
@@ -375,11 +317,13 @@ proved, so a reader cannot tell which omissions are deliberate.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2405}
 \uses{def:expa-shape-app,def:expa-shape-wf}
-$\mathtt{single}\ x\ y$ is the table $[(x,y)]$, extended by $(\bot,\bot)$ unless $x$ is already
-$\bot$; it is well formed, it satisfies
-$(\mathtt{single}\ x\ y)\ @\ x' = y$ if $x \le x'$ and $\bot$ otherwise, and it is $\le$ any
-well-formed table with that behaviour. It is the least shape function sending $x$ to $y$, and is
-the tool used to build witnesses in the soundness proofs (\ref{thm:expa-le-interp-sound-cases}).
+\lead{In short} $\mathtt{single}\ x\ y=[(x,y)]$ (plus $(\bot,\bot)$ unless $x=\bot$): the \hl{least
+table sending $x$ to $y$}.
+\begin{itemize}
+\item Well formed; $(\mathtt{single}\ x\ y)\ @\ x' = y$ if $x\le x'$, else $\bot$; below any
+well-formed table with that behaviour.
+\item Used to build witnesses in the soundness proofs (\ref{thm:expa-le-interp-sound-cases}).
+\end{itemize}
 \end{definition}
 
 \section{The shape-level typing judgement}
@@ -390,24 +334,15 @@ the tool used to build witnesses in the soundness proofs (\ref{thm:expa-le-inter
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2482}
 \uses{def:expa-shape-app,def:expa-shape-le,def:expa-wshape}
-A decidable \texttt{Bool}-valued relation $m : a$, ``the element-shape $m$ inhabits the type-shape
-$a$'', by simultaneous recursion on both arguments. The clauses are: $\bot : a$ whenever $a$ is
-itself a type ($a = \bot$, a sort, $\mathtt{indTy}$, or a $\mathtt{forallE}$ whose table is a
-family of types over its domain); $\mathtt{sort}\ r : \mathtt{sort}\ j$ iff $j = \mathtt{true}$,
-i.e.\ only $\mathrm{Type}$ classifies sorts; $\mathtt{forallE}\ a\ b : \mathtt{sort}\ r$ when $b$
-has domain $a$ and all its outputs are $r$-sorts; $\mathtt{lam}\ f : \mathtt{forallE}\ a\ b$ when
-$b$ has domain $a$ with every output a type, $f$ has domain $a$, and each output of $f$ inhabits
-the corresponding $b\ @\ x$; $\mathtt{ctor} : \mathtt{indTy}$; and
-$\mathtt{indTy} : \mathrm{Type}$. The auxiliary
-\texttt{HasDom}, \texttt{HasTypePi} and \texttt{HasTypeLam} name the table-level side conditions;
-everything is lifted to \texttt{WShape} and, through lifting to a common level, to \texttt{TShape}.
-\thesisref{\texttt{soundness.tex} line 325 ff., the clause deriving $(\Pi,A,B) \in T_n$ from
-$A \in T_n$ and $B : \mathrm{tag}(A) \to T_n$: shape typing is the syntactic analogue of membership
-in a tagged type.}
-\reviewnote{The boolean definition exists only to obtain decidability; all reasoning goes through
-the inductive characterisation \ref{thm:expa-hastype-unfold}. The recursion is structural in the
-implicit level index (the \texttt{hasType} handed to \texttt{hasType.core} is the level-$n$ one),
-which nothing in the source says.}
+\thesisref{\texttt{soundness.tex} line 325 ff.: the clause deriving $(\Pi,A,B)\in T_n$ from $A\in T_n$, $B:\mathrm{tag}(A)\to T_n$.}
+
+\lead{In short} A decidable relation $m:a$, ``\hl{$m$ inhabits the type-shape $a$}'', by simultaneous
+recursion; kept boolean only for decidability -- Theorem~\ref{thm:expa-hastype-unfold} tabulates the
+rules used in proofs.
+\begin{itemize}
+\item \texttt{HasDom}, \texttt{HasTypePi}, \texttt{HasTypeLam} name the table-level side conditions;
+lifted to \texttt{WShape} and, by lifting to a common level, to \texttt{TShape}.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[Inductive characterisation of shape typing]
@@ -416,18 +351,27 @@ which nothing in the source says.}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2513}
 \uses{def:expa-shape-hastype}
-The boolean relation is equivalent to an inductively presented judgement \texttt{HasTypeU} with one
-rule per head form: $\bot : x$ from $x : \mathrm{Type}$; $\mathtt{sort}\ r : \mathrm{Type}$;
-$\mathtt{forallE}\ a\ b : \mathtt{sort}\ r$ from \texttt{HasTypePi};
-$\mathtt{lam}\ f : \mathtt{forallE}\ a\ b$ from \texttt{HasTypeLam};
-$\mathtt{ctor}\ c\ l : \mathtt{indTy}$; and $\mathtt{indTy} : \mathrm{Type}$. This is the inversion
-principle used everywhere below.
+\lead{In short} The boolean relation is equivalent to an inductive judgement \texttt{HasTypeU}, one
+rule per head form -- \hl{the inversion principle used everywhere below}.
+\begin{center}
+\begin{tabular}{lp{0.79\linewidth}}
+\toprule
+Head form & Rule \\
+\midrule
+$\bot$ & $\bot:x$ from $x:\mathrm{Type}$ \\
+$\mathtt{sort}\ r$ & $\mathtt{sort}\ r:\mathrm{Type}$ \\
+$\mathtt{forallE}\ a\ b$ & from \texttt{HasTypePi}, at $\mathtt{sort}\ r$ \\
+$\mathtt{lam}\ f$ & from \texttt{HasTypeLam}, at $\mathtt{forallE}\ a\ b$ \\
+$\mathtt{ctor}\ c\ l$ & $:\mathtt{indTy}$ \\
+$\mathtt{indTy}$ & $:\mathrm{Type}$ \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
 \end{theorem}
 \begin{proof}
 \leanok
-Forwards by \texttt{split} on the defining match of \texttt{Shape.hasType} followed by
-\texttt{constructor} and \texttt{simp [hasType.core.iff]}; backwards by case analysis on the
-derivation, with the $\bot$ case recursing into the inversion of its premise.
+\lead{Idea} Forwards: \texttt{split} on the defining match, \texttt{constructor}, \texttt{simp}. Backwards:
+case analysis on the derivation, the $\bot$ case recursing on its premise's inversion.
 \end{proof}
 
 \begin{theorem}[Monotonicity of shape typing]
@@ -436,28 +380,21 @@ derivation, with the $\bot$ case recursing into the inversion of its premise.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2681}
 \uses{thm:expa-hastype-unfold,def:expa-shape-le}
-Two monotonicity principles. \texttt{mono\_r}: if $m : a$, $a \le a'$ and $a' : \mathtt{sort}\ r$
-then $m : a'$. \texttt{mono\_l}: if $m : a$, $m \le m'$ \emph{and} $m' \le m$ then $m' : a$; the
-hypothesis is order-equivalence, not just $\le$. Both are stated again for \texttt{TShape}.
+\lead{In short} Two monotonicity principles, one needing \hl{order-equivalence, not just $\le$}.
+\begin{itemize}
+\item \lead{Given} $m:a$, $a\le a'$, $a':\mathtt{sort}\ r$. \lead{Then} $m:a'$ (\texttt{mono\_r}).
+\item \lead{Given} $m:a$, $m\le m'$ \emph{and} $m'\le m$. \lead{Then} $m':a$ (\texttt{mono\_l}).
+\item Both restated for \texttt{TShape}.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{def:expa-shape-app}
 \leanok
-\texttt{mono\_r} is an induction on the level using \texttt{HasTypeU} inversion, with the
-$\mathtt{lam}$ case factored through the local recursors \texttt{ih\_dom} and \texttt{ih\_lam}.
-\texttt{mono\_l} lives in its own namespace with the inductive hypothesis as a section variable and
-needs a pigeonhole lemma \texttt{find\_cycle}
-(\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2716}): in a finite list carrying a transitive
-relation in which every element points to some element, every element reaches a reflexive point.
+\lead{Idea} \texttt{mono\_r}: induction on the level via \texttt{HasTypeU} inversion. \texttt{mono\_l}: a
+pigeonhole lemma \texttt{find\_cycle} (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2716}, a
+finite list under a transitive relation where every element points somewhere reaches a reflexive
+point).
 \end{proof}
-
-\begin{remark}
-\texttt{find\_cycle} is a genuinely reusable combinatorial lemma buried as a \texttt{private
-theorem} in the middle of a shape file; it belongs in \texttt{Lean4Lean/Std} or in Batteries. That
-\texttt{mono\_l} needs order-equivalence rather than $\le$ is a real limitation which propagates to
-every use site: the \texttt{mono\_l} field of \ref{structure:expa-logrel} has to carry two
-\texttt{HasType} premises to compensate.
-\end{remark}
 
 \begin{theorem}[Shape typing is closed under joins]
 \label{thm:expa-hastype-join}
@@ -465,17 +402,19 @@ every use site: the \texttt{mono\_l} field of \ref{structure:expa-logrel} has to
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2960}
 \uses{thm:expa-hastype-unfold,def:expa-wshape-join}
-If $m_1 : a$ and $m_2 : a$ and $m_1$ is compatible with $m_2$ then $m_1 \sqcup m_2 : a$; the primed
-variants take the join relationally, and the type-shape may be joined as well. This is what makes
-the set of shapes approximating a term a directed set with suprema.
+\lead{In short} The shapes approximating a term form a \hl{directed set with suprema}.
+\begin{itemize}
+\item \lead{Given} $m_1:a$, $m_2:a$, $m_1$ compatible with $m_2$.
+\item \lead{Then} $m_1\sqcup m_2:a$; primed variants take the join relationally, and the type-shape
+may be joined too.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-wshape-join-prop,def:expa-shape-app}
 \leanok
-A 75-line induction on the level with case analysis on the head forms, using
-\ref{thm:expa-wshape-join-prop}, \texttt{HasTypeU} inversion and the table-membership lemmas
-\texttt{WShapeFun.join\_mem} and \texttt{ShapeFun.mem\_join}; the domain and lambda cases are
-factored into local recursors \texttt{go\_dom} and \texttt{go\_lam}.
+\lead{Idea} Induction on the level, case analysis on head forms, using \ref{thm:expa-wshape-join-prop},
+\texttt{HasTypeU} inversion and table-membership lemmas; domain and lambda cases factored into local
+recursors.
 \end{proof}
 
 \begin{theorem}[Shape-level proof irrelevance and retyping]
@@ -484,30 +423,25 @@ factored into local recursors \texttt{go\_dom} and \texttt{go\_lam}.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3211}
 \uses{thm:expa-hastype-unfold,def:expa-shape-wf}
-\texttt{proofIrrel}: if the type-shape $a$ satisfies $a : \mathrm{Prop}$ (that is,
-$a : \mathtt{sort}\ \mathtt{false}$) and $x : a$, then $x = \bot$. \texttt{retype}: if
-$a : \mathtt{sort}\ r$, $a' : \mathtt{sort}\ r'$ and $a \le a'$ then $a : \mathtt{sort}\ r'$.
-\texttt{TShape.LE.le\_forall} inverts $\le$ against a $\mathtt{forallE}$ shape through the
-auxiliary inductive \texttt{LE\_Forall}, and \texttt{ty\_forallE\_inv} says that anything
-inhabiting a $\mathtt{forallE}$ shape is $\bot$ or a $\mathtt{lam}'$.
-\thesisref{\texttt{axioms.tex}, the proof-irrelevance rule of definitional equality, and
-\texttt{unique.tex} \S\texttt{sec:kappa}, where proof irrelevance is exactly what breaks
-Church--Rosser. Here it is absorbed into the model, which is why this development avoids the
-$\kappa$ / $\equiv_p$ split entirely.}
+\thesisref{\texttt{axioms.tex}, proof irrelevance; \texttt{unique.tex} \S\texttt{sec:kappa}, where it breaks Church--Rosser -- here it is absorbed into the model instead.}
+
+\lead{In short} \hl{Every inhabitant of a $\mathrm{Prop}$-shape is $\bot$}.
+\begin{itemize}
+\item \lead{Given} $a:\mathtt{sort}\ \mathtt{false}$, $x:a$. \lead{Then} $x=\bot$
+(\texttt{proofIrrel}).
+\item \lead{Given} $a:\mathtt{sort}\ r$, $a':\mathtt{sort}\ r'$, $a\le a'$. \lead{Then}
+$a:\mathtt{sort}\ r'$ (\texttt{retype}).
+\item \texttt{TShape.LE.le\_forall} inverts $\le$ against $\mathtt{forallE}$ via the auxiliary
+\texttt{LE\_Forall}; \texttt{ty\_forallE\_inv}: anything inhabiting a $\mathtt{forallE}$ shape is
+$\bot$ or $\mathtt{lam}'$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \leanok
-By \texttt{HasTypeU} inversion on both premises: at level $0$ nothing but $\bot$ inhabits a
-$\mathrm{Prop}$-shape; at level $n{+}1$ the only remaining case is a $\mathtt{lam}\ f$ inhabiting a
-$\mathtt{forallE}$ whose codomain table is a family of $\mathrm{Prop}$s, and the inductive
-hypothesis forces every output of $f$ to be $\bot$, so the smart constructor $\mathtt{lam}'$
-collapses it to $\bot$.
+\lead{Idea} \texttt{HasTypeU} inversion on both premises: level $0$ forces $\bot$; at level $n{+}1$ the
+induction hypothesis forces every output of the lambda's table to $\bot$, so $\mathtt{lam}'$
+collapses it.
 \end{proof}
-
-\begin{remark}
-This is the conceptual heart of the approach: the model has no room for the content of a proof,
-because every inhabitant of a proposition-shape is $\bot$. It has no docstring.
-\end{remark}
 
 \section{The shape interpretation}
 
@@ -517,13 +451,13 @@ because every inhabitant of a proposition-shape is $\bot$. It has no docstring.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3282}
 \uses{def:expa-tshape}
-$\mathtt{Valuation} = \mathbb{N} \to \mathtt{TShape}$ assigns a level-erased shape to every de
-Bruijn index. \texttt{nil} sends everything to $\bot$, \texttt{push} extends at index $0$, and
-order, compatibility and join are pointwise, with \texttt{LE.push} splitting the order on an
-extended valuation.
-\reviewnote{Two of the file's thirteen docstrings sit on \texttt{Valuation.Compat} and
-\texttt{Valuation.join}, the two most obvious definitions in the file, while \texttt{LE\_Interp}
-immediately below has none.}
+\lead{In short} $\mathtt{Valuation}=\mathbb{N}\to\mathtt{TShape}$: \hl{a level-erased shape per de
+Bruijn index}.
+\begin{itemize}
+\item \texttt{nil} sends everything to $\bot$; \texttt{push} extends at index $0$.
+\item Order, compatibility, join: pointwise; \texttt{LE.push} splits the order on an extended
+valuation.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The shape interpretation relation]
@@ -532,24 +466,27 @@ immediately below has none.}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3333}
 \uses{def:expa-valuation,def:expa-shape-hastype,def:expa-shape-app,class:expb-sexpr-params,inductive:pattern-core}
-$\mathtt{LE\_Interp}\ \rho\ m\ M$ says that the shape $m$ is a lower bound for the meaning of the
-term $M$ under the valuation $\rho$. Its rules are: $\bot$ interprets anything; a variable
-$\mathtt{bvar}\ i$ takes any $m \le \rho\ i$; $\mathtt{sort}\ \ell$ takes
-$m \le \mathtt{sort}(\ell \neq 0)$; an application $F\ A$ takes $m \le f\ @\ a$ from shapes $f$ of
-$F$ and $a$ of $A$; a lambda takes $m \le \mathtt{lam}'\ f$ when the domain $A$ has shape $a$, $f$
-has domain $a$, and for every $x : a$ the body is interpreted by $f\ @\ x$ under $\rho.\mathtt{push}\
-x$; a $\Pi$ takes $m \le \mathtt{forallE}\ b\ f$ under the same conditions with two domain shapes
-$b$ and $b'$ for $B$, the table condition using $b'$; and a constant takes whatever the auxiliary
-\texttt{Const}, \texttt{Matches} and \texttt{RHS} judgements derive from its declared type and from
-the environment's $\delta$ and $\iota$ pattern rules.
-\thesisref{\texttt{soundness.tex} \S Modeling Lean in ZFC (line 118) and \S Type injectivity (line
-325): the relation plays the role of $m \le [\![\Gamma \vdash M]\!]_\gamma$ in
-the tagged model, but as a finitary, one-sided syntactic relation rather than a ZFC-valued
-denotation.}
-\reviewnote{The single most important definition of the file has no documentation whatsoever, and
-its \texttt{const} rule is unusually subtle: it quantifies over an abstract relation $R$ that is
-assumed closed under \texttt{LE\_Interp}, a parametricity trick used to handle recursive $\delta$
-unfolding. Nothing in the source explains it.}
+\thesisref{\texttt{soundness.tex} \S Modeling Lean in ZFC (line 118) and \S Type injectivity (line 325): a finitary, one-sided syntactic stand-in for $m\le[\![\Gamma\vdash M]\!]_\gamma$.}
+
+\lead{In short} $\mathtt{LE\_Interp}\ \rho\ m\ M$: \hl{$m$ is a lower bound for the meaning of $M$}
+under valuation $\rho$.
+\begin{center}
+\begin{tabular}{lp{0.84\linewidth}}
+\toprule
+Term $M$ & Rule \\
+\midrule
+any & $\bot$ interprets anything \\
+$\mathtt{bvar}\ i$ & $m\le\rho\ i$ \\
+$\mathtt{sort}\ \ell$ & $m\le\mathtt{sort}(\ell\neq 0)$ \\
+$F\ A$ & $m\le f\ @\ a$, from shapes $f$ of $F$, $a$ of $A$ \\
+$\lambda A.\,t$ & $m\le\mathtt{lam}'\ f$: domain $A$ has shape $a$, $f$ has domain $a$, each output
+$f\ @\ x$ interprets the body under $\rho.\mathtt{push}\ x$ \\
+$\forall A.\,B$ & $m\le\mathtt{forallE}\ b\ f$, analogous, with domain shapes $b,b'$ \\
+constant & from \texttt{Const}/\texttt{Matches}/\texttt{RHS}, using the declared type and the
+environment's $\delta$/$\iota$ pattern rules \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
 \end{definition}
 
 \begin{lemma}[Smart constructors and inversions for the interpretation]
@@ -557,15 +494,18 @@ unfolding. Nothing in the source explains it.}
 \lean{Lean4Lean.SExpr.LE_Interp.bvar',Lean4Lean.SExpr.LE_Interp.bvar0,Lean4Lean.SExpr.LE_Interp.sort',Lean4Lean.SExpr.LE_Interp.app',Lean4Lean.SExpr.LE_Interp.lam',Lean4Lean.SExpr.LE_Interp.forallE',Lean4Lean.SExpr.LE_Interp.bvar_iff,Lean4Lean.SExpr.LE_Interp.le_sort,Lean4Lean.SExpr.LE_Interp.le_sort'}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3352}
-Specialisations of the rules with the trailing $\le$ premise instantiated to reflexivity, together
-with the inversions $\mathtt{LE\_Interp}\ \rho\ m\ (\mathtt{bvar}\ i) \iff m \le \rho\ i$ and, for a
-sort, $m \le \mathtt{sort}(\ell \neq 0)$.
+
+\lead{In short} Specialisations at reflexivity, plus \hl{inversion at \texttt{bvar} and sort}.
+\begin{itemize}
+\item $\mathtt{LE\_Interp}\ \rho\ m\ (\mathtt{bvar}\ i)\iff m\le\rho\ i$.
+\item At a sort: $m\le\mathtt{sort}(\ell\neq 0)$.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:expa-le-interp}
 \leanok
-The smart constructors are immediate applications of the rules. The inversions are one-step case
-analyses, using that the $\bot$ rule always yields a shape below $\bot$.
+\lead{Idea} Smart constructors: immediate from the rules. Inversions: one-step case analysis, using that
+the $\bot$ rule always yields a shape below $\bot$.
 \end{proof}
 
 \begin{theorem}[Monotonicity of the shape interpretation]
@@ -574,16 +514,18 @@ analyses, using that the $\bot$ rule always yields a shape below $\bot$.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3378}
 \uses{def:expa-le-interp,def:expa-tshape}
-The relation is downward closed in the shape ($m' \le m$ and $\mathtt{LE\_Interp}\ \rho\ m\ M$ give
-$\mathtt{LE\_Interp}\ \rho\ m'\ M$) and monotone in the valuation ($\rho \le \rho'$ preserves
-interpretations), with matching statements for the \texttt{Matches}, \texttt{RHS} and \texttt{Const}
-auxiliaries.
+\lead{In short} \hl{Downward closed} in the shape, monotone in the valuation.
+\begin{itemize}
+\item $m'\le m$ and $\mathtt{LE\_Interp}\ \rho\ m\ M$ give $\mathtt{LE\_Interp}\ \rho\ m'\ M$.
+\item $\rho\le\rho'$ preserves interpretations; matching statements for \texttt{Matches},
+\texttt{RHS}, \texttt{Const}.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \leanok
-Induction on the derivation. Every rule ends in a $\le$ premise, so shape monotonicity is a
-transitivity step at each constructor; valuation monotonicity only has to push through
-\texttt{Valuation.LE.push} in the binder cases.
+\lead{Idea} Induction on the derivation: every rule ends in a $\le$ premise, so shape monotonicity is
+transitivity at each constructor; valuation monotonicity pushes through \texttt{Valuation.LE.push} in
+the binder cases.
 \end{proof}
 
 \begin{lemma}[Shape-level pattern matching is deterministic]
@@ -592,30 +534,23 @@ transitivity step at each constructor; valuation monotonicity only has to push t
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3430}
 \uses{def:expa-le-interp,inductive:pattern-core}
-The shape-level matcher is well behaved: the head of a match is the expected constant of the
-expected arity (\texttt{varN\_const\_head}, \texttt{arity}), two matches of the same pattern against
-the same head agree (\texttt{unique}), two matches of \emph{different} patterns against
-componentwise compatible argument shapes force the two patterns to intersect
-(\texttt{matches\_inter}), and two matches of the \emph{same} pattern against componentwise
-compatible arguments are themselves compatible and can be joined (\texttt{compat\_join}).
-\thesisref{\texttt{axioms.tex} \S the $\iota$ computation rule and \S definitions
-($\delta$ reduction): the \texttt{Pattern} and \texttt{Params.Pat} layer is this file's abstraction
-of the environment's $\delta$ and $\iota$ rules.}
+\thesisref{\texttt{axioms.tex} \S the $\iota$ and $\delta$ rules: \texttt{Pattern}/\texttt{Params.Pat} is this file's abstraction of them.}
+
+\lead{In short} The matcher is well behaved: \hl{same pattern, same result}.
+\begin{itemize}
+\item The head of a match is the expected constant at the expected arity.
+\item Two matches of the same pattern against the same head agree (\texttt{unique}).
+\item Two matches of different patterns against compatible arguments force the patterns to intersect
+(\texttt{matches\_inter}); two matches of the same pattern against compatible arguments are
+compatible and join (\texttt{compat\_join}).
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \leanok
-Induction on the \texttt{Matches} derivation, using the class assumption \texttt{Params.pat\_wf}
-(well-formedness of registered patterns) and pattern intersection \texttt{Pattern.inter}.
-\texttt{Params.pat\_uniq} is not used in this block; its first use is at
-\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3931}.
+\lead{Idea} Induction on the \texttt{Matches} derivation, using \texttt{Params.pat\_wf} (registered
+patterns are well formed) and pattern intersection. \texttt{Params.pat\_uniq} first enters at
+\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3931}, not here.
 \end{proof}
-
-\begin{remark}
-These lemmas rest on the \texttt{Params} class field \texttt{pat\_wf}, and from line 3931 onwards
-on \texttt{pat\_uniq} as well. Both are assumptions: the repository contains no \texttt{Params}
-instance at all, so nothing shows that they hold for Lean's actual recursor rules, and this
-development does not address the question.
-\end{remark}
 
 \begin{theorem}[The shapes of a term form a directed set]
 \label{thm:expa-le-interp-compat-join}
@@ -623,27 +558,21 @@ development does not address the question.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3936}
 \uses{def:expa-le-interp,def:expa-wshape-join}
-If $\rho' \le \rho$, $\mathtt{LE\_Interp}\ \rho'\ m_1\ M$ and $\mathtt{LE\_Interp}\ \rho\ m_2\ M$,
-then $m_1$ and $m_2$ are compatible and $\mathtt{LE\_Interp}\ \rho\ (m_1 \sqcup m_2)\ M$. Any two
-shapes approximating the same term can therefore be combined, which is what lets arbitrary finite
-approximations be assembled into a witness.
+\lead{In short} Any two shapes approximating the same term \hl{combine into one}.
+\begin{itemize}
+\item \lead{Given} $\rho'\le\rho$, $\mathtt{LE\_Interp}\ \rho'\ m_1\ M$, $\mathtt{LE\_Interp}\ \rho\
+m_2\ M$.
+\item \lead{Then} $m_1$, $m_2$ compatible and $\mathtt{LE\_Interp}\ \rho\ (m_1\sqcup m_2)\ M$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-le-interp-matches,thm:expa-wshape-join-prop,thm:expa-hastype-join,thm:expa-le-interp-mono}
 \leanok
-Not one mutual induction but four separate ones stacked up: \texttt{RHS.compat\_join} (3561),
-\texttt{Const.compat\_mismatch} (3751--3785), \texttt{Const.compat\_join} (3786--3934), and
-finally a 139-line induction on the \texttt{LE\_Interp} derivation itself (3936--4074). They lean
-on \texttt{Matches.compat\_join}, \ref{thm:expa-wshape-join-prop} and
-\ref{thm:expa-hastype-join}; the hardest case is a $\delta$ or pattern mismatch between two
-unfoldings of the same constant (\texttt{Const.compat\_mismatch}).
+\lead{Idea} Four stacked inductions: \texttt{RHS.compat\_join}, \texttt{Const.compat\_mismatch},
+\texttt{Const.compat\_join}, then the derivation itself, using \ref{thm:expa-wshape-join-prop} and
+\ref{thm:expa-hastype-join}; the hard case is a $\delta$/pattern mismatch between two unfoldings of
+the same constant.
 \end{proof}
-
-\begin{remark}
-\texttt{Const.compat\_join} alone runs from line 3786 to line 3934, 149 lines with no intermediate
-structure and no comments. Only \texttt{LE\_Interp.strongSound} (206 lines), the \texttt{LRS} term
-(238) and \texttt{LR.adequacy} (327) are longer.
-\end{remark}
 
 \begin{theorem}[Substitution and weakening for the shape interpretation]
 \label{thm:expa-le-interp-subst}
@@ -651,26 +580,23 @@ structure and no comments. Only \texttt{LE\_Interp.strongSound} (206 lines), the
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4087}
 \uses{def:expa-le-interp}
-$\mathtt{LE\_Interp}\ \rho\ m\ (M[\sigma])$ holds if and only if there is a valuation $\rho'$ with
-$\mathtt{LE\_Interp}\ \rho'\ m\ M$ and $\mathtt{LE\_Interp}\ \rho\ (\rho'\ i)\ (\sigma\ i)$ for
-every index $i$. Specialised to single instantiation (\texttt{inst}), weakening (\texttt{weak}) and
-closed terms (\texttt{closed}).
-\thesisref{\texttt{typesys.tex} \S properties of substitution (\texttt{thm:subst}); this is the
-semantic counterpart of the substitution lemma.}
+\thesisref{\texttt{typesys.tex} \S properties of substitution (\texttt{thm:subst}): the semantic counterpart.}
+
+\lead{In short} $\mathtt{LE\_Interp}\ \rho\ m\ (M[\sigma])$ \hl{iff a suitable $\rho'$ exists}.
+\begin{itemize}
+\item $\mathtt{LE\_Interp}\ \rho'\ m\ M$ and $\mathtt{LE\_Interp}\ \rho\ (\rho'\ i)\ (\sigma\ i)$ for
+every $i$.
+\item Specialised to single instantiation (\texttt{inst}), weakening (\texttt{weak}), closed terms
+(\texttt{closed}).
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-le-interp-mono,thm:expa-le-interp-compat-join}
 \leanok
-The forward direction generalises over an arbitrary term whose substitution equals the given one,
-inducts on the derivation, and builds $\rho'$ by a conditional that pins the shape at the
-substituted index; the binder cases join the valuations produced by the sub-derivations using
-\ref{thm:expa-le-interp-compat-join}. The reverse direction is a direct induction.
+\lead{Idea} Forward: generalise over a term whose substitution equals the given one, induct, build
+$\rho'$, joining sub-valuations by \ref{thm:expa-le-interp-compat-join} at binders. Backward: direct
+induction.
 \end{proof}
-
-\begin{remark}
-\texttt{LE\_Interp.subst} is an exact biconditional with an existentially quantified valuation and
-is one of the best-designed results in the file.
-\end{remark}
 
 \begin{theorem}[Inversion of the interpretation at Pi and lambda shapes]
 \label{thm:expa-le-interp-inv}
@@ -678,19 +604,21 @@ is one of the best-designed results in the file.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4241}
 \uses{def:expa-le-interp,def:expa-tshape}
-If $\forall B.\,F$ is interpreted by $\mathtt{forallE}\ b\ f$ then $b$ interprets $B$ and, for every
-argument $X$ with shape $x$, $f\ @\ x$ interprets $F[X]$. Dually for a lambda against a
-$\mathtt{lam}$ shape.
-\thesisref{\texttt{unique.tex} lines 29--39, clause 2 of definitional inversion; this is the
-model-side version, transported to syntax only by \ref{thm:expa-lr-adequacy}.}
+\thesisref{\texttt{unique.tex} lines 29--39, clause 2 of definitional inversion; the model-side version, transported to syntax by \ref{thm:expa-lr-adequacy}.}
+
+\lead{In short} If a $\Pi$ or a lambda is interpreted by a matching shape, \hl{so are its parts}.
+\begin{itemize}
+\item $\forall B.\,F$ interpreted by $\mathtt{forallE}\ b\ f$ gives $b$ interprets $B$ and, for every
+$X$ of shape $x$, $f\ @\ x$ interprets $F[X]$.
+\item Dually for a lambda against a $\mathtt{lam}$ shape.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-le-interp-subst,thm:expa-le-interp-mono}
 \leanok
-Inversion on the \texttt{forallE} (resp.\ \texttt{lam}) rule, then
-\texttt{TShape.LE.forallE\_decomp} to push the trailing $\le$ into the components at a common
-level, then \texttt{WShapeFun.app\_eq} and the domain condition to relate $f\ @\ x$ with the table
-entry actually used, and finally \texttt{LE\_Interp.inst} for the codomain.
+\lead{Idea} Inversion on the rule; \texttt{TShape.LE.forallE\_decomp} pushes $\le$ into components at a
+common level; \texttt{WShapeFun.app\_eq} relates $f\ @\ x$ to the table entry used;
+\ref{thm:expa-le-interp-subst} for the codomain.
 \end{proof}
 
 \begin{definition}[Fitting valuations and typed interpretation]
@@ -699,16 +627,17 @@ entry actually used, and finally \texttt{LE\_Interp.inst} for the codomain.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4323}
 \uses{def:expa-le-interp,def:expa-shape-hastype,def:expa-valuation}
-$\mathtt{Fits}\ \Gamma\ \Delta\ \rho$ is an inductive predicate saying that $\Delta$ extends
-$\Gamma$ and that $\rho$ assigns to each variable of the extension a shape $x$ inhabiting a shape
-$a$ that interprets its type, with the extra closure condition that every shape of that type can be
-raised to a shape which is itself a type.
-$\mathtt{InterpTyped}\ \rho\ m\ M\ A$ says there are $m'$ and $a$ with $m \le m'$, $m'$
-interpreting $M$, $a$ interpreting $A$, and $m' : a$; \texttt{out} normalises both witnesses to a
-common level.
-\thesisref{\texttt{soundness.tex} Theorem \texttt{thm:sound2}, the membership statement
-$e \in \mathrm{tag}(\alpha)$ under interpretation: \texttt{InterpTyped} is its finitary shadow and
-\texttt{Fits} that of $\gamma \in \Gamma$.}
+\thesisref{\texttt{soundness.tex} Theorem \texttt{thm:sound2}: $\mathtt{InterpTyped}$ is the finitary shadow of $e\in\mathrm{tag}(\alpha)$, \texttt{Fits} that of $\gamma\in\Gamma$.}
+
+\lead{In short} $\mathtt{Fits}$: a valuation assigns each new variable a shape \hl{typed at an
+interpretation of its declared type}; $\mathtt{InterpTyped}$ bundles a term, its shape, and that
+typing.
+\begin{itemize}
+\item $\mathtt{Fits}\ \Gamma\ \Delta\ \rho$: $\Delta$ extends $\Gamma$; every assigned shape's type
+shape can itself be raised to a type.
+\item $\mathtt{InterpTyped}\ \rho\ m\ M\ A$: $\exists m'\ge m, a$ with $m'$ interpreting $M$, $a$
+interpreting $A$, $m':a$; \texttt{out} normalises both to a common level.
+\end{itemize}
 \end{definition}
 
 \section{Soundness of the interpretation}
@@ -719,28 +648,24 @@ $e \in \mathrm{tag}(\alpha)$ under interpretation: \texttt{InterpTyped} is its f
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4361}
 \uses{def:expa-fits-interptyped}
-The inductive steps of soundness, each stated as a hypothetical. Given that every shape of $F$ is
-typed at $\forall A.\,B$ and that every shape of $B[X]$ can be raised to a type shape, every shape
-of $F\ X$ is typed at $B[X]$ (\texttt{sound\_app}); analogously \texttt{sound\_lam} types a lambda
-at $\forall A.\,B$ and \texttt{sound\_forallE} types a $\Pi$ at
-$\mathrm{Sort}(\mathrm{imax}\ u\ v)$. \texttt{sound\_bot} is the trivial $\bot$ case.
-\thesisref{\texttt{soundness.tex} Theorem \texttt{thm:sound} (line 216), the corresponding cases of
-the soundness induction.}
+\thesisref{\texttt{soundness.tex} Theorem \texttt{thm:sound} (line 216): the corresponding induction cases.}
+
+\lead{In short} The \hl{inductive steps of soundness}, each a hypothetical.
+\begin{itemize}
+\item $F$ typed at $\forall A.\,B$, $B[X]$ raisable to a type $\Rightarrow$ $F\ X$ typed at $B[X]$
+(\texttt{sound\_app}).
+\item Analogously \texttt{sound\_lam} (a lambda at $\forall A.\,B$) and \texttt{sound\_forallE} (a
+$\Pi$ at $\mathrm{Sort}(\mathrm{imax}\ u\ v)$).
+\item \texttt{sound\_bot}: the trivial $\bot$ case.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-hastype-join,thm:expa-le-interp-inv,def:expa-shape-single}
 \leanok
-Each begins by discharging the case $m \le \bot$, then inverts the \texttt{LE\_Interp} derivation
-and assembles a witness by joining table entries. \texttt{sound\_lam} and \texttt{sound\_forallE}
-each induct over the finite table of the lambda or $\Pi$ shape, using singleton tables
-(\ref{def:expa-shape-single}) to build a well-formed \texttt{HasTypeLam} or \texttt{HasTypePi}
-step by step.
+\lead{Idea} Discharge $m\le\bot$, invert the interpretation, assemble a witness by joining table
+entries; \texttt{sound\_lam}/\texttt{sound\_forallE} induct over the finite table, using singleton
+tables (\ref{def:expa-shape-single}) step by step.
 \end{proof}
-
-\begin{remark}
-\texttt{sound\_lam} is about 105 lines and \texttt{sound\_forallE} about 100, both single tactic
-blocks with no comments.
-\end{remark}
 
 \begin{definition}[Semantic soundness predicates and strong soundness]
 \label{def:expa-soundeq-strongsound}
@@ -748,19 +673,18 @@ blocks with no comments.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4607}
 \uses{def:expa-fits-interptyped,def:expa-le-interp}
-$\mathtt{SoundEq}\ \Gamma\ M\ N$ says that under every fitting valuation $M$ and $N$ have exactly
-the same shape interpretations; $\mathtt{SoundTy}\ \Gamma\ M\ A$ says that under every fitting
-valuation every shape of $M$ is typed at a shape of $A$. \texttt{StrongSound} and
-\texttt{StrongSoundCore} are a mutually inductive strengthening of the typing judgement:
-\texttt{StrongSound} bundles $\Gamma \vdash M : A$, \texttt{SoundTy}, and a syntax-directed core
-derivation at some type $A'$ with $\mathtt{SoundEq}\ \Gamma\ A'\ A$. \texttt{StrongSoundEq} bundles
-a definitional equality with \texttt{SoundEq} and strong soundness of both sides.
-\thesisref{\texttt{soundness.tex} Theorems \texttt{thm:sound} (line 216) and \texttt{thm:sound2}
-(line 351): the two bullets of the soundness theorem are literally \texttt{SoundTy} and
-\texttt{SoundEq}.}
-\reviewnote{\texttt{StrongSoundCore.const} takes a function producing a \texttt{CtorBundle} for
-\emph{every} classification of the constant, which looks over-general, since a constant has one
-classification. It is worth checking whether that hypothesis is ever instantiated non-trivially.}
+\thesisref{\texttt{soundness.tex} Theorems \texttt{thm:sound}, \texttt{thm:sound2}: the two bullets are literally \texttt{SoundTy} and \texttt{SoundEq}.}
+
+\lead{In short} $\mathtt{SoundEq}$/$\mathtt{SoundTy}$ state soundness \hl{under every fitting
+valuation}; \texttt{StrongSound} strengthens typing to match.
+\begin{itemize}
+\item $\mathtt{SoundEq}\ \Gamma\ M\ N$: $M$, $N$ have the same shape interpretations.
+\item $\mathtt{SoundTy}\ \Gamma\ M\ A$: every shape of $M$ is typed at a shape of $A$.
+\item $\mathtt{StrongSound}$/\texttt{StrongSoundCore}: mutually inductive; bundles
+$\Gamma\vdash M:A$, \texttt{SoundTy}, and a syntax-directed core derivation at some $A'$ with
+$\mathtt{SoundEq}\ \Gamma\ A'\ A$. $\mathtt{StrongSoundEq}$ bundles a defeq with \texttt{SoundEq} and
+strong soundness of both sides.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Congruence and equivalence properties of SoundEq]
@@ -768,17 +692,21 @@ classification. It is worth checking whether that hypothesis is ever instantiate
 \lean{Lean4Lean.SExpr.SoundEq.rfl,Lean4Lean.SExpr.SoundEq.symm,Lean4Lean.SExpr.SoundEq.trans,Lean4Lean.SExpr.SoundEq.inst,Lean4Lean.SExpr.SoundEq.sort,Lean4Lean.SExpr.SoundEq.forallE,Lean4Lean.SExpr.SoundEq.forallE_inv,Lean4Lean.SExpr.SoundTy.defeq_l,Lean4Lean.SExpr.SoundTy.defeq_r,Lean4Lean.SExpr.StrongSoundEq.rfl,Lean4Lean.SExpr.StrongSoundEq.symm,Lean4Lean.SExpr.StrongSoundEq.trans,Lean4Lean.SExpr.StrongSoundEq.mk',Lean4Lean.SExpr.StrongSoundEq.hasType,Lean4Lean.SExpr.StrongSound.defeq,Lean4Lean.SExpr.StrongSound.sound}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4639}
-\texttt{SoundEq} is an equivalence relation, is preserved by instantiation with a well-typed term,
-and is a congruence for sorts and for $\Pi$; conversely \texttt{SoundEq.forallE\_inv} inverts it at
-$\Pi$ types. \texttt{SoundTy} transfers along \texttt{SoundEq} on either side, and the
-\texttt{StrongSoundEq} bundle inherits reflexivity, symmetry and transitivity.
+
+\lead{In short} \texttt{SoundEq} is an \hl{equivalence relation and a congruence} for sorts and $\Pi$.
+\begin{itemize}
+\item Preserved by instantiation with a well-typed term; \texttt{forallE\_inv} inverts it at $\Pi$
+types.
+\item \texttt{SoundTy} transfers along \texttt{SoundEq} on either side; \texttt{StrongSoundEq}
+inherits reflexivity, symmetry, transitivity.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:expa-soundeq-strongsound,thm:expa-le-interp-subst,thm:expa-le-interp-inv}
 \leanok
-Mostly by unfolding the definitions, since \texttt{SoundEq} is a biconditional quantified over
-fitting valuations. \texttt{SoundEq.inst} uses \texttt{LE\_Interp.inst} together with
-\texttt{Valuation.Fits.cons}, and \texttt{forallE\_inv} uses \ref{thm:expa-le-interp-inv}.
+\lead{Idea} Mostly unfolding, since \texttt{SoundEq} is a biconditional over fitting valuations;
+\texttt{inst} uses \ref{thm:expa-le-interp-subst} and \texttt{Fits.cons}; \texttt{forallE\_inv} uses
+\ref{thm:expa-le-interp-inv}.
 \end{proof}
 
 \begin{theorem}[Semantic unique typing]
@@ -787,29 +715,24 @@ fitting valuations. \texttt{SoundEq.inst} uses \texttt{LE\_Interp.inst} together
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4750}
 \uses{def:expa-soundeq-strongsound}
-If $\mathtt{StrongSound}\ \Gamma\ M\ A$ and $\mathtt{StrongSound}\ \Gamma\ M\ B$ then
-$\mathtt{SoundEq}\ \Gamma\ A\ B$: the type of a term is unique up to sameness of shape
-interpretation.
-\thesisref{\texttt{unique.tex} Theorems \texttt{thm:unique} and \texttt{thm:utype} (lines 4 and 40),
-but proved semantically and \emph{without} the $\vdash_n$ stratification the thesis needs.}
+\thesisref{\texttt{unique.tex} Theorems \texttt{thm:unique}, \texttt{thm:utype}: proved here semantically, without the $\vdash_n$ stratification.}
+
+\lead{In short} The type of a term is unique \hl{up to sameness of shape interpretation}.
+\begin{itemize}
+\item \lead{Given} $\mathtt{StrongSound}\ \Gamma\ M\ A$ and $\mathtt{StrongSound}\ \Gamma\ M\ B$.
+\item \lead{Then} $\mathtt{SoundEq}\ \Gamma\ A\ B$.
+\item \lead{Caveat} Unconditional in itself; supplying \texttt{StrongSound} for an arbitrary
+derivation goes through Theorem~\ref{thm:expa-le-interp-strongsound}, which is tainted.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{family:expa-soundeq-lemmas}
 \leanok
-Induction on the term $M$, reduced by \texttt{uniq\_of\_core} to the syntax-directed core
-derivations, which are then matched pairwise: the variable case uses uniqueness of
-\texttt{Lookup}, the application case uses \texttt{SoundEq.forallE\_inv} and
-\texttt{SoundEq.inst}, the lambda case uses \texttt{SoundEq.forallE}, and the $\Pi$ case uses
+\lead{Idea} Induction on $M$, reduced by \texttt{uniq\_of\_core} to the syntax-directed core
+derivations, matched pairwise: variable by uniqueness of \texttt{Lookup}, application by
+\texttt{forallE\_inv}/\texttt{inst}, lambda by \texttt{SoundEq.forallE}, $\Pi$ by
 \texttt{SoundEq.sort}.
 \end{proof}
-
-\begin{remark}
-This is a highlight of the development. The thesis obtains unique typing only relative to the
-stratified judgement $\vdash_n$ and only after Church--Rosser; here it falls out of the model
-directly. It is, however, a statement about \texttt{StrongSound}, and \texttt{StrongSound} is
-supplied for arbitrary derivations only by \ref{thm:expa-le-interp-strongsound}, which is
-conditional.
-\end{remark}
 
 \begin{lemma}[Realising application spines against pattern rules]
 \label{thm:expa-build-spine}
@@ -817,28 +740,23 @@ conditional.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4764}
 \uses{def:expa-le-interp,def:expa-soundeq-strongsound,inductive:pattern-core}
-Machinery connecting the syntactic matcher \texttt{Pattern.MatchesS} and right-hand-side
-application \texttt{Pattern.RHS.applyS} with their shape-level counterparts: a term matching a
-registered pattern decomposes into a constant head applied to a spine whose arguments carry shapes
-(\texttt{build\_spine}, \texttt{Matches.of\_matchesS}), and shape interpretations transfer across
-the right-hand side of a rule in both directions (\texttt{RHS.le\_applyS},
-\texttt{RHS.of\_applyS}).
-\thesisref{\texttt{axioms.tex} \S the $\iota$ computation rule: this is the interpretation-side
-account of $\iota$ and $\delta$ rules as pattern rewrite rules.}
+\thesisref{\texttt{axioms.tex} \S the $\iota$ rule: the interpretation-side account of $\iota$/$\delta$ as pattern rewrites.}
+
+\lead{In short} Connects the \hl{syntactic matcher} with its shape-level counterpart.
+\begin{itemize}
+\item A term matching a registered pattern decomposes into a constant head applied to a shaped spine
+(\texttt{build\_spine}, \texttt{Matches.of\_matchesS}).
+\item Shape interpretations transfer across a rule's right-hand side, both directions
+(\texttt{RHS.le\_applyS}, \texttt{RHS.of\_applyS}).
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{thm:expa-le-interp-matches}
 \leanok
-Induction on the \texttt{MatchesS} and \texttt{RHS} derivations, with
-\texttt{apps\_realize\_inv} peeling one application at a time off a $\Pi$-telescope while tracking
-the \texttt{StrongSound} typing of the partial spine.
+\lead{Idea} Induction on \texttt{MatchesS}/\texttt{RHS}; \texttt{apps\_realize\_inv} peels one
+application at a time off a $\Pi$-telescope, tracking \texttt{StrongSound} typing of the partial
+spine.
 \end{proof}
-
-\begin{remark}
-These lemmas return an existential of the form ``there is a level $n'$ such that for all
-$k \ge n'$'', so the level-polymorphism bookkeeping is threaded by hand everywhere; a
-\texttt{TShape}-first design would have avoided it.
-\end{remark}
 
 \begin{theorem}[Soundness of the shape interpretation]
 \label{thm:expa-le-interp-strongsound}
@@ -846,11 +764,15 @@ $k \ge n'$'', so the level-polymorphism bookkeeping is threaded by hand everywhe
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5054}
 \uses{def:expa-soundeq-strongsound,inductive:expb-sexpr-isdefeq}
-If $\Gamma \vdash M \equiv N : A$ then $\mathtt{StrongSoundEq}\ \Gamma\ M\ N\ A$. Consequently
-(\texttt{LE\_Interp.sound}) for every fitting valuation $M$ and $N$ have exactly the same shape
-interpretations, and every shape of $M$ is typed at a shape of $A$.
-\thesisref{\texttt{soundness.tex} Theorems \texttt{thm:sound} (line 216) and \texttt{thm:sound2}
-(line 351).}
+\thesisref{\texttt{soundness.tex} Theorems \texttt{thm:sound}, \texttt{thm:sound2}.}
+
+\lead{In short} Definitional equality \hl{preserves the shape interpretation and its typing}.
+\begin{itemize}
+\item \lead{Given} $\Gamma\vdash M\equiv N:A$.
+\item \lead{Then} $\mathtt{StrongSoundEq}\ \Gamma\ M\ N\ A$; consequently, under every fitting
+valuation, $M$ and $N$ have the same shape interpretations and every shape of $M$ is typed at a shape
+of $A$ (\texttt{LE\_Interp.sound}).
+\end{itemize}
 \axfoot{sorryAx via SExpr.IsDefEq.strong (Experimental/SExpr.lean:679) and the SExpr substitution
 and weak-head-reduction lemmas; plus the declared axiom Lean4Lean.SExpr.Params.extra\_pat
 (Experimental/SExpr.lean:614)}
@@ -858,46 +780,33 @@ and weak-head-reduction lemmas; plus the declared axiom Lean4Lean.SExpr.Params.e
 \begin{proof}
 \uses{thm:expa-le-interp-sound-cases,thm:expa-build-spine,thm:expa-le-interp-compat-join,thm:expa-hastype-proofirrel,class:expb-sexpr-params}
 \leanok
-A 200-line induction on the \emph{strong} definitional-equality derivation obtained by
-\texttt{replace H := H.strong}, with one case per rule: variables by inversion on
-\texttt{Valuation.Fits}, $\beta$ and $\eta$ by \ref{thm:expa-le-interp-subst}, proof irrelevance by
-\ref{thm:expa-hastype-proofirrel}, application, lambda and $\Pi$ by
-\ref{thm:expa-le-interp-sound-cases}, and the \texttt{extra} ($\delta$ and $\iota$) case by
-\ref{thm:expa-build-spine} together with \texttt{Params.extra\_pat}.
-\reviewnote{The \texttt{replace H := H.strong} at line 5055 invokes
-\texttt{SExpr.IsDefEq.strong}, which is a \texttt{sorry}
-(\srcloc{Lean4Lean/Experimental/SExpr.lean}{679}); the \texttt{extra} case at line 5232 invokes the
-genuine \texttt{axiom Params.extra\_pat}. This theorem and everything below it are therefore
-conditional, and nothing in the file or in a comment says so.}
+\lead{Idea} Induction on the \emph{strong} defeq derivation (\texttt{replace H := H.strong}): variables by
+\texttt{Fits} inversion, $\beta$/$\eta$ by \ref{thm:expa-le-interp-subst}, proof irrelevance by
+\ref{thm:expa-hastype-proofirrel}, application/lambda/$\Pi$ by
+\ref{thm:expa-le-interp-sound-cases}, the $\delta$/$\iota$ case by \ref{thm:expa-build-spine} and
+\texttt{Params.extra\_pat}.
 \end{proof}
 
 \section{The shape-indexed logical relation}
 
-\begin{definition}[The \texttt{LogRel} interface]
+\begin{definition}[The LogRel interface]
 \label{structure:expa-logrel}
 \lean{Lean4Lean.SExpr.LogRelBase,Lean4Lean.SExpr.LogRel,Lean4Lean.SExpr.LogRelBase.TyDefEq.sort}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5265}
 \uses{def:expa-wshape,def:expa-shape-hastype,family:expb-sexpr-operational}
-$\mathtt{LogRelBase}\ \Gamma\ n$ carries two predicates over $\mathtt{WShape}\ n$:
-$\mathtt{DefEq}\ M\ N\ A\ m\ a$ (``$M$ and $N$ are equal at type $A$, element-shape $m$ and
-type-shape $a$'') and $\mathtt{TyDefEq}\ A\ B\ a$ (``$A$ and $B$ are equal types at shape $a$'').
-$\mathtt{LogRel}$ extends it with nineteen closure obligations: at a sort shape both relations say
-that the two sides weak-head reduce to the \emph{same} sort (\texttt{sort\_iff},
-\texttt{sort\_iff\_ty}); everything is related at element-shape $\bot$ provided the type-shape is a
-type, $a : \mathrm{Type}$ (\texttt{bot}); \texttt{toType} turns a \texttt{DefEq} at a sort
-type-shape into a \texttt{TyDefEq} at the \emph{element} shape; then left-reflexivity
-($M \equiv N$ gives $M \equiv M$: \texttt{left}, \texttt{left\_ty}), symmetry (\texttt{symm},
-\texttt{symm\_ty}), three transitivities (\texttt{trans}, \texttt{trans'},
-\texttt{trans\_ty}), conversion (\texttt{conv}), four monotonicity fields (\texttt{mono\_r\_2},
-\texttt{mono\_r\_2\_ty}, \texttt{mono\_r\_1}, \texttt{mono\_l}), closure of \texttt{TyDefEq}
-under joins of compatible shapes (\texttt{join\_ty}), and invariance under weak-head reduction of
-both sides (\texttt{whr}, \texttt{whr\_ty}).
-\reviewnote{Bundling the obligations as a record is good design: it lets the successor step
-\ref{def:expa-lrs} be written once, generically in its predecessor. The two field docstrings (lines
-5266 and 5268) are the only documentation here; the nineteen obligations carry none, and several are
-not obvious, in particular \texttt{trans'} (a heterogeneous transitivity at sort types) and
-\texttt{mono\_r\_1}, which needs an extra premise $\mathtt{TyDefEq}\ A\ A\ a'$.}
+\lead{In short} A record of \hl{nineteen closure obligations} over two predicates on
+$\mathtt{WShape}\ n$, packaged so the successor step (\ref{def:expa-lrs}) can be built once,
+generically.
+\begin{itemize}
+\item $\mathtt{DefEq}\ M\ N\ A\ m\ a$: $M$, $N$ equal at type $A$, element-shape $m$, type-shape $a$.
+$\mathtt{TyDefEq}\ A\ B\ a$: $A$, $B$ equal types at shape $a$.
+\item At a sort: both demand the same weak-head-reduced sort (\texttt{sort\_iff},
+\texttt{sort\_iff\_ty}); trivial at $\bot$ when $a:\mathrm{Type}$ (\texttt{bot}); \texttt{toType}
+turns a sort-typed \texttt{DefEq} into a \texttt{TyDefEq} at the element shape.
+\item Left-reflexivity, symmetry, three transitivities, conversion, four monotonicity fields, closure
+of \texttt{TyDefEq} under compatible joins, and invariance under weak-head reduction of both sides.
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The relation at shape level zero]
@@ -906,144 +815,142 @@ not obvious, in particular \texttt{trans'} (a heterogeneous transitivity at sort
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5298}
 \uses{structure:expa-logrel,family:expb-sexpr-operational}
-At level $0$ a well-formed shape is $\bot$ or a sort, so the relation collapses to a statement about
-weak-head normal forms. $\mathtt{LR0.TyDefEq}\ \Gamma\ M\ N$ is $\mathrm{True}$ at $\bot$, and at
-a sort shape it says that some sort $\mathrm{Sort}\ u$ is a common weak-head reduct of $M$ and of
-$N$. $\mathtt{LR0.DefEq}$ matches on the type-shape, giving $\mathrm{True}$ at $\bot$ and
-$\mathtt{LR0.TyDefEq}$ at a sort. All nineteen obligations are discharged by
-\texttt{simp}/\texttt{split}/\texttt{trivial}, the three transitivity fields using determinacy of
-weak-head reduction (\texttt{WHRedS.determ}).
-\thesisref{\texttt{unique.tex} Theorem \texttt{thm:0dinv} (line 56), ``$\vdash_0$ has definitional
-inversion'': the base case, reindexed by shape level instead of by conversion-alternation depth.}
-\reviewnote{Demanding the \emph{same} $u$ on both sides is exactly where sort injectivity enters the
-model, and the rest of the development exists to propagate this one clause upwards. Nothing in the
-source says so.}
+\thesisref{\texttt{unique.tex} Theorem \texttt{thm:0dinv} (line 56): the base case, reindexed by shape level.}
+
+\lead{In short} At level $0$ a well-formed shape is $\bot$ or a sort: the relation demands \hl{the
+same sort on both sides} -- exactly where sort injectivity enters.
+\begin{itemize}
+\item $\mathtt{LR0.TyDefEq}\ \Gamma\ M\ N$: $\mathrm{True}$ at $\bot$; at a sort, some
+$\mathrm{Sort}\ u$ is a common weak-head reduct of $M$ and $N$.
+\item $\mathtt{LR0.DefEq}$ matches on the type-shape: $\mathrm{True}$ at $\bot$,
+$\mathtt{LR0.TyDefEq}$ at a sort.
+\item All nineteen obligations by \texttt{simp}/\texttt{split}/\texttt{trivial}; the three
+transitivities use determinacy of weak-head reduction.
+\end{itemize}
 \end{definition}
 
-\begin{definition}[Pi-edge and lambda validity at level $n+1$]
+\begin{definition}[Pi-edge and lambda validity at level n+1]
 \label{def:expa-lrs-components}
 \lean{Lean4Lean.SExpr.LRS.PiDefEq,Lean4Lean.SExpr.LRS.ValTyPi2,Lean4Lean.SExpr.LRS.LamDefEq,Lean4Lean.SExpr.LRS.PiDefEq.left,Lean4Lean.SExpr.LRS.LamDefEq.left}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5376}
 \uses{structure:expa-logrel,def:expa-shape-app}
-Three predicates relative to a predecessor relation $\mathit{IH} : \mathtt{LogRel}\ \Gamma\ n$.
-$\mathtt{PiDefEq}\ \mathit{IH}\ B\ F_1\ F_2\ b\ f$ is a conjunction: for all arguments $x, y$ with
-$\Gamma \vdash x \equiv y : B$ related at a shape $p : b$, the instantiated codomains $F_i[x]$ and
-$F_i[y]$ are equal types at $f\ @\ p$ for $i = 1,2$; and for every single well-typed argument $x$ at
-$p : b$, $F_1[x]$ and $F_2[x]$ are equal types at $f\ @\ p$. Next,
-$\mathtt{ValTyPi2}\ \mathit{IH}\ M_1\ M_2\ b\ f$ says that
-$M_1$ and $M_2$ weak-head reduce to $\Pi$s whose domains are convertible and equal types at $b$ and
-whose codomains are convertible (under the first domain) and satisfy $\mathtt{PiDefEq}$. $\mathtt{LamDefEq}$ is the same pattern
-one level down for terms: applying $M$ and $N$ to related arguments gives results related at
-$(m\ @\ p,\ a_2\ @\ p)$. The \texttt{left} lemmas project a two-sided instance to a reflexive one.
-\reviewnote{The docstrings that start appearing here are refactoring notes (``merged
-\texttt{PiEdgeDefEq} / \texttt{PiEdgeEq2}'', line 5373) rather than specifications. They are not
-the file's first: \texttt{WShape.casesOn'} (1001), \texttt{WShape.casesOn} (1020),
-\texttt{Valuation.Compat} (3297), \texttt{Valuation.join} (3301) and the two \texttt{LogRelBase}
-fields (5266, 5268) precede them, six of the file's thirteen.}
+\lead{In short} Three predicates relative to a predecessor relation $\mathit{IH}:\mathtt{LogRel}\
+\Gamma\ n$: \hl{lift $\Pi$/lambda equality one level up}.
+\begin{itemize}
+\item $\mathtt{PiDefEq}\ \mathit{IH}\ B\ F_1\ F_2\ b\ f$: for related arguments $x,y:B$ at shape
+$p:b$, $F_i[x]\equiv F_i[y]$ as types at $f\ @\ p$ ($i=1,2$); plus a single-argument version.
+\item $\mathtt{ValTyPi2}$: $M_1,M_2$ weak-head reduce to $\Pi$s with convertible, $b$-typed domains
+and codomains convertible under the first domain and satisfying \texttt{PiDefEq}.
+\item $\mathtt{LamDefEq}$: the same pattern for terms -- applying $M,N$ to related arguments gives
+results related at $(m\ @\ p,\ a_2\ @\ p)$.
+\item \texttt{left} lemmas project a two-sided instance to a reflexive one.
+\end{itemize}
 \end{definition}
 
-\begin{definition}[Type equality at level $n+1$]
+\begin{definition}[Type equality at level n+1]
 \label{def:expa-lrs-tydefeq}
 \lean{Lean4Lean.SExpr.LRS.TyDefEq,Lean4Lean.SExpr.LRS.TyDefEq.left,Lean4Lean.SExpr.LRS.TyDefEq.symm,Lean4Lean.SExpr.LRS.TyDefEq.trans,Lean4Lean.SExpr.LRS.TyDefEq.bot,Lean4Lean.SExpr.LRS.TyDefEq.sort_iff,Lean4Lean.SExpr.LRS.TyDefEq.lam',Lean4Lean.SExpr.LRS.TyDefEq.ctor',Lean4Lean.SExpr.LRS.TyDefEq.forallE_iff}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5431}
 \uses{def:expa-lrs-components,structure:expa-logrel}
-$\mathtt{LRS.TyDefEq}\ \mathit{IH}\ M\ N$ is defined by cases on the element-shape: it is
-$\mathrm{True}$ at $\bot$, $\mathtt{lam}$, $\mathtt{ctor}$ and $\mathtt{indTy}$; at a sort shape it
-demands a common weak-head normal sort; at $\mathtt{forallE}\ b\ f$ it demands
-$\mathtt{ValTyPi2}\ \mathit{IH}\ M\ N\ b\ f$. A block of \texttt{@[simp]} lemmas reduces it at each
-head form. Left-reflexivity, symmetry and transitivity are derived from the corresponding fields of
-$\mathit{IH}$, transitivity using determinacy of weak-head reduction and both symmetry and
-transitivity transporting the codomain equality along the domain conversion (\texttt{defeqDF\_l}).
-\thesisref{\texttt{unique.tex} lines 29--39, clauses 1 and 2 of definitional inversion: the relation
-is non-trivial exactly at sort shapes and at $\Pi$ shapes.}
-\reviewnote{The ``true at $\mathtt{lam}$/$\mathtt{ctor}$/$\mathtt{indTy}$'' clauses encode that a
-non-type shape carries no type information. That is correct but subtle, and the one-line docstring
-(``Non-trivial at \texttt{.forallE} (Pi injectivity) and \texttt{.sort} (sort injectivity)'') is all
-the explanation a reader gets.}
+\thesisref{\texttt{unique.tex} lines 29--39, clauses 1--2: non-trivial exactly at sort and $\Pi$ shapes.}
+
+\lead{In short} Defined by cases on the element-shape; \hl{trivial except at sort and $\Pi$}, where a
+non-type shape carries no type information.
+\begin{center}
+\begin{tabular}{p{0.42\linewidth}p{0.50\linewidth}}
+\toprule
+Shape & \texttt{LRS.TyDefEq} \\
+\midrule
+$\bot$, $\mathtt{lam}$, $\mathtt{ctor}$, $\mathtt{indTy}$ & $\mathrm{True}$ \\
+sort & common weak-head normal sort \\
+$\mathtt{forallE}\ b\ f$ & $\mathtt{ValTyPi2}\ \mathit{IH}\ M\ N\ b\ f$ \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
+Left-reflexivity, symmetry, transitivity from the corresponding $\mathit{IH}$ fields; transitivity
+uses determinacy of weak-head reduction, both transport the codomain equality along the domain
+conversion (\texttt{defeqDF\_l}).
 \end{definition}
 
-\begin{lemma}[Monotonicity, join and reduction-invariance of the level-$(n{+}1)$ components]
+\begin{lemma}[Monotonicity, join and reduction-invariance at level n+1]
 \label{family:expa-lrs-mono}
 \lean{Lean4Lean.SExpr.LRS.LamDefEq.mono_r_1,Lean4Lean.SExpr.LRS.LamDefEq.mono_r_2,Lean4Lean.SExpr.LRS.LamDefEq.mono_l,Lean4Lean.SExpr.LRS.PiDefEq.mono_r_2,Lean4Lean.SExpr.LRS.PiDefEq.join,Lean4Lean.SExpr.LRS.LamDefEq.whr,Lean4Lean.SExpr.LRS.LamDefEq.symm,Lean4Lean.SExpr.LRS.LamDefEq.trans}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5403}
 \uses{def:expa-lrs-components}
-$\mathtt{LamDefEq}$ and $\mathtt{PiDefEq}$ move up (\texttt{mono\_r\_1}) and down
-(\texttt{mono\_r\_2}) along an increase of the domain and codomain type-shapes, provided the
-relevant $\mathtt{HasTypeLam}$/$\mathtt{HasTypePi}$ side conditions hold at both;
-$\mathtt{LamDefEq}$ is antitone in the element-shape (\texttt{mono\_l}); $\mathtt{PiDefEq}$ is
-closed under joins of compatible domain and codomain shapes (\texttt{PiDefEq.join}); and
-$\mathtt{LamDefEq}$ is invariant under weak-head reduction of the two terms (\texttt{whr}),
-symmetric and transitive.
+\lead{In short} \texttt{LamDefEq}/\texttt{PiDefEq} \hl{move along the order, join, and survive
+weak-head reduction}.
+\begin{itemize}
+\item Move up (\texttt{mono\_r\_1}) and down (\texttt{mono\_r\_2}) the domain/codomain type-shapes,
+given the matching \texttt{HasTypeLam}/\texttt{HasTypePi} side conditions.
+\item \texttt{LamDefEq} is antitone in the element-shape (\texttt{mono\_l}).
+\item \texttt{PiDefEq} closed under joins of compatible domain/codomain shapes.
+\item \texttt{LamDefEq} invariant under weak-head reduction of both terms, symmetric, transitive.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{thm:expa-hastype-mono,thm:expa-hastype-join,def:expa-shape-app}
 \leanok
-Each lemma threads the corresponding $\mathit{IH}$ obligation through the universally quantified
-argument. The intermediate shapes come from the table inversions \texttt{WShape.HasDom.iff} and
-\texttt{WShape.HasTypeLam.iff} together with the application monotonicity lemmas
-\texttt{WShapeFun.app\_mono\_l} and \texttt{app\_mono\_r}; \texttt{PiDefEq.join} additionally uses
-\texttt{WShape.Join.mk}, \texttt{WShapeFun.Join.mk} and \ref{thm:expa-hastype-join} to relate the
-values of the two tables at a common input, and \texttt{LamDefEq.whr} uses $\mathit{IH}$'s
-\texttt{whr} field under \texttt{WHRed.app}.
+\lead{Idea} Thread the $\mathit{IH}$ obligation through the quantified argument; intermediate shapes from
+table inversions and application monotonicity; \texttt{PiDefEq.join} also uses \texttt{Join.mk} and
+\ref{thm:expa-hastype-join}.
 \end{proof}
 
-\begin{definition}[Term equality at level $n+1$]
+\begin{definition}[Term equality at level n+1]
 \label{def:expa-lrs-defeq}
 \lean{Lean4Lean.SExpr.LRS.DefEq,Lean4Lean.SExpr.LRS.DefEq.lam_forallE,Lean4Lean.SExpr.LRS.DefEq.bot_a,Lean4Lean.SExpr.LRS.DefEq.sort_a,Lean4Lean.SExpr.LRS.DefEq.bot_m,Lean4Lean.SExpr.LRS.DefEq.sort_forallE,Lean4Lean.SExpr.LRS.DefEq.forallE_forallE,Lean4Lean.SExpr.LRS.DefEq.ctor_forallE,Lean4Lean.SExpr.LRS.DefEq.indTy_forallE,Lean4Lean.SExpr.LRS.DefEq.lam_a,Lean4Lean.SExpr.LRS.DefEq.ctor_a,Lean4Lean.SExpr.LRS.DefEq.indTy_a,Lean4Lean.SExpr.LRS.TyDefEq.lam_m,Lean4Lean.SExpr.LRS.TyDefEq.ctor_m,Lean4Lean.SExpr.LRS.TyDefEq.indTy_m}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5612}
 \uses{def:expa-lrs-components,def:expa-lrs-tydefeq}
-$\mathtt{LRS.DefEq}\ \mathit{IH}\ M\ N\ A\ m\ a$ matches first on the type-shape $a$: it is
-$\mathrm{True}$ at $\bot$ and at $\mathtt{indTy}$, degenerates to $\mathtt{LRS.TyDefEq}$ at a sort
-shape, and at $\mathtt{forallE}\ a_1\ a_2$ it matches on the element-shape, giving $\mathrm{True}$
-at $\bot$ and, at $\mathtt{lam}\ m_g$, the existence of $A_1, A_2$ with
-$\Gamma \vdash A \to^{*}_{\mathrm{wh}} \forall A_1.\,A_2$, $A_1$ and $A_2$ well typed,
-$\mathtt{TyDefEq}\ A_1\ A_1\ a_1$, $\mathtt{PiDefEq}\ \mathit{IH}\ A_1\ A_2\ A_2\ a_1\ a_2$ and
-$\mathtt{LamDefEq}\ \mathit{IH}\ M\ N\ A_1\ A_2\ m_g\ a_1\ a_2$. Every other pairing of head forms
-is $\mathrm{False}$. Fourteen \texttt{@[simp]} lemmas expose these cases.
-\reviewnote{The definition uses a dependent \texttt{match ha : a.1 with} and recovers
-well-formedness inside each branch by \texttt{have wfa1 := (ha $\triangleright$ a.2).1}. That is why
-the unfolding lemmas at lines 5629--5655 are needed at all, and why the one that has to expose the
-repackaged subtypes, \texttt{DefEq.lam\_forallE}, is proved by a \texttt{show} plus
-\texttt{Subtype.eta} dance (the other thirteen are \texttt{rfl}). A definition through
-\texttt{WShape.casesOn'}
-(\ref{def:expa-wshape}) would have avoided the whole block.}
+\lead{In short} Matches first on the \hl{type-shape}, then, at a $\Pi$ type-shape, on the
+element-shape.
+\begin{center}
+\begin{tabular}{p{0.34\linewidth}p{0.59\linewidth}}
+\toprule
+Type-shape $a$ & \texttt{LRS.DefEq} \\
+\midrule
+$\bot$, $\mathtt{indTy}$ & $\mathrm{True}$ \\
+sort & $\mathtt{LRS.TyDefEq}$ \\
+$\mathtt{forallE}$, element $\bot$ & $\mathrm{True}$ \\
+$\mathtt{forallE}\ a_1\ a_2$, element $\mathtt{lam}\ m_g$ & $\exists A_1,A_2$ with
+$A\to^*_{\mathrm{wh}}\forall A_1.A_2$, both well typed, $\mathtt{TyDefEq}\ A_1\ A_1\ a_1$,
+$\mathtt{PiDefEq}\ \mathit{IH}\ A_1\ A_2\ A_2\ a_1\ a_2$,
+$\mathtt{LamDefEq}\ \mathit{IH}\ M\ N\ A_1\ A_2\ m_g\ a_1\ a_2$ \\
+any other pairing & $\mathrm{False}$ \\
+\bottomrule
+\end{tabular}\par\smallskip
+\end{center}
+Fourteen \texttt{@[simp]} lemmas expose these cases.
 \end{definition}
 
-\begin{definition}[The successor step \texttt{LRS}]
+\begin{definition}[The successor step LRS]
 \label{def:expa-lrs}
 \lean{Lean4Lean.SExpr.LRS}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5657}
 \uses{def:expa-lrs-defeq,def:expa-lrs-tydefeq,family:expa-lrs-mono,structure:expa-logrel}
-$\mathtt{LRS}$ turns a $\mathtt{LogRel}\ \Gamma\ n$ into a $\mathtt{LogRel}\ \Gamma\ (n{+}1)$ whose
-two predicates are $\mathtt{LRS.DefEq}$ and $\mathtt{LRS.TyDefEq}$, discharging all nineteen
-obligations. Each field splits on the two shapes, delegates the trivial head forms to the
-\texttt{@[simp]} lemmas of \ref{def:expa-lrs-defeq}, the sort case to $\mathtt{LRS.TyDefEq}$, and the
-$\Pi$ case to the corresponding lemma of \ref{family:expa-lrs-mono} or to the predecessor relation.
-Seven of the nineteen are one-liners (\texttt{sort\_iff}, \texttt{sort\_iff\_ty}, \texttt{bot},
-\texttt{left\_ty}, \texttt{symm\_ty}, \texttt{trans\_ty}, \texttt{toType}); at the other end
-\texttt{mono\_r\_1} and \texttt{mono\_l} run to 38 and 46 lines.
-\thesisref{\texttt{unique.tex} Theorem \texttt{thm:1dinv} (line 258), ``$\vdash_{n+1}$ has
-definitional inversion'': the inductive step, stratified by shape level instead of conversion depth
-and with no Church--Rosser theorem needed.}
-\reviewnote{The construction is a single 238-line structure-instance term (lines 5657--5894). The
-nineteen field proofs are unnamed, cannot be stated or tested independently, and carry no comments;
-this is the least reviewable form the step could take.}
+\thesisref{\texttt{unique.tex} Theorem \texttt{thm:1dinv} (line 258): the inductive step, stratified by shape level, needing no Church--Rosser theorem.}
+
+\lead{In short} Turns a $\mathtt{LogRel}\ \Gamma\ n$ into a $\mathtt{LogRel}\ \Gamma\ (n{+}1)$,
+discharging \hl{all nineteen obligations}.
+\begin{itemize}
+\item \texttt{DefEq}/\texttt{TyDefEq} are \ref{def:expa-lrs-defeq}/\ref{def:expa-lrs-tydefeq}; trivial
+head forms delegate to their \texttt{@[simp]} lemmas, the sort case to \texttt{LRS.TyDefEq}, the $\Pi$
+case to \ref{family:expa-lrs-mono} or the predecessor relation.
+\end{itemize}
 \end{definition}
 
-\begin{definition}[The relation \texttt{LR}]
+\begin{definition}[The relation LR]
 \label{def:expa-lr}
 \lean{Lean4Lean.SExpr.LR,Lean4Lean.SExpr.LR_zero,Lean4Lean.SExpr.LR_succ}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5896}
 \uses{def:expa-lr0,def:expa-lrs}
-$\mathtt{LR}\ \Gamma : \mathtt{LogRel}\ \Gamma\ n$ is defined by recursion on the shape level,
-$\mathtt{LR}_0 = \mathtt{LR0}$ and $\mathtt{LR}_{n+1} = \mathtt{LRS}(\mathtt{LR}_n)$, with the two
-\texttt{@[simp]} unfolding lemmas \texttt{LR\_zero} and \texttt{LR\_succ}.
+\lead{In short} $\mathtt{LR}\ \Gamma:\mathtt{LogRel}\ \Gamma\ n$ by recursion on the shape level:
+$\mathtt{LR}_0=\mathtt{LR0}$, $\mathtt{LR}_{n+1}=\mathtt{LRS}(\mathtt{LR}_n)$, with \hl{unfolding
+lemmas} \texttt{LR\_zero}, \texttt{LR\_succ}.
 \end{definition}
 
 \begin{theorem}[The relation is invariant under shape lifting]
@@ -1052,28 +959,20 @@ $\mathtt{LR}_0 = \mathtt{LR0}$ and $\mathtt{LR}_{n+1} = \mathtt{LRS}(\mathtt{LR}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{6046}
 \uses{def:expa-lr,def:expa-shape-lift}
-For $n \le n'$ and shapes $m, a : \mathtt{WShape}\ n$ with $m : a$, the relation at level $n'$
-between the lifted shapes is equivalent to the relation at level $n$ between the originals:
-$\mathtt{LR}.\mathtt{DefEq}\ M\ N\ A\ (\mathtt{lift}_{n'} m)\ (\mathtt{lift}_{n'} a)$ holds
-if and only if $\mathtt{LR}.\mathtt{DefEq}\ M\ N\ A\ m\ a$ does, and likewise for
-$\mathtt{TyDefEq}$ when
-$m : \mathrm{Type}$. This is what makes the level index irrelevant and lets $\mathtt{TShape}$-indexed
-statements be used against a level-indexed relation.
+\lead{In short} Lifting both shapes to a higher level \hl{does not change the relation}.
+\begin{itemize}
+\item \lead{Given} $n\le n'$, $m,a:\mathtt{WShape}\ n$ with $m:a$.
+\item \lead{Then} $\mathtt{LR.DefEq}\ M\ N\ A\ (\mathtt{lift}_{n'}m)\ (\mathtt{lift}_{n'}a)\iff
+\mathtt{LR.DefEq}\ M\ N\ A\ m\ a$; likewise \texttt{TyDefEq} when $m:\mathrm{Type}$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-hastype-mono,def:expa-lrs-defeq}
 \leanok
-Induction on $n \le n'$. The one-step case \texttt{LR.lift\_succ\_aux} is a simultaneous statement
-about $\mathtt{DefEq}$ and $\mathtt{TyDefEq}$ proved by case analysis on the shape; the $\Pi$ and
-lambda cases are delegated to the private auxiliaries \texttt{LRS.PiDefEq.lift\_aux} and
-\texttt{LRS.LamDefEq.lift\_aux}, which take both induction hypotheses as explicit arguments.
+\lead{Idea} Induction on $n\le n'$; the one-step case is a simultaneous statement about
+\texttt{DefEq}/\texttt{TyDefEq}, with the $\Pi$ and lambda cases delegated to private auxiliaries
+taking both induction hypotheses explicitly.
 \end{proof}
-
-\begin{remark}
-Because the $\mathtt{LogRel}$ structure is level-indexed while the interpretation
-(\ref{def:expa-le-interp}) is level-erased, these transport lemmas must be applied by hand at nearly
-every use site in \texttt{ShapeLogRelAdequacy.lean}. They are the main source of proof noise there.
-\end{remark}
 
 \begin{definition}[Well-formed pairs of substitutions]
 \label{def:expa-lr-substwf}
@@ -1081,20 +980,18 @@ every use site in \texttt{ShapeLogRelAdequacy.lean}. They are the main source of
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{6061}
 \uses{def:expa-lr,def:expa-fits-interptyped,family:expb-sexpr-operational}
-$\mathtt{Subst1}\ \Gamma_0\ x\ x'\ A_0\ A\ A'\ \rho\ i$ says $\Gamma_0 \vdash x \equiv x' : A$ and,
-for every level and every shape $a$ interpreting $A_0$ under $\rho$: if $a$ is a type shape then $A$
-and $A'$ are convertible and equal types at $a$, and for every shape $m$ interpreting the variable
-$\mathtt{bvar}\ i$ with $m : a$, $x$ and $x'$ are related at $(m, a)$.
-$\mathtt{SubstWF}\ \Gamma_0\ \sigma\ \sigma'\ \Gamma\ \rho$ is the inductive lifting of this to whole
-substitutions, built from \texttt{id} and a \texttt{cons} step that simultaneously grows the
-valuation $\rho$. It projects to $\mathtt{Valuation.Fits}$ (\texttt{fits}) and to the syntactic
-$\mathtt{Ctx.SubstEq}$ (\texttt{toSubstEq}), and is closed under taking the left component and under
-symmetry, both by induction using the \texttt{left}, \texttt{symm\_ty} and \texttt{conv} fields.
-\thesisref{\texttt{typesys.tex} Theorem \texttt{thm:subst}: this is the context-level prerequisite of
-the semantic substitution lemma.}
-\reviewnote{The file ends here, at line 6100, with \texttt{LR.SubstWF.symm} and without closing
-either of its two open namespaces. There is no \texttt{trans} for $\mathtt{SubstWF}$ and no
-fundamental theorem; the development continues in another module with no signpost saying so.}
+\thesisref{\texttt{typesys.tex} Theorem \texttt{thm:subst}: the context-level prerequisite of the semantic substitution lemma.}
+
+\lead{In short} $\mathtt{SubstWF}$: the \hl{inductive lifting of \texttt{Subst1}} to whole
+substitutions, growing a valuation alongside.
+\begin{itemize}
+\item $\mathtt{Subst1}\ \Gamma_0\ x\ x'\ A_0\ A\ A'\ \rho\ i$: $\Gamma_0\vdash x\equiv x':A$, and for
+every type shape $a$ interpreting $A_0$ under $\rho$, $A\equiv A'$ equal at $a$, and every shape
+$m:a$ interpreting $\mathtt{bvar}\ i$ relates $x,x'$ at $(m,a)$.
+\item $\mathtt{SubstWF}$: built from \texttt{id} and a \texttt{cons} step; projects to
+$\mathtt{Valuation.Fits}$ (\texttt{fits}) and to $\mathtt{Ctx.SubstEq}$ (\texttt{toSubstEq}); closed
+under the left component and under symmetry.
+\end{itemize}
 \end{definition}
 
 \section{Adequacy and definitional inversion}
@@ -1105,17 +1002,16 @@ fundamental theorem; the development continues in another module with no signpos
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{8}
 \uses{def:expa-lr-substwf,def:expa-lr,structure:expa-logrel}
-$\mathtt{Adequate}\ \Gamma_0\ \Gamma\ \rho\ M\ N\ A\ m\ a$ is the closure of the relation over open
-terms: for every well-formed pair $\sigma, \sigma'$ from $\Gamma$ to $\Gamma_0$, both
-$M[\sigma] , M[\sigma']$ and $N[\sigma] , N[\sigma']$ are related at $(m, a)$ over $A[\sigma]$; and
-for every single well-formed $\sigma$, $M[\sigma]$ and $N[\sigma]$ are related. It is trivial at
-$m = \bot$ when the type-shape is a type ($a : \mathrm{Type}$), and reflexivity, left-projection,
-symmetry and \texttt{trans} are immediate from the corresponding $\mathtt{LogRel}$ fields;
-\texttt{trans'} needs five extra lines because its two-sided component has to be reassembled out of
-\texttt{W.left} and \texttt{W.symm.left}.
-\reviewnote{The central definition of the file has no docstring. \texttt{Adequate.fits} (line 17),
-which lets a proof assume $\rho.\mathtt{Fits}$ for free because every $\mathtt{SubstWF}$ supplies
-it, is a useful idiom and is likewise unexplained.}
+\lead{In short} The \hl{closure of the relation over open terms}: related after every well-formed
+substitution.
+\begin{itemize}
+\item $\mathtt{Adequate}\ \Gamma_0\ \Gamma\ \rho\ M\ N\ A\ m\ a$: for every well-formed pair
+$\sigma,\sigma'$ from $\Gamma$ to $\Gamma_0$, $M[\sigma],M[\sigma']$ and $N[\sigma],N[\sigma']$ are
+related at $(m,a)$ over $A[\sigma]$; and a single-substitution version.
+\item Trivial at $m=\bot$ when $a:\mathrm{Type}$; reflexivity, left-projection, symmetry,
+\texttt{trans} immediate from \texttt{LogRel} fields; \texttt{trans'} reassembles its two-sided
+component from \texttt{W.left} and \texttt{W.symm.left}.
+\end{itemize}
 \end{definition}
 
 \begin{theorem}[Extending a well-formed substitution pair]
@@ -1124,29 +1020,21 @@ it, is a useful idiom and is likewise unexplained.}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{45}
 \uses{def:expa-lr-substwf,def:expa-lr-adequate}
-Suppose the type $A$ is adequate at every shape interpreting it, that
-$\Gamma \vdash A \equiv A' : \mathrm{Sort}\ u$, that the shape $p$ inhabits a shape $a_1$
-interpreting $A$, and that
-$\Gamma_0 \vdash x \equiv x' : A[\sigma]$ are related at $(p, a_1)$. Then for every well-formed pair
-$\sigma, \sigma'$ from $\Gamma$ to $\Gamma_0$ the extended pair
-$\sigma.x, \sigma'.x'$ is well formed for $A :: \Gamma$ with valuation $\rho.\mathrm{push}\ p$.
+\lead{In short} A related new pair \hl{extends a well-formed substitution pair} by one variable.
+\begin{itemize}
+\item \lead{Given} $A$ adequate at every shape interpreting it; $\Gamma\vdash A\equiv A':\mathrm{Sort}\
+u$; $p:a_1$ with $a_1$ interpreting $A$; $\Gamma_0\vdash x\equiv x':A[\sigma]$ related at $(p,a_1)$.
+\item \lead{Then} for every well-formed pair $\sigma,\sigma'$, the extension $\sigma.x,\sigma'.x'$ is
+well formed for $A::\Gamma$ with valuation $\rho.\mathrm{push}\ p$.
+\end{itemize}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-lr-lift,thm:expa-le-interp-strongsound,def:expa-tshape,thm:expa-hastype-join}
 \leanok
-The interesting obligation is $\mathtt{Subst1}$, which must relate the arbitrary shape $a'$ at which
-a later variable is looked up with the shape $a_1$ at which $x$ was given. Both are lifted to the
-maximum of their levels, joined using \texttt{TShape.Join} and \texttt{LE\_Interp.compat}, and the
-hypothesis is transported along \ref{thm:expa-lr-lift} and the monotonicity fields of the record. A
-local \texttt{have valTyA} abstracts the repeated argument that $A[\sigma]$ is a valid type at a
-given shape, obtained from \ref{thm:expa-le-interp-strongsound}.
+\lead{Idea} The hard obligation is \texttt{Subst1}: lift both shapes to the max of their levels, join
+them, and transport the hypothesis along \ref{thm:expa-lr-lift} and the record's monotonicity
+fields.
 \end{proof}
-
-\begin{remark}
-This is a dense 47-line declaration (lines 45--91) whose 39-line proof body is essentially all
-level bookkeeping; the mathematical content, ``join the two shapes'', is hidden inside it. It is the clearest place where the
-$\mathtt{WShape}\ n$ versus $\mathtt{TShape}$ duality costs the development.
-\end{remark}
 
 \begin{lemma}[From term equality at a sort type to type equality]
 \label{thm:expa-lr-tovalty}
@@ -1154,25 +1042,20 @@ $\mathtt{WShape}\ n$ versus $\mathtt{TShape}$ duality costs the development.
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{93}
 \uses{def:expa-lr,def:expa-tshape}
-If $M$ and $N$ are related at type $\mathrm{Sort}\ u$, at element-shape $m$ and type-shape $a$ with
-$a$ interpreting $\mathrm{Sort}\ u$ and $m : a$, and $b$ is a type shape at a level $n \le n'$ with
-$b \le m$ after level erasure, then $M$ and $N$ are equal \emph{types} at $b$.
+\lead{In short} \hl{Read off a type equality} from a term equality at $\mathrm{Sort}\ u$.
+\begin{itemize}
+\item \lead{Given} $M,N$ related at $\mathrm{Sort}\ u$, element-shape $m$, type-shape $a$
+interpreting $\mathrm{Sort}\ u$, $m:a$; $b$ a type shape at level $n\le n'$ with $b\le m$ once the
+level is forgotten.
+\item \lead{Then} $M,N$ are equal types at $b$.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{thm:expa-lr-lift,structure:expa-logrel}
 \leanok
-Move up to $m$'s level and to the sort shape with \texttt{mono\_r\_1}, apply the \texttt{toType}
-field of the record, lower again with \texttt{mono\_r\_2\_ty}, and transport back down along
-\texttt{LR.TyDefEq.lift}.
+\lead{Idea} Move to $m$'s level and the sort shape (\texttt{mono\_r\_1}), apply \texttt{toType}, lower
+again (\texttt{mono\_r\_2\_ty}), transport back along \texttt{LR.TyDefEq.lift}.
 \end{proof}
-
-\begin{remark}
-This is one of only four docstrings in \texttt{ShapeLogRelAdequacy.lean} (lines 93, 105, 448, 458).
-It factors out a pattern used at eighteen call sites, all inside \ref{thm:expa-lr-adequacy}, but
-it was extracted late:
-\ref{thm:expa-adequate-cons}, which precedes it, still inlines the same argument twice (lines
-58--63 and 82--88).
-\end{remark}
 
 \begin{theorem}[Adequacy, the fundamental theorem of the shape logical relation]
 \label{thm:expa-lr-adequacy}
@@ -1180,103 +1063,94 @@ it was extracted late:
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{105}
 \uses{def:expa-lr-adequate,def:expa-le-interp,inductive:expb-sexpr-isdefeq}
-If $\Gamma \vdash M \equiv N : A$, the shape $m$ interprets $M$ and the shape $a$ interprets $A$
-under a valuation $\rho$, and $m : a$ at the shape level, then $M$ and $N$ are
-$\mathtt{Adequate}$ at $(m, a)$, that is, related by the logical relation under all well-formed
+\thesisref{\texttt{unique.tex} Theorems \texttt{thm:1dinv} and \texttt{thm:ckappa}: this one theorem replaces both, by the model route rather than Church--Rosser.}
+
+\lead{In short} Definitional equality \hl{gives adequacy at any interpreting shape}.
+\begin{itemize}
+\item \lead{Given} $\Gamma\vdash M\equiv N:A$; shape $m$ interprets $M$, shape $a$ interprets $A$
+under $\rho$, $m:a$.
+\item \lead{Then} $M,N$ are $\mathtt{Adequate}$ at $(m,a)$: related under all well-formed
 substitution pairs.
-\thesisref{\texttt{unique.tex} Theorem \texttt{thm:1dinv} (line 258) and Theorem \texttt{thm:ckappa}
-(line 242): this single theorem replaces both, taking the model route rather than the
-Church--Rosser route.}
+\end{itemize}
 \axfoot{a literal sorry in the const case (ShapeLogRelAdequacy.lean:154); sorryAx via
 SExpr.IsDefEq.strong (Experimental/SExpr.lean:679) and the SExpr substitution lemmas; plus the
 declared axiom Lean4Lean.SExpr.Params.extra\_pat (Experimental/SExpr.lean:614)}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-adequate-cons,thm:expa-lr-tovalty,def:expa-lr-substwf,thm:expa-le-interp-strongsound,thm:expa-le-interp-inv,thm:expa-hastype-proofirrel,class:expb-sexpr-params}
-\textbf{Not proved in Lean.} The \texttt{const} case at line 154, covering a term that is a bare
-constant, is a literal \texttt{sorry}; the goal there is to relate
-$\mathtt{const}\ c\ \mathit{ls}$ with itself at an arbitrary shape after rewriting its type through
-\texttt{Params.henv.closedC}. The rest is a 327-line induction (lines 106--432) on the strong
-derivation obtained by \texttt{replace H := H.strong}, generalising over the valuation and both
-shapes: variables by induction on $\mathtt{SubstWF}$, symmetry and transitivity by transporting the
-interpretation with \texttt{LE\_Interp.sound}, application and lambda by
-\ref{thm:expa-le-interp-inv}, proof irrelevance by \ref{thm:expa-hastype-proofirrel} forcing the
-shape to $\bot$, and the \texttt{extra} ($\delta$ and $\iota$) case by \texttt{Params.extra\_pat}
-together with the \texttt{whr} field. \ref{thm:expa-lr-tovalty} carries the recurring
-sort-to-type step at eighteen places in this proof.
-\reviewnote{Neither the \texttt{sorry} nor the two further holes it rests on
-(\texttt{SExpr.IsDefEq.strong} and \texttt{axiom Params.extra\_pat}) is mentioned anywhere in the
-file. The hole predates commit \texttt{84f2b04}, titled ``Finished injectivity!'', which landed
-\ref{thm:expa-forallE-inv}, \ref{thm:expa-sort-inv} and
-\texttt{Lean4Lean/Experimental/UniqueTyping.lean} on top of it and left it in place.}
+\stSorry{} The \texttt{const} case (a bare constant) is a literal \texttt{sorry}; the rest is a
+327-line induction on the strong derivation, covering variables by \texttt{SubstWF} induction,
+symmetry/transitivity by transporting the interpretation, application/lambda by
+\ref{thm:expa-le-interp-inv}, proof irrelevance by \ref{thm:expa-hastype-proofirrel}, and the
+$\delta$/$\iota$ case by \texttt{Params.extra\_pat} and the \texttt{whr} field.
 \end{proof}
 
-\begin{theorem}[A type equal to a $\Pi$ weak-head reduces to a $\Pi$]
+\begin{theorem}[A type equal to a Pi weak-head reduces to a Pi]
 \label{thm:expa-forallE-whred-l}
 \lean{Lean4Lean.SExpr.forallE_whRed_l}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{434}
 \uses{thm:expa-lr-adequacy,def:expa-lrs-components}
-If $\Gamma \vdash A_0 \equiv \forall B_1.\,F_1 : \mathrm{Sort}\ s$ then there are $B_0, F_0$ with
-$\Gamma \vdash A_0 \to^{*}_{\mathrm{wh}} \forall B_0.\,F_0$ and levels $u, v$ such that
-$\Gamma \vdash B_0 \equiv B_1 : \mathrm{Sort}\ u$ and
-$B_0 :: \Gamma \vdash F_0 \equiv F_1 : \mathrm{Sort}\ v$.
 \thesisref{\texttt{unique.tex} lines 29--39, clause 2 of definitional inversion.}
+
+\lead{In short} \hl{Weak-head reduction is forced} out of a defeq with a $\Pi$ on one side.
+\begin{itemize}
+\item \lead{Given} $\Gamma\vdash A_0\equiv\forall B_1.F_1:\mathrm{Sort}\ s$.
+\item \lead{Then} $\Gamma\vdash A_0\to^*_{\mathrm{wh}}\forall B_0.F_0$ for some $B_0,F_0$, with
+$\Gamma\vdash B_0\equiv B_1:\mathrm{Sort}\ u$ and $B_0::\Gamma\vdash F_0\equiv F_1:\mathrm{Sort}\ v$.
+\end{itemize}
 \axfoot{sorryAx via LR.adequacy (const case, ShapeLogRelAdequacy.lean:154) and
 SExpr.IsDefEq.strong; plus the axiom Lean4Lean.SExpr.Params.extra\_pat}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-le-interp-strongsound,def:expa-shape-hastype}
 \leanok
-Instantiate \ref{thm:expa-lr-adequacy} in the empty context with the \emph{minimal} non-trivial
-$\Pi$ shape $\mathtt{forallE}\ \bot\ \mathtt{ShapeFun.bot}$ at level $1$. Two short computations
-check that this shape interprets $\forall B_1.\,F_1$ and inhabits the sort shape
-$\mathtt{sort}(s \neq 0)$; the resulting $\mathtt{LR.DefEq}$ at the identity substitution is by
-definition a $\mathtt{ValTyPi2}$, off which the reduction and the two conversions are read.
+\lead{Idea} Instantiate \ref{thm:expa-lr-adequacy} at the \emph{minimal} non-trivial $\Pi$ shape
+$\mathtt{forallE}\ \bot\ \mathtt{ShapeFun.bot}$ -- the least informative shape that still
+discriminates the head form -- then read the reduction and the two conversions off the resulting
+$\mathtt{ValTyPi2}$.
 \end{proof}
 
-\begin{remark}
-Probing the model with the least informative shape that still discriminates a head form is the trick
-that makes the whole construction pay off, and it is what the preceding 6500 lines exist to
-support. It is undocumented.
-\end{remark}
-
-\begin{theorem}[$\Pi$ injectivity]
+\begin{theorem}[Pi injectivity]
 \label{thm:expa-forallE-inv}
 \lean{Lean4Lean.SExpr.forallE_inv}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{448}
 \uses{thm:expa-forallE-whred-l}
-If $\Gamma \vdash (\forall A_0.\,B_0) \equiv (\forall A_1.\,B_1) : \mathrm{Sort}\ s$ then there are
-levels $u, v$ with $\Gamma \vdash A_0 \equiv A_1 : \mathrm{Sort}\ u$ and
-$A_0 :: \Gamma \vdash B_0 \equiv B_1 : \mathrm{Sort}\ v$.
-\thesisref{\texttt{unique.tex} lines 29--39, clause 2 of definitional inversion, proved there inside
-Theorem \texttt{thm:1dinv} (line 258) by way of Church--Rosser.}
+\thesisref{\texttt{unique.tex} lines 29--39, clause 2, proved there via Church--Rosser inside Theorem \texttt{thm:1dinv}.}
+
+\lead{In short} A $\Pi$ definitionally equal to a $\Pi$ has \hl{equal domains and codomains}.
+\begin{itemize}
+\item \lead{Given} $\Gamma\vdash(\forall A_0.B_0)\equiv(\forall A_1.B_1):\mathrm{Sort}\ s$.
+\item \lead{Then} $\Gamma\vdash A_0\equiv A_1:\mathrm{Sort}\ u$ and
+$A_0::\Gamma\vdash B_0\equiv B_1:\mathrm{Sort}\ v$, for some $u,v$.
+\end{itemize}
 \axfoot{sorryAx via LR.adequacy (const case) and SExpr.IsDefEq.strong; plus the axiom
 Lean4Lean.SExpr.Params.extra\_pat}
 \end{theorem}
 \begin{proof}
 \leanok
-Apply \ref{thm:expa-forallE-whred-l} and observe with \texttt{WHNF.forallE.whRedS} that a $\Pi$ is
-already in weak-head normal form, so the reduction it produces is the identity.
+\lead{Idea} Apply \ref{thm:expa-forallE-whred-l}; a $\Pi$ is already weak-head normal
+(\texttt{WHNF.forallE.whRedS}), so the reduction it produces is the identity.
 \end{proof}
 
-\begin{theorem}[A sort is never definitionally equal to a $\Pi$]
+\begin{theorem}[A sort is never definitionally equal to a Pi]
 \label{thm:expa-sort-forallE-inv}
 \lean{Lean4Lean.SExpr.sort_forallE_inv}
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{455}
 \uses{thm:expa-forallE-whred-l}
-There is no derivation of
-$\Gamma \vdash \mathrm{Sort}\ u \equiv \forall A_1.\,B_1 : \mathrm{Sort}\ s$.
 \thesisref{\texttt{unique.tex} lines 29--39, clause 3 of definitional inversion.}
+
+\lead{In short} \hl{No derivation} of $\Gamma\vdash\mathrm{Sort}\ u\equiv\forall
+A_1.B_1:\mathrm{Sort}\ s$.
 \axfoot{sorryAx via LR.adequacy (const case) and SExpr.IsDefEq.strong; plus the axiom
 Lean4Lean.SExpr.Params.extra\_pat}
 \end{theorem}
 \begin{proof}
 \leanok
-By \ref{thm:expa-forallE-whred-l} the sort would have to weak-head reduce to a $\Pi$, which
-\texttt{WHNF.sort.whRedS} refutes.
+\lead{Idea} By \ref{thm:expa-forallE-whred-l} the sort would weak-head reduce to a $\Pi$, refuted by
+\texttt{WHNF.sort.whRedS}.
 \end{proof}
 
 \begin{theorem}[Sort injectivity]
@@ -1285,65 +1159,67 @@ By \ref{thm:expa-forallE-whred-l} the sort would have to weak-head reduce to a $
 \leanok
 \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{458}
 \uses{thm:expa-lr-adequacy,def:expa-lr0}
-If $\Gamma \vdash \mathrm{Sort}\ u \equiv \mathrm{Sort}\ v : V$ then $u = v$. The conclusion is an
-equation of \texttt{SLevel}s, which are already a semantic quotient of \texttt{VLevel}, so this is
-the thesis's $\ell \equiv \ell'$ and not merely syntactic equality.
-\thesisref{\texttt{unique.tex} lines 29--39, clause 1 of definitional inversion, proved there inside
-Theorem \texttt{thm:1dinv}.}
+\thesisref{\texttt{unique.tex} lines 29--39, clause 1, proved there inside Theorem \texttt{thm:1dinv}.}
+
+\lead{In short} $\mathrm{Sort}\ u\equiv\mathrm{Sort}\ v$ forces \hl{$u=v$} -- as \texttt{SLevel}s, a
+semantic quotient, not merely syntactically.
+\begin{itemize}
+\item \lead{Given} $\Gamma\vdash\mathrm{Sort}\ u\equiv\mathrm{Sort}\ v:V$.
+\item \lead{Then} $u=v$.
+\end{itemize}
 \axfoot{sorryAx via LR.adequacy (const case) and SExpr.IsDefEq.strong; plus the axiom
 Lean4Lean.SExpr.Params.extra\_pat}
 \end{theorem}
 \begin{proof}
 \uses{thm:expa-le-interp-strongsound,def:expa-shape-hastype}
 \leanok
-Interpret $\mathrm{Sort}\ u$ by the level-$1$ shape $\mathtt{sort}(u \neq 0)$, use
-\ref{thm:expa-le-interp-strongsound} to obtain a type shape for it, and show by
-\texttt{Shape.HasType.unfold\_iff} that this shape must be $\mathtt{sort}\ \mathtt{true}$. Then
-apply \ref{thm:expa-lr-adequacy} at the identity substitution and read off the \texttt{sort\_iff}
-field: both sides weak-head reduce to the same $\mathrm{Sort}\ w$, and since sorts are already
-normal, $u = w = v$.
+\lead{Idea} Interpret $\mathrm{Sort}\ u$ by the level-1 shape $\mathtt{sort}(u\neq 0)$, get a type shape
+for it via \ref{thm:expa-le-interp-strongsound}, show it must be $\mathtt{sort}\ \mathtt{true}$;
+apply \ref{thm:expa-lr-adequacy} at the identity substitution and read \texttt{sort\_iff}: both sides
+reduce to the same $\mathrm{Sort}\ w$, and sorts are normal, so $u=w=v$.
 \end{proof}
 
 \section{Abandoned branches}
 
-The remaining two modules are earlier attempts at the same target. Nothing imports them, they are
-not referenced by \texttt{UniqueTyping.lean}, and they are recorded here only because the
-\texttt{Lean4Lean.Experimental} library glob (\texttt{lakefile.toml}) still compiles them, so they
-still cost build time and still collide by name with live modules.
+The remaining two modules, \texttt{LogRel.lean} and \texttt{CoinductiveLogRel.lean}, are earlier,
+abandoned attempts at the same target. Nothing live imports them, but the
+\texttt{Lean4Lean.Experimental} library glob still compiles both, and several of their declaration
+names collide with the modules above.
 
 \begin{definition}[Semantic classifiers, logrel-mltt style]
 \label{structure:expa-logrel-classifier}
 \lean{Lean4Lean.SExpr.Classifier',Lean4Lean.SExpr.Classifier,Lean4Lean.SExpr.Classifier.EqTy,Lean4Lean.SExpr.Classifier.HasTy,Lean4Lean.SExpr.Classifier.DefEq,Lean4Lean.SExpr.Classifier.DefEq.symm,Lean4Lean.SExpr.Classifier.DefEq.left,Lean4Lean.SExpr.Classifier.defEq_self,Lean4Lean.SExpr.Classifier.DefEq.imp}
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{8}
-$\mathtt{Classifier}'$ is a record with three predicates, all defaulting to $\mathrm{True}$: which
-types are equal to the classified type, which terms inhabit it, and which pairs of terms are equal
-at it; plus three obligations making the equality symmetric, left-total and reflexive on
-inhabitants. $\mathtt{Classifier}\ \Gamma\ A\ u$ is a phantom-indexed alias for it. The public
-$\mathtt{EqTy}$, $\mathtt{HasTy}$ and $\mathtt{DefEq}$ conjoin the semantic predicate with the
-corresponding syntactic judgement, so that the semantic layer can never claim more than the syntax
-does. $\mathtt{DefEq.imp}$ transports a semantic equality along a syntactic map.
-\reviewnote{Dead code: the module is imported by nothing.
-\texttt{Lean4Lean.SExpr.Classifier'} is also declared, with a different signature, in
-\srcloc{Lean4Lean/Experimental/StepIndexed.lean}{8}. The two coexist only because no module imports
-both.}
+
+\lead{In short} A record of \hl{three defaultable predicates} (type equality, inhabitation, term
+equality), each conjoined with the matching syntactic judgement so the semantic layer never claims
+more than the syntax does.
+\begin{itemize}
+\item Three obligations: equality symmetric, left-total, reflexive on inhabitants.
+\item $\mathtt{Classifier}\ \Gamma\ A\ u$: a phantom-indexed alias; $\mathtt{DefEq.imp}$ transports a
+semantic equality along a syntactic map.
+\item A same-named \texttt{Classifier'} with a different signature also lives in
+\texttt{StepIndexed.lean} (\srcloc{Lean4Lean/Experimental/StepIndexed.lean}{8}).
+\end{itemize}
 \end{definition}
 
-\begin{definition}[The $\Pi$ classifier and normal types]
+\begin{definition}[The Pi classifier and normal types]
 \label{def:expa-logrel-classifier-forallE}
 \lean{Lean4Lean.SExpr.Classifier.forallE,Lean4Lean.SExpr.NormalType,Lean4Lean.SExpr.NormalType.whnf,Lean4Lean.SExpr.NormalType.weak',Lean4Lean.SExpr.NormalType.weak'_inv}
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{42}
 \uses{structure:expa-logrel-classifier}
-The classifier for $\forall A.\,B$ is built Kripke-style from a family $R_A$ of classifiers for $A$
-under every context lifting and a family $R_B$ of classifiers for the instantiated codomain indexed
-by the inhabitants of $R_A$: a type is equal to $\forall A.\,B$ when it weak-head reduces to a $\Pi$
-whose components are pointwise related in those families; a term inhabits it when it sends related
-arguments to related results in every extended context; and two terms are equal when they agree on
-all inhabitants. $\mathtt{NormalType}$ is the predicate ``is a sort or a $\Pi$'', with the
-weak-head-normality and weakening lemmas it needs.
-\reviewnote{Dead code, and \texttt{Lean4Lean.SExpr.NormalType} clashes with the declaration of the
-same name at \srcloc{Lean4Lean/Experimental/StepIndexed.lean}{41}.}
+\lead{In short} Built \hl{Kripke-style}: families of classifiers for the domain and for the
+instantiated codomain, indexed by domain inhabitants.
+\begin{itemize}
+\item A type equals $\forall A.B$ when it weak-head reduces to a $\Pi$ with pointwise related
+components; a term inhabits it when it sends related arguments to related results in every extended
+context; two terms are equal when they agree on all inhabitants.
+\item $\mathtt{NormalType}$: ``is a sort or a $\Pi$'', with its weak-head-normality and weakening
+lemmas; declared again, differently, in \texttt{StepIndexed.lean}
+(\srcloc{Lean4Lean/Experimental/StepIndexed.lean}{41}).
+\end{itemize}
 \end{definition}
 
 \begin{definition}[The inductive logical relation over classifiers]
@@ -1352,19 +1228,19 @@ same name at \srcloc{Lean4Lean/Experimental/StepIndexed.lean}{41}.}
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{70}
 \uses{def:expa-logrel-classifier-forallE,structure:expa-logrel-classifier}
-A \texttt{Type}-valued inductive family $\mathtt{LogRel}\ \Gamma\ A\ u\ \mathit{cl}$ witnessing that
-$\mathit{cl}$ is the canonical classifier for $A$, with three constructors: \texttt{stuck}, when no
-weak-head reduct of $A$ is a normal type, in which case the classifier is the trivial one;
-\texttt{sort}, when $A$ reduces to a sort; and \texttt{forallE}, when $A$ reduces to a $\Pi$, with
-Kripke-indexed sub-derivations for the domain and the instantiated codomain. Derived: every witness
-implies $A$ is a type ($\mathtt{hasType}$), every witness classifies its own type
-($\mathtt{eqTy\_refl}$), and a transport along an equation of types with its three projections.
-\reviewnote{Dead code, and \texttt{Lean4Lean.SExpr.LogRel} is declared three times in this directory
-with incompatible definitions: here as an \texttt{inductive}, at
-\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5271} as the record of
-\ref{structure:expa-logrel}, and at \srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{371} as a
-third structure. The \texttt{stuck} constructor is an interesting concession to Lean's
-non-normalising theory and is unexplained.}
+\lead{In short} A \texttt{Type}-valued family witnessing that a classifier is \hl{canonical for a
+type}, by three constructors.
+\begin{itemize}
+\item \texttt{stuck}: no weak-head reduct of $A$ is a normal type (Lean's theory is not
+normalising), classifier trivial.
+\item \texttt{sort}: $A$ reduces to a sort. \texttt{forallE}: $A$ reduces to a $\Pi$, with
+Kripke-indexed sub-derivations.
+\item Derived: every witness implies $A$ is a type, classifies its own type, and transports along a
+type equation.
+\item \texttt{LogRel} is declared twice more, incompatibly: as the record of
+\ref{structure:expa-logrel} (\srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5271}) and again in
+\texttt{MoreStepIndexed.lean} (\srcloc{Lean4Lean/Experimental/MoreStepIndexed.lean}{371}).
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Irrelevance of the logical-relation witness]
@@ -1373,24 +1249,20 @@ non-normalising theory and is unexplained.}
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{157}
 \uses{inductive:expa-logrel-ind}
-Writing $\Gamma \Vdash_u A$ for the sigma type of a classifier together with a witness, any two
-witnesses $J_1 : \Gamma \Vdash_u A$ and $J_2 : \Gamma \Vdash_{u'} A$ satisfy $u = u'$ and are
-heterogeneously equal. Hence $\Gamma \Vdash_u A$ is a subsingleton and the derived predicates
-$\mathtt{LREqTy}$ and $\mathtt{LRDefEq}$ do not depend on which witness is used.
+\lead{In short} Writing $\Gamma\Vdash_u A$ for a classifier plus witness, \hl{any two witnesses
+agree}.
+\begin{itemize}
+\item \lead{Given} $J_1:\Gamma\Vdash_u A$, $J_2:\Gamma\Vdash_{u'}A$.
+\item \lead{Then} $u=u'$ and $J_1,J_2$ heterogeneously equal; $\Gamma\Vdash_u A$ is a subsingleton,
+so $\mathtt{LREqTy}$/$\mathtt{LRDefEq}$ do not depend on the witness.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{structure:expa-logrel-classifier}
 \leanok
-Induction with the hand-written eliminator \texttt{LRIsType.rec} (line 139) and a nested case
-analysis on $J_2$; determinacy of weak-head reduction (\texttt{WHRedS.determ}) rules out mismatched
-constructors, and the $\Pi$ case closes the equality of the two Kripke families with \texttt{grind}.
+\lead{Idea} Induction with the hand-written eliminator \texttt{LRIsType.rec} and case analysis on
+$J_2$; determinacy of weak-head reduction rules out mismatched constructors.
 \end{proof}
-
-\begin{remark}
-This is the best-executed part of \texttt{LogRel.lean}: the custom \texttt{@[elab\_as\_elim]}
-eliminator and the \texttt{Subsingleton} instance at line 189 are exactly the right API. The two
-\texttt{grind} calls that discharge the family equalities are brittle across toolchain bumps.
-\end{remark}
 
 \begin{definition}[Weakening of the logical relation]
 \label{def:expa-lristype-weak}
@@ -1398,14 +1270,13 @@ eliminator and the \texttt{Subsingleton} instance at line 189 are exactly the ri
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{205}
 \uses{thm:expa-lristype-irrel,inductive:expa-logrel-ind}
-A witness for $A$ in $\Gamma$ transports along a context lifting
-$\mathtt{Ctx.Lift}'\ \rho\ \Gamma\ \Delta$ to a witness for $A[\rho]$ in $\Delta$, and the derived
-type-equality and term-equality predicates transport with it. The proofs are inductions with
-\texttt{LRIsType.rec} in which the $\Pi$ case composes the two Kripke liftings and rewrites along
-\texttt{SExpr.lift'\_comp}.
 \thesisref{\texttt{typesys.tex} Theorem \texttt{thm:weak} (weakening).}
-\reviewnote{Dead code. The four \texttt{cast} lemmas exist only to fight transport noise in the
-Kripke indices, which is a symptom of the indexing fighting Lean's definitional equality.}
+
+\lead{In short} A witness for $A$ in $\Gamma$ \hl{transports along a context lifting} to a witness
+for $A[\rho]$ in $\Delta$.
+\begin{itemize}
+\item The derived type- and term-equality predicates transport with it.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Symmetry of semantic type equality, unproved]
@@ -1414,18 +1285,22 @@ Kripke indices, which is a symptom of the indexing fighting Lean's definitional 
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{243}
 \uses{thm:expa-lristype-irrel}
-Two claims. \texttt{LREqTy.defeq\_r}: a term equality held at a witness for $A$ can be transported
-to a witness for any $B$ semantically equal to $A$. \texttt{LREqTy.symm}: from a witness for $A$
-together with a semantic equality to $B$, produce a witness for $B$ that is semantically equal back
-to $A$. The surrounding projections (\texttt{defeq}, \texttt{left}, \texttt{hasType}) and the
-symmetry of term equality at a fixed witness are proved.
+\lead{In short} Two claims about transporting equality across semantically equal types; \hl{both are
+sorries}.
+\begin{itemize}
+\item \texttt{LREqTy.defeq\_r}: transport a term equality at $A$ to one at any $B$ semantically equal
+to $A$.
+\item \texttt{LREqTy.symm}: from a witness for $A$ and a semantic equality to $B$, produce a witness
+for $B$ equal back to $A$.
+\item The surrounding projections and symmetry at a fixed witness are proved.
+\end{itemize}
 \end{lemma}
 \begin{proof}
 \uses{def:expa-logrel-classifier-forallE}
-\textbf{Not proved in Lean.} \texttt{LREqTy.defeq\_r} is a bare \texttt{sorry}, and all three
-branches of \texttt{LREqTy.symm} (\texttt{stuck}, \texttt{sort}, \texttt{forallE}) are
-\texttt{sorry} with commented-out attempts beside them. Symmetry of the type-equality relation is
-the standard hard obligation in logrel-mltt developments; it is where this branch stalled.
+\stSorry{} \texttt{defeq\_r} is a bare \texttt{sorry}; all three branches of \texttt{symm}
+(\texttt{stuck}, \texttt{sort}, \texttt{forallE}) are \texttt{sorry}. Symmetry of the semantic
+type-equality relation is the standard hard obligation of a logrel-mltt development; this is where
+the branch stalled.
 \end{proof}
 
 \begin{definition}[The semantic context and substitution layer]
@@ -1434,17 +1309,15 @@ the standard hard obligation in logrel-mltt developments; it is where this branc
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{258}
 \uses{thm:expa-lristype-irrel,def:expa-lristype-weak}
-$\mathtt{ClassifierV}\ \Gamma$ records which pairs of substitutions into $\Gamma$ count as
-semantically related, and $\mathtt{LogRelV}$ builds it inductively for the empty context and for an
-extension. On top of it: $\mathtt{LVIsCtx}$ (a validated context, with its inversion principle),
-$\mathtt{LVIsType}$ (a semantically valid type, presented as a family of witnesses indexed by
-related substitutions), $\mathtt{LVEqSubst}$ with its head and tail projections, and the open
-judgements $\mathtt{LVEqTy}$, $\mathtt{LVHasType}$ and $\mathtt{LVDefEq}$ with reflexivity and
-symmetry.
-\reviewnote{Dead code, and incomplete internally: \texttt{LVIsType.sort} (line 287) is a bare
-\texttt{sorry}, \texttt{LVIsType.lift} (line 316) uses \texttt{stop}, which macro-expands to
-\texttt{repeat sorry}, and \texttt{LVEqSubst.lift}, \texttt{LVEqSubst.hasType} and
-\texttt{LVHasType.lift} survive only as commented-out stubs at lines 323--343.}
+\lead{In short} $\mathtt{ClassifierV}\ \Gamma$: which \hl{pairs of substitutions} into $\Gamma$
+count as semantically related; built inductively by $\mathtt{LogRelV}$.
+\begin{itemize}
+\item $\mathtt{LVIsCtx}$ (validated context, with inversion), $\mathtt{LVIsType}$ (semantically valid
+type, as a family indexed by related substitutions), $\mathtt{LVEqSubst}$ with head/tail
+projections.
+\item Open judgements $\mathtt{LVEqTy}$, $\mathtt{LVHasType}$, $\mathtt{LVDefEq}$, with reflexivity
+and symmetry.
+\end{itemize}
 \end{definition}
 
 \begin{lemma}[Fundamental theorem, abandoned]
@@ -1453,19 +1326,16 @@ symmetry.
 \leanok
 \srcloc{Lean4Lean/Experimental/LogRel.lean}{353}
 \uses{def:expa-logrelv}
-The claim is that $\Gamma \vdash a \equiv b : A$ implies that, for every validated context, there is
-a level $u$ and a semantically valid type at $u$ for $A$ at which $a$ and $b$ are semantically
-equal. This is the predecessor of \ref{thm:expa-lr-adequacy}.
-\thesisref{\texttt{unique.tex} Theorem \texttt{thm:1dinv} and \texttt{soundness.tex} Theorem
-\texttt{thm:sound} in spirit; nothing here is actually established.}
+\thesisref{\texttt{unique.tex} Theorem \texttt{thm:1dinv} and \texttt{soundness.tex} Theorem \texttt{thm:sound} in spirit; nothing here is established.}
+
+\lead{In short} Would say defeq gives, for every validated context, a \hl{semantically equal typed
+pair} -- the predecessor of \ref{thm:expa-lr-adequacy}.
 \end{lemma}
 \begin{proof}
 \uses{thm:expa-lreqty-symm-hole}
-\textbf{Not proved in Lean.} The 27-line induction covers only \texttt{bvar} (both sub-cases behind
-\texttt{stop}), \texttt{symm} (the one rule actually discharged), \texttt{trans} (which ends in
-\texttt{sorry} at line 375) and \texttt{sort} (behind \texttt{stop}); every remaining rule is
-swallowed by a \texttt{| \_ => sorry} catch-all at line 379. Two literal \texttt{sorry}s and four
-\texttt{stop}s leave the statement entirely unproved.
+\stSorry{} Covers only \texttt{bvar} (behind \texttt{stop}), \texttt{symm} (the one rule
+discharged), \texttt{trans} (ends in \texttt{sorry}) and \texttt{sort} (behind \texttt{stop}); every
+remaining rule falls through a catch-all \texttt{sorry}.
 \end{proof}
 
 \begin{definition}[Classifier skeleton for a coinductive relation]
@@ -1473,145 +1343,27 @@ swallowed by a \texttt{| \_ => sorry} catch-all at line 379. Two literal \texttt
 \lean{Lean4Lean.VEnv.Classifier',Lean4Lean.VEnv.Classifier}
 \leanok
 \srcloc{Lean4Lean/Experimental/CoinductiveLogRel.lean}{15}
-A two-field record ($\mathtt{HasTy}$ on terms, $\mathtt{IsTy}$ on contexts, types and levels) over
-\texttt{VExpr} rather than \texttt{SExpr}, together with the phantom-indexed alias
-$\mathtt{Classifier}\ \Gamma\ A\ u$. These are the only declarations in the module.
-\reviewnote{The intended content, the definitions \texttt{IsTyNormal}/\texttt{IsTy}/\texttt{HasTy}
-and a \texttt{coinductive LogRel ... where} block, sits inside a block comment at lines 20--61 and
-uses a \texttt{coinductive} command (line 40) that does not exist in Lean 4, so it was never
-elaborated. The phantom-index alias is well typed but here carries no information at all: unlike the
-same idiom in \texttt{LogRel.lean}, where \texttt{Classifier.EqTy}/\texttt{HasTy}/\texttt{DefEq}
-read $\Gamma$, $A$ and $u$ back off the index, every projection that would consume the indices is
-inside the comment. The module costs a build dependency on
-\texttt{Lean4Lean.Theory.Typing.HeadReduction} and an olean for nothing.}
+
+\lead{In short} A two-field record (\texttt{HasTy} on terms, \texttt{IsTy} on contexts/types/levels)
+over \texttt{VExpr}, plus a phantom-indexed alias.
+\begin{itemize}
+\item \lead{Caveat} The intended content -- a \texttt{coinductive LogRel} block -- sits in a comment
+and was never elaborated (Lean 4 has no \texttt{coinductive} command); only this two-field skeleton
+compiles.
+\end{itemize}
 \end{definition}
 
-\section{Review notes}
-
-All four modules are master code; none of the issues below is attributable to the \texttt{iota} or
-\texttt{trproj} branches.
-
+\section*{Caveats}
 \begin{itemize}
-\item \textbf{High.} \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{154}: a live
-\texttt{sorry} in the \texttt{const} case of \texttt{LR.adequacy}
-(\ref{thm:expa-lr-adequacy}). Because that is the fundamental theorem, the three headline results
-\ref{thm:expa-forallE-inv}, \ref{thm:expa-sort-forallE-inv} and \ref{thm:expa-sort-inv}, and
-everything \texttt{Lean4Lean/Experimental/UniqueTyping.lean} derives from them, are unproved. Bare
-constants are not a corner case of a real Lean term. The hole predates commit \texttt{84f2b04},
-titled ``Finished injectivity!'', which landed the injectivity theorems and
-\texttt{UniqueTyping.lean} on top of it without closing it; no comment in the source warns that a
-case is missing.
-\item \textbf{High.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5055}:
-\texttt{LE\_Interp.strongSound} (\ref{thm:expa-le-interp-strongsound}), and likewise
-\texttt{LR.adequacy} at \srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{109}, begin with
-\texttt{replace H := H.strong}, where \texttt{SExpr.IsDefEq.strong} is a \texttt{sorry} at
-\srcloc{Lean4Lean/Experimental/SExpr.lean}{679}. Everything from line 5054 of
-\texttt{ShapeLogRel.lean} onwards is therefore conditional on an unproved strengthening of the
-definitional-equality judgement, on top of twenty-nine further \texttt{sorry}-bearing lines in that
-file (thirty in all: \texttt{IsDefEqStrong.defeq} 680, \texttt{Params.ctor\_ty} 688, inversion at
-735--738, substitution lemmas at 761--798, 825 and 886, \texttt{extra} and reduction cases at
-957--1008, and 1069--1324). No file-level comment records this. The boundary is worth stating
-precisely because it is narrow: 23 of the 818 declarations of \texttt{ShapeLogRel.lean} are
-tainted, all of them at line 5054 or later.
-\item \textbf{High.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{5232}: the $\delta$ and
-$\iota$ (\texttt{extra}) case of \texttt{LE\_Interp.strongSound}, and of \texttt{LR.adequacy}
-(\srcloc{Lean4Lean/Experimental/ShapeLogRelAdequacy.lean}{431}), is
-discharged with \texttt{axiom Params.extra\_pat}
-(\srcloc{Lean4Lean/Experimental/SExpr.lean}{614}), a genuine axiom and not a class field: the
-corresponding field is commented out of \texttt{class Params} at
-\srcloc{Lean4Lean/Experimental/SExpr.lean}{42}. The axiom asserts that every environment defeq is
-an instance of a registered pattern rule, which is the hard content of $\iota$-reduction. It is
-invisible from these files.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/LogRel.lean}{353}: \texttt{fundamental}
-(\ref{thm:expa-logrel-fundamental}) is unproved, and \texttt{LREqTy.defeq\_r} (243),
-\texttt{LREqTy.symm} (246, all three branches), \texttt{LVIsType.sort} (287) and
-\texttt{LVIsType.lift} (316) are \texttt{sorry} or \texttt{stop}. Since \texttt{stop tacticSeq}
-macro-expands to \texttt{repeat sorry} in Lean core (\texttt{Init/Tactics.lean}), the five
-\texttt{stop}s in this file (320, 361, 364, 369, 377) are silent sorries that a \texttt{grep} for
-\texttt{sorry} does not find. The module is imported by nothing and is superseded
-by \texttt{ShapeLogRel}; it should be deleted or explicitly marked abandoned.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/LogRel.lean}{70}: namespace collisions.
-\texttt{Lean4Lean.SExpr.LogRel} is declared three times in this directory with incompatible
-definitions (here as an inductive, \texttt{ShapeLogRel.lean}:5271 as a structure,
-\texttt{MoreStepIndexed.lean}:371 as another structure); likewise
-\texttt{Lean4Lean.SExpr.Classifier'} (\texttt{LogRel.lean}:8, \texttt{StepIndexed.lean}:8) and
-\texttt{Lean4Lean.SExpr.NormalType} (\texttt{LogRel.lean}:58, \texttt{StepIndexed.lean}:41). These
-compile only because no module imports two of them; combining the developments will break, and
-cross-file search for these names is misleading.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/CoinductiveLogRel.lean}{1}: the file is
-almost entirely a block comment sketching a \texttt{coinductive} command that does not exist in
-Lean 4. Its only live content is \ref{structure:expa-coind-classifier}, which nothing uses and whose
-alias discards all three indices. It still imports
-\texttt{Lean4Lean.Theory.Typing.HeadReduction} and produces an olean in the
-\texttt{Lean4Lean.Experimental} library. Dead weight.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{1665}: lines 1665--1732 are
-a block comment holding an abandoned 58-line proof of \texttt{Shape.WF.plift}, a declaration that
-does not exist in the compiled environment, containing seven \texttt{sorry} occurrences and one
-\texttt{stop}, plus three further commented stubs at 1725--1731 carrying three more. This is why
-counting \texttt{sorry} in the file reports eight lines for a file with no live \texttt{sorry}, an
-easy way to misjudge it in either direction. Delete or convert to a tracked issue.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{10}:
-\texttt{set\_option backward.do.legacy true} is applied at file scope to keep the
-\texttt{Shape.plift} proofs (\ref{def:expa-shape-plift}) working after the \texttt{do} elaborator
-change of Lean 4.32 (leanprover/lean4\#13305, tracked as digama0/lean4lean\#31). A file-wide
-backward-compatibility option on a 6100-line file is a large blast radius for a localised problem,
-and it will have to be removed eventually.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3333}: documentation is thin
-and badly distributed. Thirteen docstrings in 6100 lines, none on the pivotal definitions
-(\texttt{Shape.WF}, \texttt{Shape.hasType}, \texttt{LE\_Interp}, \texttt{InterpTyped},
-\texttt{SoundEq}/\texttt{StrongSound}, \texttt{LR}; \texttt{LogRel} documents the two fields it
-inherits from \texttt{LogRelBase} and none of its nineteen obligations), while two sit on the
-self-evident \texttt{Valuation.Compat} and \texttt{Valuation.join}. Several of those that exist
-(lines 5373, 5429) are refactoring notes rather than specifications. Nothing anywhere explains the
-central intuition that a shape is a finite lower bound on the meaning of a term and that proofs get
-shape $\bot$.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{820}: \texttt{Shape.trim} is
-defined and never used in this group or its dependents. Similarly \texttt{TShape.type} exists with
-no \texttt{TShape.prop} counterpart (line 1887), and the \texttt{TShape} head-discrimination grid
-(lines 1928--2030 plus a straggler at 2200, \ref{family:expa-tshape-discrimination}) is filled in
-only where downstream proofs happened to need it: twelve of the pairs are proved,
-\texttt{indTy\_not\_le\_ctor'} and \texttt{ctor\_not\_le\_sort} are not, so a reader cannot
-distinguish deliberate omissions from gaps.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3936}: proof-size hygiene.
-\texttt{LE\_Interp.Const.compat\_join} (3786--3934, 149 lines),
-\texttt{LE\_Interp.compat\_join} (3936--4074, 139), \texttt{LE\_Interp.subst} (4087--4231, 145),
-\texttt{LE\_Interp.Matches.of\_matchesS} (4870--4978, 109),
-\texttt{LE\_Interp.sound\_lam} (4401--4504, 104),
-\texttt{LE\_Interp.strongSound} (5054--5259, 206) and
-\texttt{LR.adequacy} (\texttt{ShapeLogRelAdequacy.lean}:106--432, 327) are each a single
-uncommented tactic block, and the \texttt{LRS} structure instance (5657--5894, 238) is a single
-uncommented term. Combined with the \texttt{variable (ih : ...)} plus \texttt{include}
-idiom used for induction hypotheses (lines 1392 and 2733), the development is essentially
-unreviewable in detail by anyone but its author.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{53}: structural design cost.
-Because \texttt{Shape} is a \texttt{def} by recursion on \texttt{Nat} rather than an inductive
-family indexed by the level, and well-formedness is a separate predicate, essentially every
-order, lift, join and typing lemma is stated three times, for \texttt{Shape}, \texttt{WShape} and
-\texttt{TShape}. Roughly the first 2500 lines are this boilerplate. A well-formed-by-construction
-inductive family, or a single \texttt{TShape}-level API with one transfer principle, would
-plausibly have halved the file.
-\item \textbf{Medium.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{3430}: the pattern-matching
-lemmas of \ref{thm:expa-le-interp-matches} rest on the \texttt{Params} field \texttt{pat\_wf},
-and from line 3931 onwards the development also uses \texttt{pat\_uniq}. There is no
-\texttt{Params} instance anywhere in the repository, so nothing exhibits an environment satisfying
-either. Whether they hold for Lean's actual recursor rules is not addressed here, and the point is
-nowhere flagged. (\texttt{Params.extra\_pat}, by contrast, was moved out of the class and declared
-as a global \texttt{axiom}; see above.)
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{4623}:
-\texttt{StrongSoundCore.const} (\ref{def:expa-soundeq-strongsound}) takes a function producing a
-\texttt{CtorBundle} for \emph{every} classification of the constant, which looks over-general since
-a constant has exactly one classification. It should be checked whether that hypothesis is ever
-instantiated non-trivially.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{6100}: the file stops after
-\texttt{LR.SubstWF.symm} (\ref{def:expa-lr-substwf}) without closing either open namespace, with no
-\texttt{trans} for \texttt{SubstWF} and no fundamental theorem, and with nothing telling the reader
-that the development continues in \texttt{ShapeLogRelAdequacy.lean}.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/LogRel.lean}{157}: \texttt{LRIsType.irrel'}
-(\ref{thm:expa-lristype-irrel}) closes two \texttt{obtain rfl} steps with \texttt{grind}, which is
-brittle across toolchain bumps. The lemma is in dead code, but the same reliance appears in live
-modules.
-\item \textbf{Low.} \srcloc{Lean4Lean/Experimental/ShapeLogRel.lean}{2716}: \texttt{find\_cycle},
-the pigeonhole lemma needed by \ref{thm:expa-hastype-mono}, is a genuinely reusable combinatorial
-result declared \texttt{private} in the middle of a shape file; it belongs in
-\texttt{Lean4Lean/Std} or upstream.
+\item Theorem~\ref{thm:expa-le-interp-strongsound} onward rests on a \texttt{sorry}
+(\texttt{SExpr.IsDefEq.strong}) and \texttt{axiom Params.extra\_pat}; exactly 23 of 818
+declarations in \texttt{ShapeLogRel.lean}, all from that point on, are tainted.
+\item \texttt{Params.pat\_wf} and \texttt{pat\_uniq}, assumed of registered $\delta$/$\iota$
+patterns, have no exhibited instance: no \texttt{Params} value for Lean's actual rules exists in
+this repository.
+\item Theorem~\ref{thm:expa-lr-adequacy}, the fundamental theorem, has a literal \texttt{sorry} in
+its \texttt{const} case; the three injectivity theorems inherit the gap.
+\item The abandoned \texttt{LogRel.lean}/\texttt{CoinductiveLogRel.lean} modules hide further
+\texttt{sorry}/\texttt{stop} declarations beyond \ref{thm:expa-lreqty-symm-hole} and
+\ref{thm:expa-logrel-fundamental}; \texttt{stop} macro-expands to \texttt{repeat sorry}.
 \end{itemize}

@@ -1,652 +1,120 @@
-\chapter{Review of the iota contribution}
+\chapter{Contribution: reduction rules for recursors (iota)}
 \label{chap:contrib-iota}
 
-This chapter is a prose review of the \texttt{iota} branch (28 commits, 2026-07-21 to
-2026-09-09, merged into \texttt{trproj} at \texttt{20ec229}). It introduces no new graph
-nodes: every technical object it discusses is a node defined in Chapters
-\ref{chap:syntax}--\ref{chap:typechecker} and referenced here by cross-reference, and every
-factual claim is traced to a file under \texttt{.blueprint-work/understand/} or to a
-command whose output is quoted. The branch's own scale, from \texttt{git diff --stat
-master..iota}: \textbf{45 files, +5628/-331, 28 commits} (\texttt{contrib-iota.md}, confirmed
-in \texttt{claims-iota.md} claim 35).
+\section{Goal}
+\begin{itemize}
+\item \lead{Given} \texttt{VInductDecl.WF} and \texttt{addInduct} unproved, and the
+refinement's \texttt{AddInduct} carrying no constructor: the modelled theory had no account
+of $\iota$.
+\item \lead{Goal} give every recursor of every inductive block a reduction rule, and prove
+sound the environment operations that install it.
+\item \lead{In short} treat $\iota$ as a schematic rewrite rule: a registry added to
+\texttt{VEnv}, fired by one generic \texttt{IsDefEq} constructor.
+\end{itemize}
 
-\section{Goal and scope}
+\section{What it adds}
+\par\smallskip\noindent
+\begin{tabular}{lp{0.64\linewidth}l}
+\toprule
+Component & What it is & Ref \\
+\midrule
+\texttt{VEnv.pats} & Third \texttt{VEnv} field: one registry entry per rewrite rule. &
+Ch.~\ref{chap:syntax}, \ref{def:venv-addpat} \\
+\texttt{IsDefEq.pat} & The $\iota$ rule: fires a registered entry, no typing premise on the
+reduct. & Ch.~\ref{chap:typing}, \ref{rule:isdefeq-pat} \\
+\texttt{PatTyped}, \texttt{PatWF} & Typing predicate for a schematic rule (existential) and
+its template-headed shape. & Ch.~\ref{chap:typing}, \ref{def:pattyped} \\
+\texttt{VInductDecl.WF} & 20-field specification of a well-formed inductive block:
+positivity, universes, large elimination. & Ch.~\ref{chap:inductive}, \ref{structure:ind-wf} \\
+\texttt{addInduct} & Four-stage construction (types, constructors, recursors, rules)
+replacing the unproved extension. & Ch.~\ref{chap:inductive}, \ref{def:ind-add-induct} \\
+\texttt{toParams} & \texttt{Params} instance built from \texttt{env.pats}, gated by
+\texttt{DefEqsAsPats}. & Ch.~\ref{chap:inductive}, \ref{def:indparams-toparams} \\
+Quotient safety & Kernel check rejecting an unsafe \texttt{Eq}; the quotient extension proved
+sound and unconditional. & Ch.~\ref{chap:kernel}, \ref{def:kernel-check-eq-type} \\
+\texttt{AddInduct} & Refinement bookkeeping: lookup and distinctness theorems derived, not
+assumed. & Ch.~\ref{chap:trenv}, \ref{struct:add-induct} \\
+$\iota$-lookup bridge & Environment lookup for a registered rule, feeding the type checker's
+recursor reduction. & Ch.~\ref{chap:trenv}, \ref{thm:tr-env-iota-rec} \\
+\bottomrule
+\end{tabular}\par\smallskip
 
-On upstream \texttt{master} (\texttt{8223d22}) the abstract model has no account of
-$\iota$-reduction. \texttt{Lean4Lean/Theory/Inductive.lean} is a 7-line file whose only two
-declarations are
-\begin{quote}
-\texttt{def VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop := sorry} \\
-\texttt{def VEnv.addInduct (env : VEnv) (decl : VInductDecl) : Option VEnv := sorry}
-\end{quote}
-(quoted verbatim from \texttt{git show master:Lean4Lean/Theory/Inductive.lean}; the file is 7
-lines, corrected in \texttt{claims-iota.md} claim 36 against \texttt{contrib-iota.md}'s
-erroneous ``8 lines''). \texttt{Theory/Typing/InductiveLemmas.lean} on master is 10 lines,
-whose only theorem, \texttt{addInduct\_WF}, is also \texttt{:= sorry}. On the refinement side,
-master's \texttt{Verify/Environment/Basic.lean} declares \texttt{AddInduct} as a
-constructor-less \texttt{inductive ... : Prop} with a \texttt{-- TODO} in place of any
-constructor, documented in its own docstring as ``essentially a \texttt{sorry}'' that makes
-\texttt{TrEnv'.induct} vacuous; \texttt{Aligned.addInduct} follows by \texttt{nomatch}.
-Because no inductive can ever enter a translated environment, master's own
-\texttt{checkEqType.WF} is provable only by deriving \texttt{False} from
-\texttt{TrEnv'.no\_inductInfo}, and \texttt{addQuot.WF}'s non-initialised branch is discharged
-by that \texttt{False.elim} (\texttt{upstream-comparison.md} \S2b--\S2d, byte-compared against
-the live upstream repository on 2026-09-14). So on master, no inductive type ever enters a
-translated environment, no recursor ever computes, and the modelled type theory has $\beta$,
-$\delta$, $\eta$, proof irrelevance and the quotient rule, but not $\iota$.
+\section{Main results}
+\label{sec:contrib-iota-claims}
+\begin{itemize}
+\item \stProved{} \ref{thm:indlem-add-induct-wf}: \texttt{addInduct} is sound, axiom
+footprint \texttt{propext}, \texttt{Classical.choice}, \texttt{Quot.sound}.
+\item \stProved{} \ref{thm:add-quot-wf}, \ref{thm:check-eq-type-ok}: the quotient extension
+is sound, replacing a proof that becomes false, not merely vacuous, once inductives are
+enterable.
+\item \stProved{} \ref{thm:aligned-add-induct}, \ref{thm:tr-env-iota-rec}: the refinement's
+bookkeeping and $\iota$-lookup are derived, not assumed.
+\item \stTainted{} \ref{thm:vtc-iota-reduce-core}: the type checker's recursor reduction
+matches a registered rule exactly; taint reaches it through \texttt{TrProj.uniq}.
+\item \stTainted{} \ref{thm:indparams-cr-defeq-of-induct}: Church--Rosser for the
+\texttt{Params} instance, on a single-block environment; taint reaches it through master's
+own \texttt{NormalEq.parRed}.
+\item \stSorry{} \ref{thm:wf-patsstrong}: every registered rule preserves types (see What is
+not proved).
+\end{itemize}
 
-The branch supplies $\iota$ as a schematic rewrite-rule registry: \texttt{VEnv} gains a third
-field \texttt{pats} beside \texttt{constants}/\texttt{defeqs}; \texttt{VEnv.addInduct}
-installs one entry per recursor rule; \texttt{IsDefEq} gains one generic constructor
-\texttt{pat} that fires any registered entry. This promotes two pieces Mario Carneiro had
-already put in the tree as prototypes to live status: the \texttt{SimplePattern.iota}
-constructor of \texttt{Pattern.lean}, and the \texttt{VEnv.Params} class of
-\texttt{ChurchRosser.lean}, whose \texttt{Pat}/\texttt{pat\_wf} fields were previously an
-\emph{assumed} interface with no instance anywhere in the repository
-(\texttt{upstream-comparison.md} \S2a, \texttt{claims-iota.md} claim 40). No other upstream
-branch and no other open pull request touches any of this
-(\texttt{upstream-comparison.md} \S1--\S2).
-
-\section{Design}
-
-\textbf{The pats registry.} \srcloc{Lean4Lean/Theory/VEnv.lean}{21} adds the field
-\texttt{pats : (p : Pattern) $\to$ p.RHS $\times$ p.Check $\to$ Prop} (\ref{def:venv-addpat}),
-with \texttt{addPat} (\srcloc{Lean4Lean/Theory/VEnv.lean}{44}) registering one rule and
-\texttt{LE.pats} (\srcloc{Lean4Lean/Theory/VEnv.lean}{50}) extending environment monotonicity
-to it. \texttt{addPat} is total and performs no freshness or consistency check, unlike
-\texttt{addConst}; functionality of the registry is recovered only downstream, as the
-\texttt{PatsIota} invariant (\ref{structure:indparams-patsiota},
-\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{133}) under \texttt{VEnv.WF}
-(\texttt{hygiene-review.md} \S(a)).
-
-\textbf{\texttt{IsDefEq.pat}.} The $\iota$ rule itself
-(\ref{rule:isdefeq-pat}, \srcloc{Lean4Lean/Theory/Typing/Basic.lean}{60}) asserts the reduct
-at the redex's own type with no typing premise on the reduct: $\Gamma \vdash e : A$ and a
-registered match give $\Gamma \vdash e \equiv r.1.\mathtt{apply}\ m_1\ m_2 : A$. The docstring
-names this ``the thesis's regularity theorem for $\iota$ taken as a rule''
-(\texttt{thesis-map.md} \S3(a), point 3), and the debt is repaid --- or rather deferred --- as
-\ref{thm:wf-patsstrong} (\S\ref{sec:contrib-iota-sorry} below).
-
-\textbf{\texttt{PatTyped}/\texttt{PatWF}.} \ref{def:pattyped}
-(\srcloc{Lean4Lean/Theory/Typing/Basic.lean}{92}) is the \texttt{VDefEq.WF} analogue for a
-schematic rule: existential in $U, \Gamma, e, m_2, B$, so ``the rule is typed'' means only that
-\emph{some} instantiation is typable (\texttt{hygiene-review.md} \S(a), MEDIUM). \ref{def:patwf}
-(\srcloc{Lean4Lean/Theory/Typing/Basic.lean}{104}) conjoins \texttt{PatTyped} with
-\texttt{RHS.TemplateHeaded} (\ref{inductive:pattern-template-headed}). Rule admissibility is
-recoverable from the environment (\texttt{Ordered.patWF}, \ref{thm:ordered-patwf}) and monotone
-(\ref{fam:patwf-mono}). The typing/reviews reader (\texttt{reviews/typing.md}) rates this split
-as the group's real idea, ``not window dressing''.
-
-\textbf{The inductive block specification, \texttt{VInductDecl.WF}.} A 20-field structure at
-\srcloc{Lean4Lean/Theory/Inductive.lean}{335} (\ref{structure:ind-wf}; field count independently
-verified in \texttt{claims-iota.md} claim 39), built from a hierarchy of shape predicates over
-an already-elaborated $\Pi$-type: \texttt{CtorResult} (\ref{def:ind-ctor-result}),
-\texttt{ValidIndApp}/\texttt{FieldPositive}/\texttt{CtorPositive}
-(\ref{def:ind-valid-ind-app}, \ref{def:ind-field-positive}, \ref{def:ind-ctor-positive}),
-\texttt{MajorApp} (\ref{def:ind-major-app}), \texttt{MotiveShape}/\texttt{MinorHeaded}/
-\texttt{MinorFor} (\ref{def:ind-motive-shape}, \ref{def:ind-minor-headed},
-\ref{def:ind-minor-for}), \texttt{RecShape}/\texttt{CtorShape}
-(\ref{def:ind-rec-shape}, \ref{def:ind-ctor-shape}) and \texttt{RuleShape}
-(\ref{def:ind-rule-shape}), plus \texttt{LargeElim}/\texttt{LargeElimShape}
-(\ref{def:ind-large-elim}, \ref{def:ind-large-elim-shape}). Fields
-\texttt{ctors\_positive}, \texttt{universes} and \texttt{recs\_elim} carry positivity, the
-$\mathtt{imax}(\ell',\ell)\le\ell$ universe bound and large-elimination, contradicting the
-stale claim that these were ``not yet enforced'' (\texttt{claims-iota.md} claim 14).
-
-\textbf{\texttt{addInduct}'s four stages.} \ref{family:ind-add-stages}
-(\texttt{addTypes}/\texttt{addCtors}/\texttt{addRecs}/\texttt{addRules}) group the kernel's
-per-recursor interleaving into four global passes, each typed in the environment the kernel
-checks the corresponding constant kind in; \ref{def:ind-add-induct}
-(\srcloc{Lean4Lean/Theory/Inductive.lean}{316}) chains them and replaces master's
-\texttt{sorry}. \ref{def:ind-add-rec-rule} (\srcloc{Lean4Lean/Theory/Inductive.lean}{257})
-installs one $\iota$ rule per recursor rule, registered with \texttt{iotaCheck = .true}: the
-kernel performs no parameter check at $\iota$-reduction time, matched exactly by
-\texttt{inductiveReduceRecCore} (\ref{def:kernel-iota-core}, \texttt{claims-iota.md} claim 18).
-\texttt{addInduct}'s soundness is \ref{thm:indlem-add-induct-wf}, discharged
-sorry-free (\texttt{claims-iota.md} claim 2, \texttt{\#print axioms} $=$
-\texttt{[propext, Classical.choice, Quot.sound]}).
-
-\textbf{The \texttt{Params} instance.} \ref{def:indparams-toparams}
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{393}) builds a
-\texttt{Params} instance from \texttt{env.pats}, closing the five structural side conditions
-(\ref{family:indparams-params-sides}) via \texttt{PatsIota}
-(\ref{structure:indparams-patsiota}) and the new class field \texttt{pat\_env} --- the one
-forced addition to Carneiro's class, closing through master's existing
-\texttt{ParRed.extra} case of Church--Rosser (\texttt{claims-iota.md} claim 40). It is gated
-by \ref{def:indparams-defeqs-as-pats} (\texttt{DefEqsAsPats}), an explicit hypothesis rather
-than a proved fact: its own docstring admits it fails as soon as a \texttt{def} or the
-quotient rule is declared, because $\delta$ and the quotient redex live in
-\texttt{env.defeqs}, not \texttt{env.pats} (\texttt{Theory/Typing/InductiveParams.lean:350--377}).
-\ref{def:indparams-induct-params} specialises the instance to a single-block environment and
-\ref{thm:indparams-cr-defeq-of-induct} demonstrates Church--Rosser on it --- but both are
-\texttt{@[reducible] def}s, not registered instances, and (\S\ref{sec:contrib-iota-hygiene})
-have no consumer anywhere else in the repository.
-
-\textbf{Quotient initialisation.} The branch's collateral fix to master's vacuity: with
-inductives now enterable, master's \texttt{checkEqType.WF} (proving \texttt{fun \_ =>
-False}) becomes false rather than merely unappealing, so it is deleted along with
-\texttt{no\_inductInfo}. \ref{def:kernel-check-eq-type} now rejects an \texttt{unsafe}
-\texttt{Eq} (one added kernel line, \srcloc{Lean4Lean/Quot.lean}{24}), which discharges the
-former \texttt{Environment.EqSafe} assumption; the new 615-line
-\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1} builds the real telescopes and proves
-\ref{thm:add-quot-wf}, \ref{thm:exists-add-quot}, \ref{thm:quot-ready} and
-\ref{thm:check-eq-type-ok} sorry-free and unconditional
-(\texttt{claims-iota.md} claims 22--23).
-
-\textbf{\texttt{AddInduct} bookkeeping in \texttt{Verify}.} \ref{struct:add-induct}
-(\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{272}) is the branch's central rework
-(milestone M4 below): a data-carrying \texttt{structure} whose bookkeeping --- names,
-distinctness, lookup transport --- is \emph{derived} rather than assumed as further fields,
-replacing master's constructor-less \texttt{Prop}. \ref{struct:tr-ind-type} and
-\ref{struct:tr-recursor} translate one type former and one recursor; the derived theorems
-\texttt{env\_eq}, \texttt{le}, \texttt{wf}, \texttt{find?\_mono}, \texttt{value\_find},
-\ref{thm:add-induct-rec-find}, \ref{thm:add-induct-rec-reg} and \ref{thm:add-induct-ctor-find}
-were, at an earlier revision, assumed fields (\texttt{claims-iota.md} claim 46, though the
-earlier structure had only four of the seven as fields, not seven, correcting an
-over-count in the commit message). \ref{thm:aligned-add-induct} and
-\ref{thm:aligned-add-rules} extend \texttt{Aligned} with \texttt{pat} and \texttt{block}
-clauses mirroring the existing \texttt{defeq}/\texttt{const} cases. \ref{thm:tr-env-pats-iota}
-and its variant \texttt{pats\_iota'} expose the $\iota$-rule lookup with the witness named,
-feeding \ref{thm:tr-env-iota-defeq} and \ref{thm:tr-env-iota-rec}, which is consumed by
-\ref{thm:vtc-iota-reduce-core} --- the one internal consumer of the whole interface
-(\S\ref{sec:contrib-iota-hygiene}).
+\section{What is not proved}
+\label{sec:contrib-iota-sorry}
+\par\smallskip\noindent
+\begin{tabular}{p{0.19\linewidth}p{0.40\linewidth}p{0.32\linewidth}}
+\toprule
+Declaration & What is missing & Source \\
+\midrule
+\ref{thm:wf-patsstrong} & Every registered rule preserves types; needs injectivity of the
+block's type formers. & \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334} \\
+Type-former injectivity & Three bare \texttt{sorry}s, untouched by this contribution. &
+\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{12} \\
+\texttt{addDecl.WF}, inductive case & Still \texttt{sorry}; nothing constructs an
+\texttt{AddInduct} witness for a real inductive. & \srcloc{Lean4Lean/Verify/Environment.lean}{208} \\
+\texttt{DefEqsAsPats} & Assumed, not proved: fails once a \texttt{def} or the quotient rule
+is declared. & \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{350--377} \\
+\bottomrule
+\end{tabular}\par\smallskip
 
 \section{Relation to the thesis}
+\par\smallskip\noindent
+\begin{tabular}{p{0.19\linewidth}p{0.34\linewidth}p{0.38\linewidth}}
+\toprule
+Aspect (axioms.tex \S2.6) & Thesis & This contribution \\
+\midrule
+Elimination levels (\S2.6.2) & Two reasons an inductive is large-eliminating. & Close
+paraphrase, as \ref{def:ind-large-elim}'s three disjuncts. \\
+Universe bound (\S2.6.3) & One extra recursor universe. & Same, via the same bound on the
+extra parameter. \\
+Recursor as axiom & Recursor and eliminator are additional axiomatic constants. & Realised
+by \texttt{addInduct}'s four-stage construction (\ref{def:ind-add-induct}). \\
+Positivity (\S2.6.1) & Built into the grammar of the \texttt{ctor} judgment. & Mirrors the
+kernel's own check on an already-elaborated type instead; no lemma relates the two. \\
+Recursor data & Generated from the constructor specification. & Carried explicitly and
+pinned by \ref{structure:ind-wf}'s 20 fields. \\
+$\iota$ rule (\S2.6.4) & Reduct's shape fully pinned; regularity is a proved theorem. &
+Reduct pinned only in count, not shape or minor-premise binders; \texttt{rules\_wf} checks
+the stored rule's well-typedness, not that it equals the thesis's generated rule; regularity
+taken as the rule itself (\ref{rule:isdefeq-pat}), open as \ref{thm:wf-patsstrong}. \\
+K-like reduction (\S4.1) & A second rule for subsingleton eliminators. & Not registered. \\
+Scope of $\iota$ (\S4) & Excludes subsingleton inductives, covered instead by K$^+$. &
+Registered for every constructor of every block. \\
+Nested inductives & Cannot be expressed, for an unrelated reason. & Excluded from
+\ref{structure:ind-wf} by construction. \\
+\bottomrule
+\end{tabular}\par\smallskip
 
-Correspondences are traced against \texttt{lean-type-theory/axioms.tex} \S2.6.1--2.6.4
-(\texttt{thesis-map.md} \S3(a); numbering confirmed against the source: \S2 ``The axioms'',
-\S2.6 ``Inductive types''). \textbf{What follows the thesis.} Elimination levels
-(\S2.6.2) are faithful: \ref{def:ind-large-elim}'s three disjuncts are close paraphrases of the
-thesis's two reasons an inductive can be large-eliminating, down to the ``subsingleton
-elimination'' wording. The recursor's universe clause $\kappa$ (\S2.6.3) is handled well by
-\texttt{recs\_elim}: a recursor carries the block's universe parameters plus exactly one extra,
-which must be \texttt{VLevel.param 0} iff every motive ends in \texttt{Sort (param 0)}, else
-\texttt{Prop}. The $\iota$ rule itself (\S2.6.4) is faithful up to three caveats the source
-documents in place (below). \ref{def:ind-add-induct}'s four-stage design realises the
-thesis's remark that ``$\mu t{:}F.K$ and $c_{\mu t:F.K}$ are implemented as additional
-axiomatic constant symbols'' (\texttt{thesis-map.md} \S3(a)).
-
-\textbf{What deviates.} The single biggest architectural choice is that the branch
-\emph{carries} kernel-shaped recursor data (\texttt{VRecursor}, \texttt{VRecRule}, the
-\texttt{VInductDecl.recs} field) and pins its shape with the 20 fields of
-\ref{structure:ind-wf}, where \S2.6.1--2.6.4 instead \emph{generates} the recursor type and the
-$\iota$ rules from the block's constructor specification. This survived the post-review
-rework (M5 below) and is the item a maintainer is most likely to re-raise
-(\texttt{contrib-iota.md} \S(e)). Positivity (\S2.6.1) is a second deviation: the thesis
-builds strict positivity into the grammar of its \texttt{ctor} judgment; \ref{def:ind-ctor-result}
-and \ref{def:ind-ctor-positive} instead mirror the \emph{kernel's} \texttt{checkPositivity}/
-\texttt{isValidIndApp?} over an already-elaborated type, and no lemma anywhere relates the two
-formulations (\texttt{thesis-map.md} \S3(a)). Within the $\iota$ rule itself, three
-caveats are stated in the source: (1) the recursive-argument vector $v$ is pinned only in
-\emph{number} (\texttt{RuleShape}'s \texttt{nrec}), not in the thesis's shape
-$v_i = \lambda x{::}\xi_i.\ \mathrm{rec}_P\ C\ e\ \pi_i[b,x]\ (u_i\ x)$; (2) \texttt{rules\_wf}
-asserts only that the kernel's stored rule is well-typed and template-headed, not that it
-\emph{is} the thesis's generated rule; (3) \ref{rule:isdefeq-pat} carries no typing premise on
-the reduct at all (the regularity-as-a-rule move above). The minor premise
-(\texttt{MinorFor}/\texttt{MinorHeaded}) is likewise only partially pinned: neither the
-$b{::}\beta$ prefix nor the inductive-hypothesis binders $\delta_i$ of \S2.6.3's $\varepsilon_c$
-are constrained, and the docstring says the heads of a mutual recursor's other motives are
-``unconstrained''.
-
-\textbf{No thesis counterpart.} K-like reduction is absent: the thesis's \S4.1 second
-reduction rule for subsingleton eliminators is not registered (\texttt{VRecursor.k} is
-recorded and unused, and \texttt{addRecRule}'s own docstring concedes the point). More subtly,
-the thesis restricts $\iota$ to \emph{non}-subsingleton inductives, with \texttt{K\textsuperscript{+}}
-covering the rest; the branch instead registers $\iota$ for every constructor of every block,
-diverging from \S4 on both sides of that split (\texttt{thesis-map.md} \S3(a)). The
-four-stage \texttt{addInduct} split and the \texttt{Params}-instance construction
-(\texttt{toParams}/\texttt{DefEqsAsPats}) are engineering devices with no thesis analogue at
-all; nested inductives are excluded from \ref{structure:ind-wf} by construction
-(\texttt{recs\_over\_block}, \texttt{rules\_ctor}), where the thesis's \texttt{spec} judgment
-cannot express them either, but for an unrelated reason (\texttt{thesis-map.md} \S5).
-
-\section{History and churn}
-
-28 commits, 2026-07-21 to 2026-09-09, all authored by Alessandro Sosso except one committer
-identity (\texttt{3bbdb22}, author still \texttt{sosso@cs.au.dk}), linear with two upstream
-merges (\texttt{contrib-iota.md} \S(b), \texttt{claims-iota.md} claim 50). Milestones:
-
-\begin{description}
-\item[M1 --- first cut (2026-07-21, 8 commits).] \texttt{cb920e1} relocates
-\texttt{Pattern.lean} into \texttt{Theory/} (and incidentally commits agent-tooling files);
-\texttt{5a4bdda} adds the \texttt{pats} field; \texttt{a3d6076} the \texttt{IsDefEq.pat} rule;
-\texttt{41f3fb6} a real \texttt{addInduct}; \texttt{e92f762} the first \texttt{Params}
-instance; \texttt{d0a1ae7}/\texttt{9e186e6} the \texttt{Verify} bridge. At this point
-\ref{structure:ind-wf} was deliberately underspecified (positivity, universes and large
-elimination ``not yet enforced''), \texttt{AddInduct} hard-coded \texttt{.safe}, and there
-were 12 sorries tagged \texttt{IOTA-TODO(soundness)}.
-\item[M2 --- toolchain port and first revert (2026-08-06).] Merges upstream master
-(v4.33.0-rc2); \texttt{3bbdb22} reverts \texttt{cb920e1}'s file move and removes the committed
-agent-tooling files, minimising the diff against upstream.
-\item[M3 --- consumer-driven strengthening (2026-08-08 to 2026-08-18).]
-\texttt{349da4b} trims comments to house style ($-279/+123$ lines, verified in
-\texttt{claims-iota.md} claim 49). \texttt{1a1ebe8} is the pivotal fix: after wiring the
-interface to the downstream erasure consumer end to end, the opaque $\exists r$ in
-\texttt{pats\_iota} could not be instantiated at the trivial check, so the full telescope
-split and a \texttt{TrExprS} link are pinned into \texttt{AddInduct.rec\_find} and the witness
-is exposed as \texttt{pats\_iota'}.
-\item[M4 --- first ``principled rework'' (2026-09-04, +3715/-682).] \texttt{d69ac5d}: derive
-\texttt{AddInduct}'s bookkeeping instead of assuming it, drop the \texttt{.safe} gate,
-flesh out \ref{structure:ind-wf}, and add the 615-line
-\srcloc{Lean4Lean/Verify/Environment/Quot.lean}{1}.
-\item[M5 --- second, deeper rework after an adversarial review (2026-09-08, 10 commits).]
-\texttt{REVIEW\_2026-09-07.md} mechanised two blockers: \textbf{B1}, a
-\texttt{Prop} with two nullary constructors and a \texttt{Sort u} recursor satisfying every
-field of the then-current \ref{structure:ind-wf}, from which
-$(\forall p{:}\mathtt{Prop},\, p\to p) \equiv (\forall p{:}\mathtt{Prop},\, p)$ followed in a
-\texttt{VEnv.WF} environment; \textbf{B2}, \ref{thm:wf-patsstrong} was plausibly false against
-an older type former whose rule fired on an axiom. \texttt{4016efa} responds by adding
-\texttt{ctors\_positive}, \texttt{universes}/the \texttt{imax} bound, \texttt{LargeElim} and
-the block-membership fields \texttt{recs\_over\_block}/\texttt{rec\_counts}/\texttt{rules\_ctor};
-\texttt{f53b727} restates \ref{thm:wf-patsstrong} over well-formed prefixes
-(\ref{def:wfprefix}). Hygiene commits follow: \texttt{18805a4} deletes a decoder section,
-\texttt{30897c0} adds the unsafe-\texttt{Eq} rejection and records it in \texttt{divergences.md},
-\texttt{be30d35} closes the four \texttt{Experimental} \texttt{pat} cases.
-\end{description}
-
-A sidecar branch, \texttt{iota-consume} (not an ancestor of \texttt{iota} or
-\texttt{trproj}), is the downstream consumer's own proposal for the same three
-strengthenings, written independently and handed back for review
-(\texttt{iota-consume-review-brief.md}); its first two edits were re-implemented as
-\texttt{1a1ebe8}, its third dropped. Churn is visible but concentrated: two
-reverts/relocations, two upstream merges, two full reworks of \ref{structure:ind-wf}
-(\texttt{d69ac5d}, \texttt{4016efa}), one restatement of \ref{thm:wf-patsstrong}
-(\texttt{f53b727}), and two commit pairs duplicated with \texttt{trproj}
-(\texttt{7a68882}$\equiv$\texttt{6fd8a1d}, \texttt{3de1dcb}$\equiv$\texttt{b4aba6d}) that will
-confuse anyone reading the merged history (\texttt{contrib-iota.md} \S(b)). Two of the
-branch's own files were rewritten more than they were extended:
-\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{1} took 14 commits, +1039/-576, over
-half rewritten, and \srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{1} took 11
-(\texttt{hygiene-review.md} \S(e); by declaration count per \texttt{unused-contrib.md} \S4,
-\texttt{InductiveLemmas.lean} is 96\% iota (70/73) and \texttt{InductiveParams.lean} is 88\%
-iota (22/25), the rest trproj).
-
-\section{Claims audit}
-\label{sec:contrib-iota-claims}
-
-Every claim checked in \texttt{claims-iota.md} against the compiled \texttt{trproj} tree,
-condensed to one line each. Verdicts are the file's own, upgraded where noted.
-
-\begin{description}
-\item[1 (PR\_iota.md, \textbf{TRUE}).] Master's \texttt{VInductDecl.WF}/\texttt{addInduct}
-sorries are closed --- \srcloc{Lean4Lean/Theory/Inductive.lean}{316}, \texttt{:335}, no
-\texttt{sorry} in the 444-line file.
-\item[2 (PR\_iota.md, \textbf{TRUE}).] \texttt{addInduct\_WF} is proved ---
-\srcloc{Lean4Lean/Theory/Typing/InductiveLemmas.lean}{229}, axiom-clean.
-\item[3 (PR\_iota.md, \textbf{TRUE}).] Exactly one new sorry, \texttt{patsStrong} ---
-grep of \texttt{sorry} on \texttt{iota} minus \texttt{master} outside \texttt{Experimental}
-yields only \srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}.
-\item[4 (PR\_iota.md, \textbf{TRUE}).] Non-\texttt{Experimental} sorry count: master 23,
-branch 21 --- recounted by hand excluding prose/comment hits.
-\item[5 (PR\_iota.md, \textbf{TRUE, recipe wrong}).] No new axioms --- the one apparent diff
-line is a docstring continuation, not a declaration; master already carries 12
-non-\texttt{Experimental} axioms the claim's own recipe misses.
-\item[6 (REVIEW, \textbf{TRUE}).] No \texttt{native\_decide} anywhere in the branch.
-\item[7 (PR\_iota.md, \textbf{PARTIAL}).] \texttt{lake build} green on all targets ---
-all 117 modules have oleans (120 total, under \texttt{.lake/build/lib/lean/}) and three
-re-elaborate from source with zero errors, but
-\texttt{Lean4Lean.Tests} is not in \texttt{defaultTargets} and a full rebuild is out of scope
-for this review.
-\item[8 (REVIEW F15, \textbf{TRUE}).] \texttt{Experimental} sorry counts equal master's
-(103$=$103); the four \texttt{pat} cases are closed with real proofs.
-\item[9 (PR\_DESCRIPTION.md, \textbf{TRUE, upgraded}).] \texttt{TrEnv.iota\_defeq} is
-\texttt{[propext]}-only --- measured directly with \texttt{lake env lean}.
-\item[10 (PR\_DESCRIPTION.md, \textbf{PARTIAL}).] \texttt{pats\_iota'}/\texttt{iota\_rec}
-inherit \texttt{sorryAx} only via \texttt{TrProj} --- true and measured on \texttt{trproj}
-(where \texttt{TrProj} is real, both are clean modulo master's own hash-map axioms);
-not directly measured on \texttt{iota} itself, where \texttt{TrProj} is still \texttt{sorry}.
-\item[11 (PR\_iota.md, \textbf{TRUE}).] \texttt{TrEnv'.induct} applies at every safety level,
-no \texttt{.safe} guard --- \srcloc{Lean4Lean/Verify/Environment/Basic.lean}{582}.
-\item[12 (IOTA\_CONTRIBUTION.md, \textbf{FALSE, stale}).] Contradicted by 11; true only at an
-earlier commit (\texttt{dc01931}).
-\item[13 (IOTA\_CONTRIBUTION.md, \textbf{FALSE now}).] ``12 \texttt{IOTA-TODO} sorries'' ---
-zero hits today; accurate only at \texttt{eddf009}.
-\item[14 (PR\_DESCRIPTION\_formal.md, \textbf{FALSE, stale}).] \texttt{VInductDecl.WF}
-``records only checkable conditions'' --- \texttt{ctors\_positive}, \texttt{universes},
-\texttt{recs\_elim} are fields today.
-\item[15 (IOTA\_CONTRIBUTION.md, \textbf{FALSE for two, true in spirit for one}).]
-\texttt{pat\_uniq}/\texttt{pat\_app\_uniq} are proved; \texttt{extra\_pat} is not proved but
-assumed as \texttt{DefEqsAsPats}.
-\item[16 (IOTA\_CONTRIBUTION.md, \textbf{FALSE, stale}).] \texttt{Aligned.addInduct} is proved
-at \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{102}.
-\item[17 (IOTA\_CONTRIBUTION.md, \textbf{FALSE/misleading}).] ``No new soundness gap for the
-consumer'' --- true of the four handback lemmas in isolation; every strong-system consumer
-today routes through the sorried \ref{thm:wf-patsstrong} via the \texttt{CoeOut} instance.
-\item[18 (PR\_DESCRIPTION.md, \textbf{TRUE}).] \texttt{iotaCheck = .true}: no kernel parameter
-check at $\iota$-reduction time.
-\item[19 (PR\_iota.md, \textbf{TRUE, upgraded: run}).] \texttt{iotaRHS} matches
-\texttt{inductiveReduceRec}'s slicing exactly --- \texttt{lake env lean} on
-\texttt{Tests/IotaShape.lean} exits 0 with a failing control confirming the assertions fire.
-\item[20 (PR\_iota.md, \textbf{TRUE}).] \texttt{VInductDecl.WF} specifies a direct block;
-nested inductives are outside it; \texttt{Tree} is the documented negative control, run at
-\srcloc{Lean4Lean/Tests/IotaShape.lean}{605}.
-\item[21 (PR\_iota.md, \textbf{TRUE}).] \texttt{AddInduct}'s seven bookkeeping theorems are
-derived, not assumed.
-\item[22 (PR\_iota.md/REVIEW F06, \textbf{TRUE}).] \texttt{checkEqType} rejects an unsafe
-\texttt{Eq}; \texttt{EqSafe} is gone; recorded in \texttt{divergences.md}.
-\item[23 (PR\_iota.md, \textbf{TRUE}).] \texttt{Verify/Environment/Quot.lean} replaces a
-proof that was vacuous through \texttt{no\_inductInfo} with a real, sorry-free one.
-\item[24 (REVIEW F09, \textbf{TRUE, hollow}).] The first internal consumer,
-\texttt{inductiveReduceRecCore.WF}, landed, but \texttt{reduceRecursor.WF} is still
-\texttt{sorry} and nothing consumes \texttt{inductiveReduceRecCore} itself.
-\item[25 (REVIEW F23, \textbf{TRUE, unconsumed}).] \texttt{toParams} is exercised by
-\texttt{inductParams}/\texttt{crDefEq\_of\_induct}, but all 13 occurrences of these names are
-inside one file with no library consumer.
-\item[26 (PR\_iota.md/REVIEW, \textbf{TRUE}).] \ref{def:patsstrong} is restated over
-well-formed prefixes (F05 fixed), though it still also quantifies over constant-only
-extensions.
-\item[27 (PR\_iota.md, \textbf{TRUE}).] 67 \texttt{OrderedStrong} occurrences, 64 declaration
-heads retyped from \texttt{Ordered}, all previously at a \texttt{VEnv.WF} call site.
-\item[28 (PR\_iota.md, \textbf{FALSE}).] ``Nothing previously sorry-free at a bare
-\texttt{Ordered} hypothesis loses that'' --- master's \texttt{Ordered.strong} was exactly such
-a theorem and no longer exists.
-\item[29 (REVIEW, \textbf{TRUE, upgraded: mechanised here}).] The review's two counterexamples
-are refuted sorry-free against the reworked \ref{structure:ind-wf}; the in-repo test suite
-stops one step short of this.
-\item[30 (REVIEW, \textbf{TRUE}).] No mention of the downstream consumer anywhere in code or
-docstrings.
-\item[31 (REVIEW, \textbf{PARTIAL}).] Style conformance: 2 lines over 100 columns on
-\texttt{trproj}, 7 on \texttt{iota} itself, against master's 49; substantively compliant
-either way.
-\item[32 (iota-consume-review-brief.md, \textbf{TRUE}).] The \texttt{rec\_find} strengthening
-creates no proof obligation today: nothing constructs an \texttt{AddInduct}.
-\item[33 (downstream-asks-round4.md, \textbf{TRUE, upgraded}).] The downstream
-\texttt{lean-to-lambdabox} repository pins \texttt{20ec229} and consumes
-\texttt{iotaRHS}/\texttt{PatTyped} directly, verified in the sibling checkout.
-\item[34 (contrib-iota.md header, \textbf{FALSE}).] ``Byte-identical between \texttt{iota} and
-\texttt{trproj} except one file'' --- 17 files differ, +2273/-170;
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1} alone differs by 659 lines.
-\item[35 (contrib-iota.md, \textbf{TRUE}).] 45 files, +5628/-331, 28 commits, verbatim.
-\item[36 (contrib-iota.md, \textbf{FALSE, both numbers}).] Master's file is 7 lines, not 8;
-the current file is 444 (\texttt{trproj})/443 (\texttt{iota}) lines, not 455.
-\item[37 (contrib-iota.md, \textbf{TRUE}).] \texttt{Pattern.lean}: 232 master lines, 725 now.
-\item[38 (contrib-iota.md, \textbf{PARTIAL}).] \texttt{InductiveParams.lean} is 433 lines on
-\texttt{trproj}, 423 on \texttt{iota}.
-\item[39 (PR\_iota.md, \textbf{TRUE}).] \texttt{VInductDecl.WF} has exactly 20 fields, counted.
-\item[40 (PR\_iota.md, \textbf{TRUE}).] \texttt{SimplePattern.iota} and the \texttt{Params}
-class predate the branch; only \texttt{pat\_env} is new.
-\item[41 (PR\_iota.md, \textbf{TRUE}).] \texttt{Aligned} gains \texttt{pat} and \texttt{block}
-clauses.
-\item[42 (PR\_iota.md, \textbf{PARTIAL, stale numbers}).] ``16 adversarial declarations, 49
-library inductives'' --- accurate for an earlier commit; the shipped driver runs 48/9/10/10.
-\item[43 (PR\_DESCRIPTION.md, \textbf{TRUE}).] \texttt{insertDefs\_wf} was purely relocated,
-not rewritten.
-\item[44 (PR\_DESCRIPTION.md, \textbf{TRUE}).] \texttt{pats\_iota'} needs an \texttt{hsafe}
-hypothesis because master's \texttt{ignore} case can skip an unsafe recursor.
-\item[45 (7a68882, \textbf{TRUE}).] The \texttt{Inductive/Reduce.lean} split is
-token-identical to the original body apart from variable renaming.
-\item[46 (d69ac5d, \textbf{PARTIAL}).] ``Seven previously-assumed fields become theorems'' ---
-only four of the seven named were actually fields before.
-\item[47 (d69ac5d, \textbf{PARTIAL}).] ``33 to 24'' sorries --- the earlier count was 35, not
-33.
-\item[48 (dc01931, \textbf{TRUE}).] Handback axiom lists (\texttt{iota\_defeq}
-\texttt{[propext]}, \texttt{addInduct\_pat} \texttt{[propext, Quot.sound]}) match today.
-\item[49 (349da4b, \textbf{TRUE}).] Comment-only commit, $-279/+123$, verbatim.
-\item[50 (contrib-iota.md, \textbf{TRUE}).] \texttt{3bbdb22} is the only commit under a second
-committer identity.
-\item[51 (PR\_iota.md, \textbf{TRUE, two documented divergences}).] \texttt{VInductDecl.WF}
-follows \S2.6.1--2.6.4 line by line, with the recursor-data-as-carried and
-$v$-not-pinned divergences named in the docstrings.
-\item[52 (docstrings, \textbf{TRUE}).] \ref{rule:isdefeq-pat} states the thesis's regularity
-of $\iota$ as a rule, citing \texttt{typesys.tex} and \texttt{unique.tex} verbatim.
-\item[53 (docstring, \textbf{TRUE, more permissive than the kernel, stricter than the thesis}).]
-\ref{def:ind-large-elim} mirrors \texttt{isLargeEliminator} but tests propositionality by
-typing rather than the kernel's syntactic \texttt{isAlwaysZero} --- accepting strictly more
-than the kernel, and, against the thesis's \texttt{LEctor} rule, strictly less on recursive
-fields.
-\item[54 (contrib-iota.md, \textbf{TRUE}).] \texttt{divergences.md} is the only tracked file
-touched outside \texttt{Lean4Lean/}.
-\item[55 (found in this pass, \textbf{TRUE}).] Master's \texttt{checkEqType.WF} was itself a
-false statement once inductives are enterable, not merely a vacuous proof; its deletion was
-forced.
-\item[56 (contrib-iota.md, \textbf{TRUE}).] Nothing constructs an \texttt{AddInduct} or
-establishes \ref{structure:ind-wf} for a real declaration.
-\item[57 (PR\_iota.md, \textbf{TRUE}).] \ref{thm:wf-patsstrong} needs type-former
-injectivity, itself \texttt{sorry} on master and untouched
-(\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{12}).
-\item[58 (contrib-iota.md, \textbf{TRUE on iota; false on trproj}).] The exported interface
-has exactly one in-repo consumer, \texttt{iota\_rec}; on \texttt{trproj},
-\texttt{pats\_iota\_inv\_shape} gained a second (projection work, not $\iota$).
-\item[59 (d69ac5d, \textbf{UNVERIFIABLE as stated}).] ``65 inductives'' --- the shipped
-driver's largest sweep is 48; the figure is a stale snapshot.
-\item[60 (PR\_iota.md, \textbf{TRUE}).] \texttt{toParams} is \texttt{@[reducible]};
-\texttt{pat\_wf} routes through the \texttt{Realizes}/\texttt{OK} bridge; \texttt{pat\_env}
-is the identity.
-\end{description}
-
-\textbf{What the notes overclaim.} The PR text's summary sentence for claim 28
-(``nothing previously sorry-free loses that'') is contradicted by the deletion of master's
-\texttt{Ordered.strong}, even though the paragraph immediately before it discloses the
-consequence honestly. \texttt{IOTA\_CONTRIBUTION.md}'s claim that the consumer inherits
-``no new soundness gap'' (17) is true only of four lemmas measured in isolation; the model
-they describe now routes every strong-system result through \ref{thm:wf-patsstrong}. Three
-whole status notes (\texttt{IOTA\_CONTRIBUTION.md}, \texttt{PR\_DESCRIPTION\_formal.md}) are
-two reworks out of date on claims 12--16 and would mislead if pasted into a pull request
-today. Validation numbers in \texttt{PR\_iota.md} (claim 42) and a commit message (claims
-46--47) are stale or slightly wrong. The reader's own \texttt{contrib-iota.md} overstates
-byte-identity between \texttt{iota} and \texttt{trproj} (claim 34) and one file's line count
-(claim 36); its axiom-recipe for claim 5 is also wrong on both branches.
-
-\textbf{What the notes underclaim.} The two adversarial-review counterexamples are dead only
-because this pass mechanised the missing step (claim 29); the shipped tests stop short.
-\texttt{PR\_iota.md} asserts the kernel-agreement suite passes without anyone having re-run it
-(claim 19); it does, in 1.7s, with a failing control proving the assertions are live.
-\texttt{TrEnv.pats\_iota'}/\texttt{iota\_rec} are stronger than claimed: fully
-\texttt{sorryAx}-free once \texttt{TrProj} is real (claim 10), not merely tainted-but-isolated.
-\texttt{addQuot.WF} is not just ``real'', it replaces a statement of master's that becomes
-\emph{false}, not merely vacuous, once inductives enter \texttt{TrEnv} (claim 55). The thesis
-alignment (claim 51) is more exact than the PR text states, down to the precise universe
-bound, and its two honest divergences live only in docstrings a reviewer would have to go
-looking for.
-
-\section{Proof and code hygiene}
+\section{Open items}
 \label{sec:contrib-iota-hygiene}
-
-\textbf{Statement quality.} \ref{def:pattyped}'s existential form and \texttt{addPat}'s
-totality (above) are the two design choices reviewers flag as needing to be read carefully
-before use (\texttt{hygiene-review.md} \S(a), MEDIUM); \ref{def:patsstrong} takes explicit
-environment arguments plus six positional hypotheses, an interface the typing chapter's
-review calls unlike anything else in the file (\texttt{reviews/typing.md}). Three leaf lemmas
-have no consumer anywhere: \texttt{RecShape.one\_le\_numMotives} and
-\texttt{RecShape.majorFormer?\_eq} (\srcloc{Lean4Lean/Theory/Inductive.lean}{196}, \texttt{:202}),
-and \texttt{LargeElim.shape} (\srcloc{Lean4Lean/Theory/Inductive.lean}{242}), the only bridge
-from the typing-level \texttt{LargeElim} to the decidable \texttt{LargeElimShape} that the
-test suite bypasses by calling \texttt{LargeElimShape} directly.
-
-\textbf{Proof quality.} The headline item is \ref{thm:wf-patsstrong} itself
-(\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334}, rated HIGH in
-\texttt{hygiene-review.md}, \texttt{reviews/typing.md} and \texttt{reviews/metatheory.md}
-independently): via \ref{instance:coeout-orderedstrong} and roughly 158 mechanically-rewritten
-master call sites, the strong system, the typing inversions, \texttt{Verify/Primitive*} and
-the type-checker layer all become conditional where master had them proved. Elsewhere,
-\texttt{addQuot\_strong} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{188}) hand-unrolls
-five \texttt{addQuot} steps into parallel \texttt{l1...l5}/\texttt{d1...d4} chains that a
-generic \texttt{foldlM\_addConst\_strong} would cover if \texttt{addQuot} were a fold; the
-same repetition pattern recurs at \srcloc{Lean4Lean/Verify/Environment/Quot.lean}{521} (the
-same five-line block repeated four times) and \texttt{:584} (four-deep nested lookup chains
-written out twice). By contrast, contributed proofs are shorter on average than master's in
-the same directories (7.5 code lines per declaration in \texttt{Theory/} against master's 8.5;
-\texttt{hygiene-review.md} \S(d)), and \texttt{inductiveReduceRecCore.WF}
-(\srcloc{Lean4Lean/Verify/TypeChecker/WHNF.lean}{17}, correctly ι-attributed despite a blame
-tag of \texttt{P} --- \texttt{contrib-iota.md}'s attribution caveat, and independently the
-duplicated-commit note in \texttt{claims-iota.md}) is the branch's second-longest proof at 124
-lines but has no consumer, since \texttt{reduceRecursor.WF} two lines below it is still
-\texttt{sorry}.
-
-\textbf{Documentation.} Verified against their statements in a spot check of about 60
-declarations, six mismatches were found across the whole \texttt{trproj} diff, none in files
-this chapter is responsible for except a stale claim that \texttt{addRecRule}'s redex is
-``at \texttt{getMajorIdx}'' where the definition inlines the four summands
-(\srcloc{Lean4Lean/Theory/Inductive.lean}{257}, LOW; every consumer restates it with
-\texttt{getMajorIdx} regardless, so the two are equal by unfolding but the docstring is
-imprecise). The loudest volume signal in the whole diff is here: contributed \texttt{Theory/}
-code is 25.3\% comment lines against master's 1.7\% in the same directory, and the single
-largest docstring in \texttt{Theory/} is 27 lines on the 5-line \texttt{DefEqsAsPats}
-(\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{351}). The content is substantive ---
-derivations, thesis section numbers, explicit ``not modelled'' statements --- not filler
-restating the code, and master's own maxima elsewhere (105-line blocks in
-\texttt{Experimental/}) are comparable, but the ratio would not survive an upstream review
-unchanged (\texttt{hygiene-review.md} \S(c)).
-
-\textbf{Dead code.} \texttt{unused-contrib.md} counts 565 author-written iota declarations
-across the current run, of which 58 have zero resolved in-repo reference (10.3\%); its own
-recovery note, however, attributes 28 of the pass's 78 total zero-reference findings across
-both branches to a tooling regression that mis-tags \texttt{Decidable} instances (nearly all
-of them in \srcloc{Lean4Lean/Tests/ShapeDecide.lean}{1}, iota's file) as \texttt{def}, and
-flags 19 more as provisional; the original, manually-verified run's 31 zero-reference
-findings (19 of them iota's, 12 trproj's, out of 875 contributed declarations, 553 iota /
-322 trproj) reproduce unchanged and are the trustworthy figure, against which the
-regenerated 58/565 above is the uncorrected count. The clearest genuine surplus is the
-\texttt{RHS.spine}/\texttt{iotaCounts} cluster (\ref{family:pattern-iota-counts}, eight
-declarations, roughly 50 lines, \srcloc{Lean4Lean/Theory/Typing/Pattern.lean}{499}--\texttt{:680}),
-proved only to substantiate a docstring's claim that a reduct ``retains ... nothing else of
-the telescope split'' and consumed by nothing else (\texttt{hygiene-review.md} \S(g),
-MEDIUM); \texttt{WF'.pats\_origin} (\srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{93},
-32 lines, ``first step of the deferred $\iota$ subject-reduction proof'') is the same pattern
-on a smaller scale, and \texttt{Verify/LocalContext.lean:183}'s
-\texttt{DecidableEq FVarId} instance sits in the wrong namespace for a core type genuinely
-missing it. Against this, the strongest counterweight in the whole review is
-\srcloc{Lean4Lean/Tests/IotaShape.lean}{454}: it decides every syntactic
-\ref{structure:ind-wf} clause on some 45 real kernel inductives, runs roughly 20 hand-built
-negative controls, and checks \texttt{iotaRHS} against the executable
-\texttt{inductiveReduceRec} on real recursor/constructor pairs --- genuine validation that
-the specification is neither vacuous nor wrong, and the strongest evidence against a
-``slop'' reading of the branch (\texttt{hygiene-review.md} \S(g)).
-
-\textbf{Style fit.} Naming, granularity and formatting follow upstream convention
-throughout: no line over 100 columns beyond the two noted in claim 31, no trailing whitespace,
-naming such as \texttt{addRecRule\_le}/\texttt{PatsIota.induct}/\texttt{WF.pat\_uniq} matches
-master's own \texttt{.mono}/\texttt{.le}/\texttt{\_iff} conventions. The one stylistic break
-is a preference for named-field \texttt{structure ... : Prop} (\ref{struct:add-induct},
-\ref{struct:tr-ind-type}, \ref{struct:tr-recursor}, \ref{structure:indparams-patsiota}) where
-master models the analogous \texttt{AddQuot} as a nested existential chain --- better
-engineering, but visibly not Mario Carneiro's own idiom
-(\texttt{hygiene-review.md} \S(d), LOW).
-
-\section{Sorry and axiom impact}
-\label{sec:contrib-iota-sorry}
-
-\textbf{What the branch closed.} Two master \texttt{sorry} \emph{definitions} and one
-\texttt{sorry} \emph{proof} --- \ref{structure:ind-wf}, \ref{def:ind-add-induct},
-\ref{thm:indlem-add-induct-wf} (\texttt{addInduct\_WF}) and, on the refinement side,
-\ref{struct:add-induct} itself (from a constructor-less \texttt{Prop} to a real structure) ---
-plus the vacuous \texttt{checkEqType.WF}/\texttt{addQuot.WF} pair, replaced by
-\ref{thm:add-quot-wf} and \ref{thm:check-eq-type-ok}, both sorry-free and unconditional. The
-non-\texttt{Experimental} sorry count drops from 23 to 21 net (claim 4); \texttt{Experimental}'s
-own four \texttt{pat} cases are closed with real proofs, not merely restored to parity
-(claim 8).
-
-\textbf{What it opened.} \ref{thm:wf-patsstrong} (\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{334})
-is the one deferred obligation, and its reach is large. \texttt{WF.orderedStrong} (\texttt{:339})
-and the \ref{instance:coeout-orderedstrong} instance (\texttt{:343}) make it the \emph{only}
-route from \ref{def:venv-wf} into \ref{struct:orderedstrong} today; 67 occurrences of
-\texttt{OrderedStrong} appear across \texttt{Theory/Typing/Strong.lean},
-\texttt{EnvLemmas.lean}, \texttt{Verify/Primitive.lean},
-\texttt{Verify/Environment/Primitive/\{Basic,Condition\}.lean} and
-\texttt{Verify/Typing/\{Lemmas,TrTerm\}.lean}, and 64 declaration heads that read
-\texttt{Ordered} on master read \texttt{OrderedStrong} today (claim 27). Concretely: in
-Chapter \ref{chap:primitives-core}, 19 declarations (two reflection schemas, 14 shared
-translation atoms, three \texttt{mkTyEq*} theorems) went from \texttt{sorryAx}-free on master
-to depending on \ref{thm:wf-patsstrong}, dragging all 18 per-primitive branches with them
-(\texttt{reviews/primitives-core.md}); in Chapter \ref{chap:primitives-arith}, all 16
-clause-level \texttt{WF} theorems carry \texttt{sorryAx} as a result, and the taint reaches
-one declaration, \texttt{Reflection.WF.genTele}, that is master-attributed on every line of
-its own statement and proof (\texttt{reviews/primitives-arith.md}); in
-Chapter \ref{chap:trenv}, \texttt{VEnv.HasType.mkApps\_inv\_head}, \texttt{IsDefEqU.beta\_app},
-\texttt{mkApps\_congr}, \texttt{betaN}, \texttt{TrExpr.mkAppList} and
-\texttt{TrEnv.proj\_defeq} all carry \texttt{sorryAx} through the same route
-(\texttt{reviews/trenv.md}). Master's own \texttt{Ordered.strong}
-(\texttt{Theory/Typing/Strong.lean}, pre-branch) needed no such hypothesis and no longer
-exists; \texttt{grep -rn 'Ordered\textbackslash.strong' Lean4Lean} finds nothing (claim 28).
-One nuance the reviews insist on: for the unique-typing chain specifically, several consumers
-(\texttt{IsDefEq.uniq} and everything below it) were \emph{already} \texttt{sorryAx}-dependent
-on master through \texttt{Theory/Typing/Injectivity.lean}, so \ref{thm:wf-patsstrong} is there
-a second, independent dependency rather than the first one
-(\texttt{reviews/metatheory.md}, correcting an earlier overclaim). The docstring at
-\texttt{:334} names the missing ingredient precisely: type-former injectivity, itself three
-bare \texttt{sorry}s on master and untouched by either branch
-(\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{12}). None of the consuming files outside
-\texttt{Theory/Typing/EnvLemmas.lean} itself records the dependency in prose
-(\texttt{reviews/primitives-arith.md}, HIGH).
-
-\section{Upstream situation}
-
-The user's contribution is an open pull request, \texttt{digama0/lean4lean\#43, ``Iota
-Reduction''} (\texttt{barabbs:iota} at \texttt{38ea0de} against \texttt{digama0:master} at
-\texttt{8223d22}), opened 2026-08-08, +5628/-331 over 45 files, 28 commits, \texttt{mergeable:
-true}, zero human review comments (\texttt{upstream-comparison.md} \S3, fetched live
-2026-09-14). Upstream has not moved since \texttt{8223d22} (16 days of silence at fetch time,
-byte-compared file by file), so the branch is neither superseded nor duplicated, and it
-targets exactly the holes upstream's own comments name as open: the constructor-less
-\texttt{AddInduct}, the \texttt{sorry} \ref{structure:ind-wf}/\ref{def:ind-add-induct}, and
-the vacuous \texttt{addQuot.WF}. No other upstream branch or open pull request touches any of
-this. All seven inline review comments on the PR are from a bot, posted five minutes after
-opening, reviewing the \emph{first} push; the two human comments on the thread are the
-author's own; and every CI run since \texttt{eddf009} is stuck at GitHub's first-time-contributor
-\texttt{action\_required} gate, so the last CI verdict the maintainer ever saw is a red run
-from 2026-08-11 that the author has since fixed. Three weeks after the PR opened, the
-maintainer wrote, on an unrelated thread, that \texttt{addDecl.WF}'s \texttt{inductDecl} case
-is ``still open, and unchanged'' because \texttt{VInductDecl.WF} and \texttt{addInduct} are
-``still \texttt{sorry}'' --- describing exactly the deliverable of this branch, which was
-already sitting in his queue, and naming a handshake (\texttt{checkInductive.WF}'s
-\texttt{AddsConsts}) that a repo-wide grep shows the fork does not make
-(\texttt{upstream-comparison.md} \S3). The direct precedent is pull request \#32
-(kim-em, +24247/-1264, an adjacent verification contribution), closed unmerged after four
-weeks when the maintainer judged his own smaller, checker-light version better; by the metric
-he used there, this branch's diff (+5628/-331 over 45 files, changing three existing
-interfaces: \texttt{VEnv}'s arity, \texttt{AddInduct}'s arity, and the import order between
-\texttt{VEnv} and \texttt{Pattern}) sits in the size band he has already criticised once
-(\texttt{upstream-comparison.md} \S5).
-
-\section{Assessment}
-
-\textbf{Solid.} The specification layer --- \ref{structure:ind-wf} and its shape predicates,
-\ref{def:indparams-toparams}'s \texttt{PatsIota} invariant, the four-stage
-\ref{def:ind-add-induct} --- is carefully designed, honestly scoped in its own docstrings, and
-validated against the real kernel by \srcloc{Lean4Lean/Tests/IotaShape.lean}{454}, a test
-harness that is itself high quality. Two master \texttt{sorry} definitions, one master
-\texttt{sorry} proof, and the vacuous quotient proof are genuinely closed, with axiom-clean
-witnesses where claimed
-(\S\ref{sec:contrib-iota-sorry}). The one kernel edit that changes behaviour
-(\srcloc{Lean4Lean/Quot.lean}{24}) is deliberate and recorded in \texttt{divergences.md}; the
-other (\srcloc{Lean4Lean/Inductive/Reduce.lean}{75}) is a provably behaviour-preserving
-refactor. Formatting, naming and proof length are within upstream norms, and contributed
-proofs are shorter on average than master's own.
-
-\textbf{Questionable.} \ref{def:indparams-toparams} and its specialisation are exercised by
-nothing outside their own file (claim 25); a roughly 50-line cluster
-(\ref{family:pattern-iota-counts}) and several smaller lemmas are proved to make a docstring's
-point and consumed by nothing else; comment density in contributed \texttt{Theory/} code is an
-order of magnitude above master's in the same directory; and the branch's own history contains
-a created-then-reverted file move, one wholly rewritten file
-(\texttt{InductiveParams.lean}), and two commits duplicated with \texttt{trproj} that an
-upstream maintainer would ask to be rebased away before review.
-
-\textbf{What a maintainer would push back on, in descending order.} (1) \ref{thm:wf-patsstrong}
-is \texttt{sorry} and reached through a \texttt{CoeOut} coercion, so roughly 158 previously
-unconditional master call sites became conditional on an admitted lemma without that trade
-being stated up front in any single place a reviewer would read first. (2) \ref{structure:ind-wf}
-is a 20-field checklist where the thesis, and the kernel's own \texttt{Inductive/Add.lean},
-generate the analogous data; its adequacy --- that the checklist implies the thesis's
-admissibility --- is exactly what \ref{thm:wf-patsstrong} would need and is nowhere argued,
-and the 2026-09-07 review's own recommendation to compute rather than check was not taken.
-(3) \texttt{addDecl.WF}'s \texttt{inductDecl} case is still \texttt{sorry}
-(\texttt{Verify/Environment.lean:208}), so nothing in the repository ever constructs an
-\ref{struct:add-induct} witness or establishes \ref{structure:ind-wf} for a real declaration;
-the entire \texttt{Verify}-side interface is usable only by a caller that assumes
-\texttt{TrEnv}. (4) The diff changes three existing upstream interfaces
-(\texttt{VEnv}'s field arity, the \texttt{Pattern}/\texttt{VEnv} import order, and, via the
-\texttt{Ordered}$\to$\texttt{OrderedStrong} retyping, roughly 64 existing signatures) rather
-than sitting purely alongside master's code, in a size band the same maintainer has already
-declined once on an adjacent contribution.
-
-\textbf{Prioritised open ends} (naming the gap only, no fixes): \ref{thm:wf-patsstrong} itself,
-which needs type-former injectivity (\texttt{Injectivity.lean}, untouched, three sorries) to
-even be attempted; the missing \texttt{addDecl.WF} $\to$ \ref{struct:add-induct} producer;
-the adequacy argument for \ref{structure:ind-wf} against the thesis's generated recursor data;
-the \texttt{DefEqsAsPats} hypothesis that confines \ref{def:indparams-toparams} to
-environments with no \texttt{def} and no quotient; the orphaned
-\texttt{inductiveReduceRecCore.WF} whose consumer, \texttt{reduceRecursor.WF}, is itself
-\texttt{sorry}; K-like reduction, recorded but never registered; and, on the process side, the
-duplicated-commit history and the still-pending upstream \texttt{action\_required} CI gate
-that has kept a maintainer from ever seeing a green run of this work.
+\begin{itemize}
+\item \ref{thm:wf-patsstrong} needs type-former injectivity, itself unproved.
+\item Nothing in the project constructs an \texttt{AddInduct} witness for a real
+declaration: \texttt{addDecl.WF}'s inductive case is still \texttt{sorry}.
+\item \ref{thm:vtc-iota-reduce-core} has no consumer: the adjacent \texttt{reduceRecursor.WF}
+is still \texttt{sorry}.
+\item \texttt{DefEqsAsPats} confines \ref{def:indparams-toparams} to environments with no
+\texttt{def} and no quotient rule.
+\item \ref{def:indparams-toparams}, its specialisation, and
+\ref{thm:indparams-cr-defeq-of-induct} have no consumer elsewhere in the project.
+\item K-like reduction is recorded (\texttt{VRecursor.k}) but never registered as a rule.
+\end{itemize}
