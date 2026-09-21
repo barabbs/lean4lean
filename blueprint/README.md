@@ -94,12 +94,14 @@ which is deliberately untouched. `check_chapter.py` covers the same ground.
 ## Continuous integration
 
 `.github/workflows/blueprint.yml` runs on pushes to branch `blueprint`, on `workflow_dispatch`, and
-(build and validate only) on pull requests touching `blueprint/**`. Four jobs:
+(build and validate only) on pull requests touching `blueprint/**`. The PDF is not built in CI — build
+it locally (see Build above). Three jobs:
 
-- `validate` — builds the Lean project, regenerates the census and the registry, runs both checkers.
-- `blueprint` — `leanblueprint pdf` and `leanblueprint web`; output uploaded as an artifact on every run.
-- `api-docs` — best-effort `doc-gen4` build so the `\lean{}` links resolve; never blocks deployment.
-- `deploy` — publishes `blueprint/`, `blueprint.pdf` and `docs/` to GitHub Pages; skipped on pull requests.
+- `validate` — builds the Lean project, regenerates the census and the registry, runs both checkers,
+  then best-effort builds the `doc-gen4` API docs (never blocks `deploy`).
+- `web` — `leanblueprint web`; output uploaded as an artifact on every run.
+- `deploy` — publishes the site to GitHub Pages; skipped on pull requests. Site layout: `/` is the web
+  blueprint, `/docs/` is the API docs (when the best-effort build in `validate` succeeded).
 
 It does not use leanblueprint's stock `docgen-action`, whose blueprint path always runs
 `lake exe checkdecls`. Owner-side settings: GitHub Pages source set to *GitHub Actions*; the
