@@ -22,7 +22,7 @@ jobs:
 
       # Installs the toolchain pinned in `lean-toolchain` and runs `lake build`,
       # i.e. the `defaultTargets`: the `Lean4Lean` library, the `lean4lean` exe,
-      # `Lean4Lean.Theory`, `Lean4Lean.Verify` and `Lean4Lean.Tests`. The proofs
+      # `Lean4Lean.Theory` and `Lean4Lean.Verify`. The proofs
       # in `Verify` deliberately contain `sorry`s, so warnings must not fail the
       # build. `Lean4Lean.Experimental` is WIP and is not a default target.
       - name: Build
@@ -60,3 +60,11 @@ jobs:
       # support loose bound variables" (digama0/lean4lean#17).
       - name: Recheck Init.System.IO and its imports from scratch
         run: lake exe lean4lean --fresh Init.System.IO
+
+      # `Lean4Lean.Tests.Programs` is ordinary Lean code -- sorts, trees, records -- whose
+      # `rfl`/`decide` theorems are reduction tasks for the ι and projection rules. Building it
+      # only means Lean's kernel accepted them; this replays the same 400-odd declarations,
+      # inductive types and recursors included, through `Lean4Lean.addDecl`. The module has no
+      # imports, so `--fresh` also works on it, at the price of rechecking `Init` again.
+      - name: Replay the program suite through lean4lean
+        run: lake exe lean4lean Lean4Lean.Tests.Programs
