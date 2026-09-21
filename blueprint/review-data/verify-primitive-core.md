@@ -1,6 +1,6 @@
 # verify-primitive-core — narrative and assessment
 
-Files (all paths relative to `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`):
+Files (all paths relative to the repository root):
 
 | file | lines | M | I | P |
 |---|---|---|---|---|

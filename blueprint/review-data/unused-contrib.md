@@ -41,7 +41,7 @@
 >
 > Everything below this note is the generator's own output, unedited.
 
-Repo `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`, branch `trproj`, HEAD `20ec229`; master = `8223d22`.
+Repo root, branch `trproj`, HEAD `20ec229`; master = `8223d22`.
 Read-only analysis; no build was run. All line numbers are working-tree lines.
 
 ## 1. Method

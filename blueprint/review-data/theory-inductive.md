@@ -1,6 +1,6 @@
 # Group `theory-inductive` — inductive blocks, ι-reduction patterns, and the `Params` instance
 
-Files (all paths relative to the repo root `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`):
+Files (all paths relative to the repo root):
 
 | file | lines | M / I / P |
 |---|---|---|
@@ -20,7 +20,7 @@ def VInductDecl.WF (env : VEnv) (decl : VInductDecl) : Prop := sorry
 def VEnv.addInduct (env : VEnv) (decl : VInductDecl) : Option VEnv := sorry
 ```
 
-and `InductiveLemmas.lean` is `theorem addInduct_WF … := sorry`. Inductive types — "by far the most complex feature of Lean's axiomatic system" (axioms.tex §2.6.1) — were entirely unmodelled, which means every downstream statement quantifying over well-formed environments was vacuous at inductive declarations. The contribution replaces both `sorry`-definitions with real definitions and proves `addInduct_WF`, plus it makes the ι rule a first-class reduction rule of the type system (`IsDefEq.pat`, `VEnv.PatTyped`/`PatWF` in `Theory/Typing/Basic.lean`, also ι-attributed) and builds the first concrete `Params` instance for Mario's abstract Church–Rosser development.
+and `InductiveLemmas.lean` is `theorem addInduct_WF … := sorry`. Inductive types — "by far the most complex feature of Lean's axiomatic system" (axioms.tex §2.6.1) — were entirely unmodelled, which means every statement quantifying over well-formed environments was vacuous at inductive declarations. The contribution replaces both `sorry`-definitions with real definitions and proves `addInduct_WF`, plus it makes the ι rule a first-class reduction rule of the type system (`IsDefEq.pat`, `VEnv.PatTyped`/`PatWF` in `Theory/Typing/Basic.lean`, also ι-attributed) and builds the first concrete `Params` instance for Mario's abstract Church–Rosser development.
 
 ## How the four files fit together and fit the thesis
 

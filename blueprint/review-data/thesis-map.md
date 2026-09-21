@@ -145,7 +145,7 @@ application of one of the motives whose last argument is headed by constructor `
 more. Neither the `b::β` prefix nor the inductive-hypothesis binders `δ_i` are constrained. The
 source says so: *"the terms `v` are not pinned, syntactically or through typing"*, *"the heads of the
 other motives of a mutual recursor are unconstrained"*. So `VInductDecl.WF` admits recursor types
-whose minor premises are not the thesis's. Whether that suffices for the intended downstream
+whose minor premises are not the thesis's. Whether that suffices for the intended dependent
 theorems is precisely the question a reviewer should press.
 
 **The ι rule (§2.6.4) — the core of the contribution.** The thesis:
@@ -298,7 +298,7 @@ typing is now proved there and the conjectures have moved to `Injectivity.lean`.
    `Ordered.strong : Ordered env → OnTypes env (EnvStrong env)` needed no side hypothesis. On `iota`
    it becomes `VEnv.WF.strong` with a `PatsStrong` premise, discharged only by the `sorry`. Since
    `VEnv.WF → OrderedStrong` now routes through it, **`IsDefEq.uniq` (unique typing) and everything
-   downstream — including `trproj`'s `TrEnv.proj_defeq` — now depend on `sorryAx`**, where they did
+   that depends on it — including `trproj`'s `TrEnv.proj_defeq` — now rely on `sorryAx`**, where they did
    not before. The repo is transparent about it (`Tests/ProjInhabit.lean` contains a `#print axioms`
    guard showing `sorryAx` and naming the three causes), but it is a genuine regression in the proof
    state and should be weighed as such.

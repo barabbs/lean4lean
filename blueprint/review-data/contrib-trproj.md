@@ -1,6 +1,6 @@
 # Contribution inventory — branch `trproj` (projection support / `TrProj`)
 
-Checkout inspected: `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`, branch `trproj`
+Checkout inspected: the repository root, branch `trproj`
 @ `20ec229` (read-only; no build run). Ranges used:
 
 | range | files | +/− |
@@ -259,7 +259,7 @@ facts), and the ι-side decoder `recSplit?` was introduced and deleted. Two merg
 
 Sources: `TRPROJ_CONTRIBUTION.md` (**stale**, 2026-08-28, describes the *constant-motive* design),
 `PR_trproj.md` (2026-09-08, current), `trproj-commission.md` (2026-08-27, the brief),
-`downstream-asks-commission.md` (2026-09-09, round-3 brief), `REVIEW_2026-09-07.md` (2026-09-08).
+the round-3 commission brief (2026-09-09), `REVIEW_2026-09-07.md` (2026-09-08).
 
 Status legend: **T** checked-true, **F** checked-false, **U** unverified (needs a build / deeper
 proof reading).
@@ -291,8 +291,8 @@ proof reading).
 | 23 | `lake build Lean4Lean.Theory/Verify/Tests` and `Lean4Lean.Experimental` are green | PR_trproj, REVIEW §"Established facts" | **U** (explicitly not run — read-only task) | `lake build && lake build Lean4Lean.Experimental && lake build Lean4Lean.Tests` |
 | 24 | "the kernel↔model bridge is unchanged / kernel unchanged" — *not literally claimed*, but PR_trproj's "Changes to existing definitions" omits `Lean4Lean/Inductive/Reduce.lean` | PR_trproj (omission) | **F** | `git diff master..trproj -- Lean4Lean/Inductive/Reduce.lean` — 34 lines, the executable kernel is refactored. Behaviour-preserving (verified by diff), but undisclosed in the trproj PR text |
 | 25 | `TrEnv.proj_defeq` "is the interface the `proj` case of `TrExprS` soundness consumes" | earlier docstring (fixed) / REVIEW F38 | **F** | `grep -rn proj_defeq Lean4Lean` → only its own definition + the axiom-profile test. **Zero in-library consumers** |
-| 26 | Round-3 brief: "`TrEnv.proj_defeq` — DELIVERED. No obligations remain. Do not re-open." | downstream-asks-commission.md §R4 | **T** as to proof status; **misleading** as to reach — the theorem is unused inside lean4lean and `reduceProjCore.WF` (Verify/TypeChecker/Reduce.lean:145) is still `sorry` | grep as in #25 |
-| 27 | Round-3 brief: "`TrProj.uniq` · reach 44 of 63 declarations, and all four capstones" | downstream-asks-commission.md §R1 | **U** (downstream claim, unverifiable here) | needs the downstream repo |
+| 26 | Round-3 brief: "`TrEnv.proj_defeq` — DELIVERED. No obligations remain. Do not re-open." | the round-3 commission brief §R4 | **T** as to proof status; **misleading** as to reach — the theorem is unused inside lean4lean and `reduceProjCore.WF` (Verify/TypeChecker/Reduce.lean:145) is still `sorry` | grep as in #25 |
+| 27 | Round-3 brief: "`TrProj.uniq` · reach 44 of 63 declarations, and all four capstones" | the round-3 commission brief §R1 | **U** (claim about a client project, unverifiable here) | needs a client's own checkout |
 | 28 | "no new axioms, no `native_decide`" | REVIEW §"Established facts", PR_trproj | **T** | `git diff master..trproj \| grep '^+\s*axiom '` → none; `grep -rn native_decide Lean4Lean` → none |
 | 29 | "Every line this branch added past 100 columns is rewrapped" (d114c2d) | commit message | **T** | `awk 'length>100'` over all branch-touched files: the only hits are master lines (`Verify/Environment/Lemmas.lean:285,375`, `Theory/Typing/Pattern.lean:27`, `Theory/Typing/Strong.lean:253`, `Verify/TypeChecker/WHNF.lean:195`) |
 | 30 | The `inductiveReduceRec` split is "behaviour-preserving: the extracted body is the original one, with `getMajorIdx` recomputed" | 6fd8a1d | **T** | `git diff master..trproj -- Lean4Lean/Inductive/Reduce.lean`; the caller bound `majorIdx := info.getMajorIdx` |

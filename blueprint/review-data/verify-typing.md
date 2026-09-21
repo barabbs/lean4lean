@@ -83,7 +83,7 @@ minor arity depend on `fieldTys` only through its *length*, so `List.length_mapI
 substituting inside the telescope cannot create binders. `wf` (`:939`) is *stronger* than the
 master stub — it drops the `VExpr.WF env U Γ e` hypothesis, because the major's typing is now a
 field — and the corresponding case of `TrExprS.wf` shrinks from `h2.wf (ih hΔ)` to `h2.wf`. That
-is a good sign: the definition was chosen so that downstream proofs get simpler, not harder.
+is a good sign: the definition was chosen so that later proofs get simpler, not harder.
 
 `TrProj.mono` (`:767`) is a genuinely new obligation created by the design: because `TrProj`
 now mentions `env`, `TrExprS.mono`'s projection case is no longer trivial. It is discharged

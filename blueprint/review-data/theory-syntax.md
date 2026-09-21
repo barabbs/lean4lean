@@ -95,7 +95,7 @@ Smells: `VRecursor.getFirstIndexIdx` (`VDecl.lean:51`) is never used; `VExpr.con
 `eq_const_mkApps_of_spine`, has no consumer outside the file; the section docstring at `:1046`
 still claims "with their decidability" after the instances were moved to `Tests/ShapeDecide.lean`;
 and `VEnv.addPat` (`VEnv.lean:44`) is total where `addConst` is partial, with no comment saying
-that conflicting rules are ruled out only downstream.
+that conflicting rules are ruled out only later.
 
 ### trproj (195 lines here)
 

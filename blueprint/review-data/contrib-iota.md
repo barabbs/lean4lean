@@ -1,7 +1,7 @@
 # Contribution inventory — branch `iota` (ι-reduction / inductive-block specification)
 
 Reader-agent notes for the lean4lean blueprint. **All file:line references are against the
-current `trproj` checkout** (`/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`,
+current `trproj` checkout** (repository root,
 HEAD `20ec229`), unless a `git show <rev>:…` path is given. `iota` (`38ea0de`) is a strict
 ancestor of `trproj`, and `master` (`8223d22`) is a strict ancestor of `iota`, so the branch
 is up to date with upstream and the ι files are byte-identical between `iota` and `trproj`
@@ -235,8 +235,8 @@ upstream. This commit carries a **different committer identity** (`alesosso@gmai
 
 **M3 — Consumer-driven strengthening (2026-08-08 … 2026-08-18, `349da4b`, `1a1ebe8`,
 `eddf009`).** `349da4b` trims the comments to house style (−279/+123 lines of prose).
-`1a1ebe8` is the interesting one: after wiring the interface into the downstream erasure
-consumer end-to-end, the author found the two exposed lemmas **did not compose** — the
+`1a1ebe8` is the interesting one: after wiring the interface into a client of the theory
+end-to-end, the author found the two exposed lemmas **did not compose** — the
 opaque `∃ r` in `pats_iota` could not be instantiated at the trivial check, and nothing
 related the registered model reduct to the kernel `RecursorRule.rhs`. Fix: pin the full
 telescope split and a `TrExprS` link inside `AddInduct.rec_find`, expose the witness
@@ -277,7 +277,7 @@ docstrings to house style; `7a68882` lands the first internal consumer
 (`inductiveReduceRecCore.WF`); `3de1dcb`/`38ea0de` are doc commits.
 
 **Sidecar branch `iota-consume`** (`ab13fac` on top of the old `349da4b`): **not** an
-ancestor of `iota` or `trproj`. It is the downstream consumer's own proposal — the same
+ancestor of `iota` or `trproj`. It is a client's own proposal — the same
 three strengthenings (`rec_find` split + `TrExprS` link, `pats_iota'` with the witness
 named, an `of_value` de-taint) written from the consumer side and handed back for review
 (`iota-consume-review-brief.md`). Its first two edits were re-implemented on `iota` as
@@ -317,7 +317,7 @@ compiled.
 | 14 | `VInductDecl.WF` records only the *checkable* conditions; positivity / universe bound / large elimination "not yet enforced" | PR_DESCRIPTION_formal | **checked-false (stale)** | `ctors_positive`, `universes`, `recs_elim` are fields at `Theory/Inductive.lean:372`, `:350`, `:359` |
 | 15 | `pat_uniq`, `pat_app_uniq`, `extra_pat` are *false* against the current `WF` | IOTA_CONTRIBUTION | **checked-false for the first two (stale)**; true-in-spirit for `extra_pat` | `WF.pat_uniq` `InductiveParams.lean:260` and `WF.pat_app_uniq` `:334` are proved; `extra_pat` is not proved but *assumed* as `DefEqsAsPats` (`:378`) |
 | 16 | `Aligned.addInduct` is deferred (`sorry`) | IOTA_CONTRIBUTION, PR_DESCRIPTION_formal | **checked-false (stale)** | proved at `Verify/Environment/Lemmas.lean:102` |
-| 17 | "The downstream consumer interface inherits **no new soundness gap**" | IOTA_CONTRIBUTION | **checked-false / misleading** | `iota-consume-review-brief.md` itself corrects this for the old state; today every strong-system consumer routes through the sorried `patsStrong` via `instance : CoeOut (VEnv.WF env) env.OrderedStrong` (`EnvLemmas.lean:343`) |
+| 17 | "The client interface inherits **no new soundness gap**" | IOTA_CONTRIBUTION | **checked-false / misleading** | `iota-consume-review-brief.md` itself corrects this for the old state; today every strong-system consumer routes through the sorried `patsStrong` via `instance : CoeOut (VEnv.WF env) env.OrderedStrong` (`EnvLemmas.lean:343`) |
 | 18 | `iotaCheck = .true`: the kernel does no parameter check at ι-reduction time | PR_DESCRIPTION | **checked-true (code-level)** | `VEnv.addRecRule` registers `…, .true` (`Theory/Inductive.lean:257`); `inductiveReduceRecCore` (`Inductive/Reduce.lean:75`) compares only `getRecRuleFor` and argument counts |
 | 19 | `SimplePattern.iotaRHS` mirrors `inductiveReduceRec`'s argument slicing **exactly**, validated by `rfl` on real `Nat.rec` and by a kernel sweep | PR_iota, PR_DESCRIPTION | **checked-true as to the test's existence; the assertions need a build** | `Tests/IotaShape.lean:141` `checkIota`, `:301` `checkIotaAuto`, driver at `:454`; the `rfl`-on-`Nat.rec` phrasing is now generalised into `checkIota ``Nat.rec ``Nat.succ` |
 | 20 | `VInductDecl.WF` specifies a **direct** block; nested inductives are outside it; `Tree` is the documented negative control | PR_iota, PR_DESCRIPTION | **checked-true** | `recs_over_block` `:375`, `rules_ctor` `:390`; `checkNested`/`checkBlockRejected` at `Tests/IotaShape.lean:325`/`:295`, run on 9 nested blocks at `:605` |
@@ -330,10 +330,10 @@ compiled.
 | 27 | Master's substitution family and the primitives layer now take `OrderedStrong`; "every one of those call sites held `VEnv.WF`" | PR_iota, PR_DESCRIPTION | **checked-true** | 67 `OrderedStrong` occurrences across `Theory/Typing/Strong.lean`, `EnvLemmas.lean`, `Verify/Primitive.lean`, `Verify/Environment/Primitive/{Basic,Condition}.lean`, `Verify/Typing/{Lemmas,TrTerm}.lean`; `IsDefEq.substDF` at `Strong.lean:1282` |
 | 28 | "Nothing that was previously `sorry`-free at a bare `Ordered` hypothesis loses that" | PR_iota | **checked-false as stated / misleading** | master's `Ordered.strong` (`git show master:Lean4Lean/Theory/Typing/Strong.lean:675`, a `sorry`-free theorem deriving `OnTypes env (EnvStrong env)` from `Ordered` alone) **no longer exists**; `grep -rn 'Ordered.strong' Lean4Lean` → none. Its conclusion is now a *field* of `OrderedStrong`, obtainable only via the sorried `WF.patsStrong` |
 | 29 | The review's `cexB` and `cexA` are "now refuted sorry-free" | REVIEW §9 | **unverified** | the in-repo evidence stops one step short: `Tests/IotaShape.lean:446,450` prove `declB_wants_large` and `¬ declB.LargeElimShape`, **not** `¬ declB.WF ∅`; `checkBlockRejected` covers nested blocks only. Re-run `review-artifacts/counterexamples/cexB.lean`/`cexA.lean` with `lake env lean` against the reworked `WF` |
-| 30 | No mention of the downstream consumer anywhere in code or docstrings | REVIEW | **checked-true** | `grep -rni 'lambdabox\|erasure' Lean4Lean --include='*.lean'` → no hits; the "consumer"/"downstream" hits are master's own generic prose |
+| 30 | No mention of any client project anywhere in code or docstrings | REVIEW | **checked-true** | a grep for client-project terminology over `Lean4Lean --include='*.lean'` → no hits; the few hits for generic words like "consumer" are master's own prose |
 | 31 | Line-length and style conformance (≤100 columns) | REVIEW §9 (d114c2d) | **checked-true** | `awk 'length>100'` over the ι files → 2 lines total (master's tree has 49) |
 | 32 | `rec_find`'s `TrExprS` link "strengthens an assumption, creating no proof obligation today" | `iota-consume-review-brief.md`, `1a1ebe8` | **checked-true** | nothing constructs an `AddInduct`: `Verify/Environment.lean:208` `| inductDecl _ _ _ _ => sorry` is the only would-be site |
-| 33 | The downstream (`lean-to-lambdabox`) pins this fork and consumes the interface | `downstream-asks-round4.md` | **checked-true as a statement about the note** | the note says downstream pins `20ec229`; not verifiable from this repo |
+| 33 | A client of the theory pins this fork and consumes the interface | the round-4 commission brief | **checked-true as a statement about the note** | the note says the client pins `20ec229`; not verifiable from this repo |
 
 ---
 

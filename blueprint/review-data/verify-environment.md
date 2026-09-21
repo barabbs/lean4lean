@@ -1,6 +1,6 @@
 # Group `verify-environment` — narrative and assessment
 
-Files (all paths relative to `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`):
+Files (all paths relative to the repository root):
 
 | file | lines | M | I (iota) | P (trproj) |
 |---|---|---|---|---|
@@ -100,7 +100,7 @@ work of exactly the kind the project needs.
 registered in the model's `pats` as a `SimplePattern.iota` with the kernel's telescope split as
 key and the constructor's parameter count read off its own `ctorInfo`. `TrEnv.iota_rec`
 (`:929`) composes it with `IsDefEq.pat` into the form `reduceRecursor` needs. This one *is*
-consumed downstream: `Verify/TypeChecker/WHNF.lean:119` (`inductiveReduceRecCore.WF`), which is
+consumed later: `Verify/TypeChecker/WHNF.lean:119` (`inductiveReduceRecCore.WF`), which is
 proved. So the iota chain reaches the kernel model — though the enclosing `reduceRecursor.WF`
 (`WHNF.lean:149`) is still `sorry`, so the chain to `whnf` is not closed.
 

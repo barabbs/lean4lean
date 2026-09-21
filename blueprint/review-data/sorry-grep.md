@@ -168,7 +168,7 @@ All `master`. Listed for completeness; these modules are not part of the default
 
 The grep finds **104** live `sorry` sites; `decls.tsv` reports **638** declarations whose `collectAxioms` contains `sorryAx`. The two numbers measure different things and both are right:
 
-- A single `sorry`-ed theorem is one grep hit but taints every downstream declaration, so 638 ≫ 104.
+- A single `sorry`-ed theorem is one grep hit but taints every declaration that depends on it, so 638 ≫ 104.
 
 - Several grep hits sit inside one declaration (e.g. four in `Lean4Lean.VEnv'.IsDefEqStrong.uniqL'`, seven in `Lean4Lean.SExpr.WHRed.determ`), so the map is many-to-one in that direction too.
 

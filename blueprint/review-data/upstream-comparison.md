@@ -144,7 +144,7 @@ nonrec theorem AddInduct.to_addInduct
 ```
 
 `AddInduct` is an **empty inductive**; `to_addInduct` is proved by `nomatch`. Everything
-downstream of `TrEnv'.induct` upstream is therefore vacuous.
+that depends on `TrEnv'.induct` upstream is therefore vacuous.
 
 ### 2c. Projections (`TrProj`, `Expr.proj` in `Verify/`) — **absent upstream**
 

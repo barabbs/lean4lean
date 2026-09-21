@@ -1,6 +1,6 @@
 # Group `verify-level-and-utils`
 
-Files (all relative to `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`):
+Files (all relative to the repository root):
 
 | file | lines | attribution |
 |---|---|---|
@@ -143,7 +143,7 @@ The kernel memoises structural equality with a union-find keyed by `ExprMap` loo
   :2443, :2524, :1807, :3600). `geq'_complete` (:3870) takes six of them in a single `refine`. A
   bundled invariant would read much better and would make the results easier to reuse.
 - **`Std.TreeMap` as the representation costs a whole layer.** Because two maps with the same entries
-  need not be the same tree, everything downstream has to be shown to factor through `toList`
+  need not be the same tree, everything that follows has to be shown to factor through `toList`
   (`normalizeAux_congr` :3204, `subsumption_congr` :3236, `addable_congr` :3753, `feasible_congr`
   :3768, `lexChain_congr` :3772, `toTree_congr` :3785). This is a design consequence, honestly
   documented, but a sorted-association-list representation would have avoided ~150 lines of pure

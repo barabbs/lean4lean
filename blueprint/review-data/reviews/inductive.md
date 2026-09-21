@@ -77,7 +77,7 @@ only for environments with no `def`/`quot` at all — so `inductParams` and
 - **`Lean4Lean/Theory/Inductive.lean:351` — low, undocumented.** `WF.universes` hides the
   purely syntactic `decl.nparams ≤ t.type.piArity` inside a clause guarded by `addTypes`
   succeeding, so the arity fact is unavailable if stage 0 fails; and no clause mentions
-  `VRecursor.all` (it is pinned to the kernel's only downstream, by `TrRecursor.all`,
+  `VRecursor.all` (it is pinned to the kernel's only consumer, by `TrRecursor.all`,
   `Verify/Environment/Basic.lean:240`). Neither is recorded in the source.
 - **`Lean4Lean/Theory/Inductive.lean:196`, `:202`, `:242` — low, dead code.**
   `RecShape.one_le_numMotives`, `RecShape.majorFormer?_eq` and `LargeElim.shape` have no
@@ -148,7 +148,7 @@ only for environments with no `def`/`quot` at all — so `inductParams` and
   `rule_shape`'s count-only). The `universes` bundling and the silence about
   `VRecursor.all` are documented nowhere, and the chapter omitted a limitation the docstring
   *does* state (structure η is not modelled) and mis-scoped `VRecursor.all` — it is pinned
-  to the kernel's downstream by `TrRecursor.all`.
+  to the kernel's consumer by `TrRecursor.all`.
 - **"nothing constrains `VRecursor.all`".** Too broad: `VInductDecl.WF` does not, but the
   refinement does (`TrRecursor.all : r.all = rval.all`,
   `Verify/Environment/Basic.lean:240`).
@@ -162,7 +162,7 @@ only for environments with no `def`/`quot` at all — so `inductParams` and
   (`:351`–`:377`); "each constant stage is three lines" — `addTypes_ordered` and
   `addRecs_ordered` are one-liners, `addCtors_ordered` is three; "the de Bruijn index of the
   body head was checked by hand against `Nat.rec` and `Eq.rec`" is an unverifiable claim
-  about the author's process; "every downstream statement … was vacuous" — with
+  about the author's process; "every dependent statement … was vacuous" — with
   `WF := sorry` the hypothesis is opaque, so such statements were uninstantiable, not
   vacuously true.
 
@@ -192,7 +192,7 @@ All in `blueprint/src/chapters/inductive.tex`; checker clean afterwards
    blocks, and replaced "`trproj` added nothing of substance" with the accurate statement
    that the expanded `DefEqsAsPats`/`toParams` documentation is `trproj`'s own.
 2. Overview, baseline: replaced "was vacuous at an inductive declaration" with the precise
-   consequence (opaque proposition → no such environment provable well-formed → downstream
+   consequence (opaque proposition → no such environment provable well-formed → dependent
    theorems uninstantiable). Same fix in the `addInduct` review note.
 3. `def:ind-ctor-positive`: disambiguated `bvarsDesc (i + piArity) np` (the arity is the
    *field's*, not `ty`'s).

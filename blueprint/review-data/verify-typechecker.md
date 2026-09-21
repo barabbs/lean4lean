@@ -162,7 +162,7 @@ things a reviewer should weigh:
 
 * Leaving a `theorem … := sorry` whose own docstring says it is unprovable, on the import path of
   `inferType'.WF`, is a stronger statement than "open": it is an admitted falsehood, and it is
-  reached by every downstream `Verify/Environment/*` result. Some of the alternatives (weaken
+  reached by every dependent `Verify/Environment/*` result. Some of the alternatives (weaken
   `inferType'.WF`'s conclusion, or add a scope hypothesis) are not discussed.
 * `inferProj.WF_struct` is **unused** — referenced only from docstrings
   (`Tests/ProjInhabit.lean:15`, `Verify/Typing/Expr.lean:125`). And its hypotheses are

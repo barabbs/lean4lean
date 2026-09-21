@@ -1,7 +1,7 @@
 # Fact-check pass — chapters/contrib-iota.tex
 
 Method: every \srcloc, \ref, \lean-implicit declaration name, and standalone number in the
-chapter was checked against the source files under `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`
+chapter was checked against the source files under the repository root
 (git show/grep/wc -l/diff --stat), against `registry.tsv`/`decls.tsv`/`decls-attrib.tsv`, and
 against the understand/ reports named in the task (`claims-iota.md`, `contrib-iota.md`,
 `thesis-map.md`, `hygiene-review.md`, `unused-contrib.md`, `sorry-grep.md`, `census.md`,

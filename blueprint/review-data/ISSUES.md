@@ -91,7 +91,7 @@ FALSE/PARTIAL verdicts in `claims-iota.md`/`claims-trproj.md`.
 
 - `Lean4Lean/Experimental/SExpr.lean:614`: `axiom Params.extra_pat` is a genuine global axiom, not a class field (the corresponding field is commented out of `class Params` at line 42); it asserts that every environment defeq is an instance of a registered pattern rule, the hard content of iota-reduction, invisible from the files that use it. (experimental-logrel Review notes)
 
-- `Lean4Lean/Experimental/Thierry.lean:9` and `Lean4Lean/Experimental/Thierry2.lean:9`: `axiom mySorry : ` is an inhabitant of every type, i.e. a proof of `False`, used in `DF.comp`, `DF.bot` and elsewhere; both files are scratch formalizations imported by nothing, but the axiom must be on record so nothing downstream is ever allowed to depend on them. `Thierry2.lean` additionally axiomatizes the judgment it interprets. (experimental-reduction Review notes)
+- `Lean4Lean/Experimental/Thierry.lean:9` and `Lean4Lean/Experimental/Thierry2.lean:9`: `axiom mySorry : ` is an inhabitant of every type, i.e. a proof of `False`, used in `DF.comp`, `DF.bot` and elsewhere; both files are scratch formalizations imported by nothing, but the axiom must be on record so nothing else is ever allowed to depend on them. `Thierry2.lean` additionally axiomatizes the judgment it interprets. (experimental-reduction Review notes)
 
 
 ## Medium severity
@@ -236,7 +236,7 @@ FALSE/PARTIAL verdicts in `claims-iota.md`/`claims-trproj.md`.
 
 - `Lean4Lean/Theory/VDecl.lean:41`: `VRecursor.k` records the K-like flag but is, by its own docstring, unused by the theory; the structure advertises coverage the development does not have. (syntax Review notes)
 
-- `Lean4Lean/Theory/VEnv.lean:44`: `VEnv.addPat` cannot fail — unlike `addConst` it performs no freshness or consistency check, so an `Ordered` environment may carry two conflicting reducts for one pattern until `VEnv.WF` recovers functionality downstream. (syntax Review notes; hygiene-review.md section (a))
+- `Lean4Lean/Theory/VEnv.lean:44`: `VEnv.addPat` cannot fail — unlike `addConst` it performs no freshness or consistency check, so an `Ordered` environment may carry two conflicting reducts for one pattern until `VEnv.WF` recovers functionality later. (syntax Review notes; hygiene-review.md section (a))
 
 - `Lean4Lean/Theory/Quot.lean:11`: after the iota work the model has two mechanisms for computation rules (`quotDefEq` is still a `VDefEq`, not a `pats` entry); the duplication is acknowledged nowhere in the code. (syntax Review notes)
 

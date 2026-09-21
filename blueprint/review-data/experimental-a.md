@@ -1,6 +1,6 @@
 # Group `experimental-a` — the logical-relation research modules
 
-Files (all under `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean/`):
+Files (all under the repository root):
 
 | File | Lines | Attribution | Live `sorry` |
 |---|---|---|---|
@@ -159,7 +159,7 @@ rose over the project, and a good template for retrofitting the rest.
   and `NormalType` (`LogRel.lean:58`, `StepIndexed.lean:41`). Harmless today only because no module
   imports two of them.
 - `Shape.trim` (`ShapeLogRel.lean:820`) is defined and never used. The `TShape` head-discrimination
-  grid (`:1928`–`:2030`) is filled in only where downstream proofs needed it, so omissions look accidental.
+  grid (`:1928`–`:2030`) is filled in only where later proofs needed it, so omissions look accidental.
 - `set_option backward.do.legacy true` at `ShapeLogRel.lean:10` is a file-wide back-compat pin
   (leanprover/lean4#13305, digama0/lean4lean#31) to keep the `plift` proofs working — a large blast
   radius for a localised problem.

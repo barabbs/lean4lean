@@ -4,7 +4,7 @@ Adversarial faithfulness review of `blueprint/src/chapters/syntax.tex` (69 nodes
 Lean sources `Lean4Lean/Theory.lean`, `Theory/VLevel.lean`, `Theory/VExpr.lean`,
 `Theory/VDecl.lean`, `Theory/VEnv.lean`, `Theory/Quot.lean`, `Theory/Meta.lean`,
 `Theory/LevelSat.lean`, against `.blueprint-work/blame/`, against `decls.tsv`, and against the
-thesis sources at `/home/barabba/Documents/Research/Projects/Peregrine/lean-type-theory/`.
+thesis sources at `lean-type-theory/` (a sibling repository checkout).
 All 32 `\contrib` nodes were opened at their `\srcloc`; so were 30 master nodes (every master
 node in the chapter except the four purely structural `VDecl`/`VEnv` record nodes, which were
 still read in the source).
@@ -74,7 +74,7 @@ that is otherwise shared verbatim with upstream — a pure merge-conflict cost w
   the section contains no `Decidable` instance at all.
 - `Lean4Lean/Theory/VEnv.lean:44`, **low**. `addPat` cannot fail: unlike `addConst` it performs
   no freshness or consistency check, so two conflicting reducts for the same pattern are
-  admissible at this layer; the invariant is enforced only downstream. The asymmetry is not
+  admissible at this layer; the invariant is enforced only later. The asymmetry is not
   commented on.
 - `Lean4Lean/Theory/VDecl.lean:41`, **low**. `VRecursor.k` is recorded but, as its own docstring
   admits, unused by the theory; the thesis's second ι rule (K-like reduction, `axioms.tex`
@@ -204,7 +204,7 @@ Only `blueprint/src/chapters/syntax.tex` was modified.
 - `def:subst` rewritten to state `comp_lift` and the action law instead of claiming a monoid.
 - `fam:subst-liftn-algebra` proof rewritten per lemma, with the corrected "all five" consumer
   claim and the Proj.lean line numbers.
-- `fam:mkapps-stability` proof: the "all four consumed downstream" claim made concrete with
+- `fam:mkapps-stability` proof: the "all four consumed later" claim made concrete with
   consumers; added `def:lift-prime` to the statement `\uses` (the statement mentions `lift'`);
   no cycle introduced (`check_global.py`: 0 cycles).
 - `def:lam-telescope` review note replaced: records the single real consumer

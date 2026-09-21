@@ -1,7 +1,6 @@
 # Group `theory-typing` — `Lean4Lean/Theory/Typing/{Basic,Env,EnvLemmas,Lemmas,Meta,QuotLemmas,Injectivity}.lean`
 
-All paths below are relative to
-`/home/barabba/Documents/Research/Projects/Peregrine/lean4lean`.
+All paths below are relative to the repository root.
 Branch attribution comes from the precomputed per-line blame; **no line in this group is
 `P` (trproj)** — every contributed line here belongs to the `iota` branch.
 
@@ -209,7 +208,7 @@ instance : CoeOut (VEnv.WF env) env.OrderedStrong := ⟨(·.orderedStrong)⟩
 ```
 
 so **any** `henv : env.WF` now silently coerces to the strong-system hypothesis. In master
-the corresponding entry point, `Ordered.strong`, was a proved theorem. Downstream this
+the corresponding entry point, `Ordered.strong`, was a proved theorem. This
 reaches the whole verified-typechecker layer: `Verify/Primitive.lean` alone was rewritten
 from `Ordered` to `OrderedStrong` in 31 places on this branch (it had zero occurrences of
 `OrderedStrong` on master), and `Verify/Environment/Primitive/*` uses

@@ -1,6 +1,6 @@
 # Group `verify-primitive-arith`
 
-Files (all under `/home/barabba/Documents/Research/Projects/Peregrine/lean4lean/`):
+Files (all under the repository root):
 
 | file | lines | M | I | P |
 |---|---:|---:|---:|---:|
@@ -110,7 +110,7 @@ with `VEnv.WF.orderedStrong` (`EnvLemmas.lean:339`) discharging it from `VEnv.WF
 theorem VEnv.WF.patsStrong {env : VEnv} (H : env.WF) : env.PatsStrong := sorry   -- EnvLemmas.lean:334
 ```
 
-The re-threading here is the downstream consequence; the root cause is in other groups
+The re-threading here is the knock-on consequence; the root cause is in other groups
 (`Theory/Typing/Strong.lean`, `Theory/Typing/EnvLemmas.lean`, `Verify/Primitive.lean`,
 `Verify/Environment/Primitive/Basic.lean`).
 

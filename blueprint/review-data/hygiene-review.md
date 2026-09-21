@@ -37,7 +37,7 @@ Added lines containing `native_decide`, `maxHeartbeats`, `maxRecDepth`, `unsafe`
   the gate `Ordered.pat` registers a rule on, and the name oversells it.
 - **MEDIUM** `Lean4Lean/Theory/VEnv.lean:44` — `addPat` is total, with no freshness or
   consistency check (unlike `addConst`), so an `Ordered` environment may carry two conflicting
-  reducts for one pattern; functionality is only recovered downstream from `VEnv.WF`
+  reducts for one pattern; functionality is only recovered later from `VEnv.WF`
   (`PatsIota.functional`, `InductiveParams.lean:180`).
 - **MEDIUM** `Lean4Lean/Theory/Typing/EnvLemmas.lean:130` — `VEnv.PatsStrong` takes explicit env
   arguments plus six positional hypotheses; call sites read `hp _ _ hpre₀ .rfl … rfl rfl hord`
