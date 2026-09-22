@@ -208,3 +208,54 @@ Levels and experimental-logrel are untouched by either branch.
 substitution family \texttt{Ordered} to \texttt{OrderedStrong}, not new primitive-arithmetic
 content.
 \end{itemize}
+
+\section{Sources and where lean4lean sits}
+\label{sec:intro:sources}
+
+Restricted to the kernel layer, the project this blueprint mirrors has two columns and two rows:
+a Rocq side (MetaRocq/PCUIC) and a Lean side (Carneiro's thesis and lean4lean).
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.43\linewidth}p{0.43\linewidth}}
+\toprule
+ & Kernel theory & Kernel verification \\
+\midrule
+Rocq & PCUIC's declarative specification: universes and valuations, cumulativity, typing,
+well-formed global environments ([JACM] Sec 3-4; [HAB] Ch.~2). &
+MetaRocq's SafeChecker: fuel-free weak-head reduction, a universe-consistency decision
+procedure, a checker proved sound \emph{and} complete ([JACM] Sec 6; [HAB] Ch.~3-5). \\
+Lean & Carneiro's thesis [CT]: typing, definitional and algorithmic equality, reduction,
+universes with \texttt{imax}, the inductive/recursor calculus, unique typing. &
+lean4lean's executable kernel, its correctness stated relative to \texttt{VExpr}/\texttt{VEnv}/
+\texttt{IsDefEq}/\texttt{HasType} (\ref{def:isdefeq}), sound but not complete. \\
+\bottomrule
+\end{tabular}\par\smallskip
+
+\begin{itemize}
+\item \lead{[CT]} Carneiro's \emph{The Type Theory of Lean}: the Lean kernel theory in full
+(typing, $\equiv$, $\Leftrightarrow$, unique typing, Church-Rosser for a restricted reduction);
+two chapters end unfinished, and no Lean kernel-verification result of its own.
+\item \lead{[JACM]} Sozeau et al., J.~ACM 2025: PCUIC's kernel theory and a checker proved
+\hl{sound and complete} against it, conjecture-free; the theorem reference of record.
+\item \lead{[CCC]} Sozeau et al., POPL 2020: the earlier conference version [JACM] extends: the
+first PCUIC specification and the first (sound-only) verified checker.
+\item \lead{[MR]} Sozeau et al., JAR 2020: the pre-PCUIC kernel theory only; states explicitly
+that its own checking algorithms have no soundness or completeness proof.
+\item \lead{[HAB]} Sozeau's 2026 habilitation: a superset of the three papers above, in current
+MetaRocq naming, covering the same kernel theory and verification chapters.
+\item \lead{[MRD]} the MetaRocq docs site: the file-and-module map for the kernel packages, and
+the tiebreaker whenever a paper and the current code disagree.
+\end{itemize}
+
+\paragraph{Verification method.} \textbf{MetaRocq} writes its checker in Rocq against the same
+syntax its specification uses, proves it sound and complete, then extracts it: the checked
+object and the specified object are the same terms, with no refinement layer. \textbf{lean4lean}
+ports Lean's C++ kernel onto the real \texttt{Lean.Expr}/\texttt{Lean.Kernel.Environment} and
+proves soundness relative to the model through a translation \texttt{TrExprS}/\texttt{TrEnv} --
+a refinement layer with its own trust boundary. It runs on explicit fuel counters rather than a
+normalisation axiom, and claims soundness only: Carneiro's thesis proves Lean's definitional
+equality undecidable and its algorithmic equality non-transitive, so no algorithm decides
+either.
+
+Chapter~\ref{chap:references} gives the full source list, the notion-by-notion divergence
+catalogue between MetaRocq/PCUIC, the thesis and lean4lean, and the thesis-versus-code table.

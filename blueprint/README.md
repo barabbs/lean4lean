@@ -36,6 +36,7 @@ CONVENTIONS.md       how nodes are annotated
 | Verification (`Lean4Lean/Verify`) | `trexpr` (trproj), `trenv` (iota, trproj), `primitives-core`, `primitives-arith`, `typechecker` (trproj), `levels` |
 | Experimental | `experimental-logrel`, `experimental-reduction` |
 | Contributions and status | `contrib-iota`, `contrib-trproj`, `status` |
+| References | `references`: the sources (Carneiro's thesis, the MetaRocq checker papers), where lean4lean sits, the three-way divergences PCUIC / thesis / code |
 
 Chapters follow the source tree. There is **one dependency graph for the whole project**: 36% of the
 `\uses` edges cross chapters, and leanblueprint computes "fully proved" inside one graph only, so

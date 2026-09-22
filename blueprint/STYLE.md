@@ -195,3 +195,10 @@ After (55 words):
    where clearer than prose; never trade a hypothesis for the word budget.
 4. Do not run lake, leanblueprint, latexmk or xelatex. Edit no other file. Do not use git to change
    anything (no commit, checkout, stash, tag).
+
+## 8. Current state only (no history)
+
+The blueprint is a consistent picture of the fork at the documented commit; it is not a changelog. Never
+write "since ...", "was fixed", "has been restated", "used to", or describe a state and then its later
+changes; state what is. What is not proved is an open item in the present tense (`\stSorry{}`,
+`\stTainted{}`, or a Caveats bullet). Git holds the history.

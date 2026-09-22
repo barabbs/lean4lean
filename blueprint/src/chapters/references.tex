@@ -1,0 +1,967 @@
+\chapter{References and divergences}
+\label{chap:references}
+
+This chapter names every published source lean4lean's kernel layer is checked against, places
+lean4lean on the same grid as the Rocq development it parallels, and lists, notion by notion,
+every point where MetaRocq/PCUIC, Carneiro's thesis and lean4lean's kernel diverge.
+
+\section{The sources}
+\label{sec:ref-sources}
+
+\subsection{Carneiro's thesis [CT]}
+
+\begin{itemize}
+\item \lead{Identity} \emph{The Type Theory of Lean}, Mario Carneiro, MSc draft, Carnegie Mellon
+University; a \LaTeX{} source tree (\texttt{axioms.tex}, \texttt{typesys.tex},
+\texttt{unique.tex}, \texttt{Wtypes.tex}, \texttt{soundness.tex}, \texttt{normalization.tex},
+\texttt{compilation.tex}), not a rendered, finished document.
+\item \lead{Establishes} \texttt{axioms.tex}: typing, definitional equality $\equiv$, algorithmic
+equality $\Leftrightarrow$, reduction, universes with \texttt{imax}, let/delta reduction, the
+inductive \texttt{spec}/\texttt{ctor} judgments and the recursor's type, $\iota$ and K-like
+reduction, quotients, propositional extensionality, choice.
+\item \lead{Establishes} \texttt{typesys.tex}: undecidability of $\equiv$, non-transitivity of
+$\Leftrightarrow$, failure of subject reduction for the algorithmic judgment, plus
+Regularity/Weakening/Substitution.
+\item \lead{Establishes} \texttt{unique.tex}: unique typing (\texttt{thm:unique}) via an
+$n$-indexed joint induction with Church-Rosser for a restricted $\kappa$ reduction
+(\texttt{thm:church\_rosser}), the completeness of that factoring (\texttt{thm:ckappa}), and
+definitional inversion (\texttt{thm:1dinv}).
+\item \lead{Establishes} \texttt{Wtypes.tex}: a $\Sigma$-projection typing shape for structures,
+with an $\eta$ rule the text itself flags as not a real Lean definitional equality.
+\item \lead{Cited by lean4lean} the K-A rows of \S\ref{sec:ref-divergences} cite
+\texttt{axioms.tex} throughout; \texttt{typesys.tex}'s three lemmas ground
+Weakening/Substitution/Regularity; \texttt{unique.tex}'s \texttt{thm:unique} and
+\texttt{thm:church\_rosser} are the targets of K-C3 and K-C1.
+\item \lead{Unfinished} \texttt{normalization.tex} ends mid-section, literal token
+\texttt{UNFINISHED}, after introducing only the restricted $K$ (not $K^+$) reduction, with no
+termination theorem. \texttt{soundness.tex}'s reflection extension stops mid-sentence, same
+token. \texttt{compilation.tex} is a 25-line fragment with no accompanying theorem.
+\end{itemize}
+
+\subsection{The MetaRocq checker verification: [JACM] and [CCC]}
+
+\begin{itemize}
+\item \lead{Identity} [CCC]: Sozeau, Boulier, Forster, Tabareau, Winterhalter, "Coq Coq
+Correct!", POPL 2020, PACMPL 4, Article~8, 28~pp. [JACM]: Sozeau, Forster, Lennon-Bertrand,
+Nielsen, Tabareau, Winterhalter, J.~ACM 72(1), Article~8, 74~pp, Jan 2025.
+\item \lead{Relation} [JACM] p.~8:5, "Prior publication," names [CCC] as the conference version
+it extends: [CCC] is \hl{earlier}, not later, and its Sec 2-3 already cover PCUIC and kernel
+verification in full.
+\item \lead{Establishes -- kernel theory} [CCC] Sec 2 introduces PCUIC: syntax, universes and
+valuations, cumulativity, typing, confluence by the triangle method. Subject reduction,
+validity, principal typing, strong normalisation and the guard condition are
+\texttt{Conjecture}/\texttt{Axiom}, not proved.
+\item \lead{Establishes -- kernel verification} [CCC] Sec 3: a fuel-free weak-head reduction
+machine, a graph-based universe-consistency decision procedure, a conversion checker, and a
+bidirectional \texttt{infer} algorithm, all proved sound; completeness is not claimed.
+\item \lead{Establishes -- kernel theory} [JACM] Sec 3-4: the same PCUIC specification plus an
+algorithmic specification (acyclic-graph universes, reduction-based conversion, bidirectional
+typing) proved equivalent to it, and the first treatment of cumulative inductive types with a
+subject-reduction proof.
+\item \lead{Establishes -- kernel verification} [JACM] Sec 6, pp.~8:56-8:59: the checker is
+proved \hl{sound and complete} against the declarative specification, every rejection carrying a
+refutation of the corresponding derivation; the method found and fixed a genuine completeness
+bug in Coq 8.14.
+\item \lead{Establishes -- metatheory} [JACM] Sec 5: confluence, subject reduction, weak-CBV
+standardisation (5.6, the one use of the strong-normalisation axiom in this part of the
+development), canonicity (5.7), consistency (5.8).
+\item \lead{Cited by lean4lean} every K-A/K-B/K-C/K-D/K-E row of \S\ref{sec:ref-divergences}
+cites [JACM] Sec 3-6 as the default reference; [CCC] only where its earlier framing (Sec 2-3,
+Fig.~1-10) is itself the artefact under comparison.
+\end{itemize}
+
+\subsection{The MetaRocq project overview [MR]}
+
+\begin{itemize}
+\item \lead{Identity} Sozeau, Anand, Boulier, Cohen, Forster, Kunze, Malecha, Tabareau,
+Winterhalter, "The MetaCoq Project", J.~Automated Reasoning 64:947-999, 2020; the extended
+journal version of an ITP 2018 paper.
+\item \lead{Not a verification result} Sect.~2.7, p.~973 states explicitly that its
+\texttt{infer}/\texttt{check}/\texttt{check\_conv} algorithms have \hl{no soundness or
+completeness proof}: this is the pre-verification stage [CCC] and [JACM] later prove correct.
+\item \lead{Establishes} Sect.~2: a reification \texttt{term} of Coq's kernel syntax (Fig.~1),
+its typing judgment, reduction, well-formed environments and universe algebra -- the
+pre-PCUIC ancestor of [CCC]'s specification. The string "PCUIC" never occurs in this paper.
+\item \lead{Cited by lean4lean} K-E2's evidence line cites [MR] Sect.~3, pp.~973-977, for the
+unverified Template quoting layer, and Sect.~2.7, p.~973, for the "no proof yet" baseline the
+later checkers supersede.
+\end{itemize}
+
+\subsection{The habilitation [HAB]}
+
+\begin{itemize}
+\item \lead{Identity} Matthieu Sozeau, \emph{Mechanized Metatheory and Certified Compilation for
+The Rocq Prover}, HDR, Universite de Nantes, 2026, HAL tel-05544162, 152~pp; a retrospective
+synthesis manuscript, not a fresh research paper.
+\item \lead{Superset} lists [JACM] first among four articles it "is based on"; Ch.~2-5 are the
+current-naming (MetaRocq v1.4, Rocq 9.0) rewrite of [JACM]/[CCC]'s kernel theory and
+verification.
+\item \lead{Establishes -- kernel theory} Ch.~2, pp.~26-42 (Specs 1-2, 18-19): PCUIC syntax,
+universes, cumulativity, typing, well-formed global environments including positivity and
+cumulative inductive types.
+\item \lead{Establishes -- kernel verification} Ch.~3-5, pp.~44-84 (Specs 4, 6, 7, 8, 16-17):
+the algorithmic specification and its equivalence to the declarative one, core metatheory, and
+the sound-and-complete checker.
+\item \lead{Cited by lean4lean} the fallback citation throughout \S\ref{sec:ref-divergences} for
+current MetaRocq naming, e.g.\ K-A1's universe algebra, K-A5's eta rule, K-D1's checker
+guarantee.
+\item \lead{Where thin} Ch.~1 is an informal tour with no theorem; Ch.~8's open-problems list,
+pp.~127-131, names eta, \texttt{SProp} extensionality and guard-checker verification as unproved.
+\end{itemize}
+
+\subsection{The MetaRocq docs [MRD]}
+
+\begin{itemize}
+\item \lead{Identity} \texttt{metarocq.github.io}, the project's live documentation: a landing
+page plus per-package \texttt{README.md} files and a generated coqdoc index; no version number,
+and it drifts ahead of every paper.
+\item \lead{Establishes} the file/module map for the kernel layer: \texttt{PCUICAst},
+\texttt{PCUICTyping}, \texttt{PCUICCumulativitySpec}, \texttt{PCUICConfluence}, \texttt{PCUICSR},
+\texttt{PCUICValidity}, \texttt{PCUICPrincipality}, \texttt{PCUICSN} (\texttt{pcuic/theories/}),
+and \texttt{PCUICSafeReduce}, \texttt{PCUICSafeConversion}, \texttt{PCUICSafeRetyping},
+\texttt{PCUICSafeChecker} (\texttt{safechecker/theories/}).
+\item \lead{Cited by lean4lean} the tiebreaker whenever \S\ref{sec:ref-divergences} needs a
+current name or line number, e.g.\ \texttt{check\_wf\_env} at
+\texttt{PCUICSafeChecker.v:2398} in K-A12/K-E3.
+\item \lead{Caveat} no theorem numbers and no page numbers, only a one-line-per-file prose
+index; always cited by file name, never by figure or theorem number.
+\end{itemize}
+
+\section{Where lean4lean sits}
+\label{sec:ref-where}
+
+Restricted to the kernel layer, the project grid has two columns and two rows.
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.43\linewidth}p{0.43\linewidth}}
+\toprule
+ & Kernel theory & Kernel verification \\
+\midrule
+Rocq & PCUIC's declarative specification: universes and valuations, cumulativity, typing,
+well-formed global environments ([JACM] Sec 3-4; [HAB] Ch.~2). &
+MetaRocq's SafeChecker: fuel-free weak-head reduction, a universe-consistency decision
+procedure, a checker proved sound \emph{and} complete ([JACM] Sec 6; [HAB] Ch.~3-5). \\
+Lean & Carneiro's thesis [CT]: typing, $\equiv$, $\Leftrightarrow$, reduction, universes with
+\texttt{imax}, the inductive/recursor calculus, unique typing, Church-Rosser for $\kappa$. &
+lean4lean's executable kernel, its correctness stated relative to
+\texttt{VExpr}/\texttt{VEnv}/\texttt{IsDefEq}/\texttt{HasType} (\ref{def:isdefeq}) through a
+translation \texttt{TrExprS} (K-D2), sound but not complete. \\
+\bottomrule
+\end{tabular}\par\smallskip
+
+\begin{itemize}
+\item [MR]: Rocq kernel theory only (the pre-PCUIC \texttt{term}), explicitly not a verification
+result.
+\item [CCC]: first Rocq kernel verification (sound only), plus the introduction of PCUIC itself.
+\item [JACM]: Rocq kernel theory and verification, sound and complete, conjecture-free.
+\item [HAB]: a superset of all three, in current MetaRocq naming.
+\item [MRD]: the file-and-module map, the tiebreaker between a paper and the current code.
+\item [CT]: the Lean kernel theory in full; no Lean kernel-verification result of its own, only
+negative bounds on the algorithmic judgment.
+\end{itemize}
+\paragraph{Verification method.} \textbf{MetaRocq} writes its checker in Rocq against the same
+syntax its specification uses, proves it sound and complete, then extracts it: the checked
+object and the specified object are the same terms, with no refinement layer (K-D2).
+\textbf{lean4lean} ports Lean's C++ kernel onto the real \texttt{Lean.Expr}/
+\texttt{Lean.Kernel.Environment} and proves soundness relative to the model through a
+translation \texttt{TrExprS}/\texttt{TrEnv} (K-D2) -- a refinement layer with its own trust
+boundary (K-D4, K-D5). It runs on explicit fuel counters rather than a normalisation axiom
+(K-C5, K-D7), and claims soundness only: [CT]'s \texttt{typesys.tex} proves $\equiv$
+undecidable and $\Leftrightarrow$ non-transitive, so no algorithm can decide either (K-D1).
+
+\section{Three-way divergences}
+\label{sec:ref-divergences}
+
+Fifty-two items compare MetaRocq/PCUIC, Carneiro's thesis and lean4lean's kernel layer, notion
+by notion; each is read off a source file, a blueprint label, or the project's own status
+chapter, never inferred from a paper alone. Five kinds, with their count among the 52:
+
+\begin{itemize}
+\item \textbf{FORCED-LEAN} (7): Lean's type theory itself has or lacks the feature; no design
+choice is available.
+\item \textbf{FORCED-LEAN4LEAN} (2): the port-and-refine verification method, not Lean's theory,
+forces the divergence.
+\item \textbf{DESIGN} (22): a deliberate modelling choice, made where either an equivalent or a
+stronger route was open.
+\item \textbf{GAP} (19): an open proof obligation, a missing derivation, or a statement not yet
+proved.
+\item \textbf{OPEN} (2): out of scope by explicit statement, with no route to close it planned.
+\end{itemize}
+
+\subsection{K-A: the object language}
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.13\linewidth}p{0.29\linewidth}p{0.26\linewidth}l}
+\toprule
+id & notion & PCUIC/thesis & lean4lean & kind \\
+\midrule
+K-A1 & universes & sorts over a constraint store; thesis: levels $0,S,\max,\mathrm{imax}$, no
+\texttt{SProp} & \texttt{VLevel}: zero/succ/max/imax/param, one sort family & FORCED-LEAN \\
+K-A2 & level order & graph procedure over valuations; thesis: nine syntactic rules for
+$\ell\le\ell'+n$ & semantic \texttt{VLevel.LE} over all valuations & DESIGN \\
+K-A3 & cumulativity & directed \texttt{cumulSpec0}; thesis: no subtyping rule at all &
+\texttt{IsDefEq} is symmetric, no cumulativity & FORCED-LEAN \\
+K-A4 & proof irrelevance & no rule (only in the checker's guard); thesis: any two proofs of
+\texttt{p} are $\equiv$ & \texttt{IsDefEq.proofIrrel}, the same rule & FORCED-LEAN \\
+K-A5 & eta, functions & out of scope for PCUIC; thesis: $e:\forall y{:}\alpha.\beta \Rightarrow
+\lambda x.(ex)\equiv e$ & \texttt{IsDefEq.eta}, the same rule & FORCED-LEAN \\
+K-A6 & eta, structures & no rule, no obligation on either reference side & the checker has it,
+the model does not; both \texttt{sorry} & GAP \\
+K-A7 & let/zeta & \texttt{tLetIn} with a zeta rule; thesis: zeta kept, with a conservativity
+argument & no let in \texttt{VExpr}; substituted away at translation time & DESIGN \\
+K-A8 & projections & \texttt{tProj} with its own typing/iota/congruence rules; thesis: a
+Sigma-projection shape, no eta & \texttt{TrProj}: a recursor application via the iota registry &
+DESIGN \\
+K-A9 & projection coverage & every declared projection typechecks; no thesis counterpart &
+\texttt{TrProj} covers only non-mutual, single-constructor shapes; \texttt{sorry} & GAP \\
+K-A10 & iota, K-like reduction & one \texttt{cumul\_iota} rule, no K; thesis: constructor rule
+plus K-like for subsingletons & one \texttt{pats} registry rule; K-like omitted & GAP \\
+K-A11 & quotients & none in PCUIC; thesis: \texttt{Quot}/\texttt{mk}/\texttt{sound}/\texttt{lift},
+"semi-builtin" & \texttt{quotDefEq}, one \texttt{VDefEq} axiom, not a \texttt{pats} entry &
+DESIGN \\
+K-A12 & inductive well-formedness & established by \texttt{check\_wf\_env}; thesis: generated
+from the block spec & \texttt{VInductDecl.WF}, 20 fields, asserted not derived & GAP \\
+K-A13 & primitives & \texttt{tPrim} with its own typing rule; no thesis counterpart & no literal
+node; a literal unfolds to constructors & DESIGN \\
+K-A14 & native reduction & not modelled on either reference side & \texttt{reduceNative} refuses
+\texttt{reduceBool}; vacuous & OPEN \\
+\bottomrule
+\end{tabular}\par\smallskip
+\paragraph{K-A1: universes and their algebra}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{sort} $=\;$\texttt{sProp}$\,|\,$\texttt{sSProp}$\,|\,$
+\texttt{sType\ univ}, a set of level/sign pairs read through a global valuation and constraint
+store.
+\item \lead{Thesis} levels $\ell ::= u \mid 0 \mid S\ell \mid \max(\ell,\ell) \mid
+\mathrm{imax}(\ell,\ell)$, with a $\mathbb{N}$-valued semantics and no \texttt{SProp}.
+\item \lead{lean4lean} \texttt{VLevel} (\ref{ind:vlevel}): zero, succ, max, imax, \texttt{param}
+as a de~Bruijn index; one sort family \texttt{VExpr.sort}.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} Lean's universes are closed level expressions over a declaration's own
+parameters, with no constraint graph and no \texttt{Set}/\texttt{SProp}.
+\item \lead{Consequence} Judgments are indexed by a universe arity, not a constraint set, and
+polymorphism is level instantiation rather than \texttt{consistent\_instance\_ext}.
+\end{itemize}
+\paragraph{K-A2: the level order is semantic, not a rule system}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{leq\_universe} over valuations plus a graph procedure for constraint
+consistency.
+\item \lead{Thesis} $\ell\le\ell'+n$ by nine syntactic rules, including three \texttt{imax}
+identities and a case split on a parameter.
+\item \lead{lean4lean} \texttt{VLevel.LE}$\,a\,b := \forall\,ls,\ a.\mathrm{eval}\,ls \le
+b.\mathrm{eval}\,ls$ (\ref{def:vlevel-le-equiv}).
+\item \lead{Kind} DESIGN.
+\item \lead{Why} a semantic definition needs no rule-completeness proof; the thesis's
+\texttt{imax} identities become one \texttt{simp} lemma each.
+\item \lead{Consequence} two sorts are equal exactly when they denote the same function of the
+parameters, so the decision problem is genuinely hard (K-T2).
+\end{itemize}
+\paragraph{K-A3: no cumulativity}
+\begin{itemize}
+\item \lead{PCUIC} directed \texttt{cumulSpec0}, with \texttt{cumul\_Sort}, \texttt{cumul\_Ind},
+\texttt{cumul\_Construct} for cumulative inductive types.
+\item \lead{Thesis} no directed relation at all; equality is the only comparison stated.
+\item \lead{lean4lean} \texttt{IsDefEq} is an equivalence; \texttt{defeqDF} transports along a
+definitional equality of types, not a lower bound.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} Lean has neither universe cumulativity nor cumulative inductive types.
+\item \lead{Consequence} unique typing gives an equality of the two types directly, needing no
+"unique sort quality" strengthening.
+\end{itemize}
+\paragraph{K-A4: definitional proof irrelevance}
+\begin{itemize}
+\item \lead{PCUIC} no rule; \texttt{sSProp} exists as a sort but conversion never identifies its
+inhabitants.
+\item \lead{Thesis} from $p{:}P$, $h{:}p$, $h'{:}p$, derive $h\equiv h'$, for any \texttt{Prop}.
+\item \lead{lean4lean} \texttt{IsDefEq.proofIrrel}: the same rule, reading the shared type of
+both sides.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} Lean's kernel identifies any two proofs of a \texttt{Prop}.
+\item \lead{Consequence} conversion must be typed (K-B2); ordinary Church-Rosser needs a
+separate \texttt{NormalEq} congruence absorbing irrelevance and eta.
+\end{itemize}
+\paragraph{K-A5: eta for functions as a primitive rule}
+\begin{itemize}
+\item \lead{PCUIC} no eta rule; explicitly named as out of scope.
+\item \lead{Thesis} $e:\forall y{:}\alpha.\beta \Rightarrow \lambda x{:}\alpha.(e\,x)\equiv e$.
+\item \lead{lean4lean} \texttt{IsDefEq.eta}, the same rule, read against $e$'s
+\texttt{forallE} type.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} Lean's kernel has definitional eta for functions.
+\item \lead{Consequence} eta cannot be a reduction; it enters \texttt{NormalEq} as two directed
+rules, needing its own symmetry theorem and an eta-expansion-aware confluence argument.
+\end{itemize}
+\paragraph{K-A6: structure eta and unit-like types are not modelled}
+\begin{itemize}
+\item \lead{PCUIC} neither structure eta nor a unit-like rule exists; the two reference sides
+agree, so no obligation arises.
+\item \lead{Thesis} no counterpart.
+\item \lead{lean4lean} the executable kernel implements both (\ref{thm:vtc-tryetastruct},
+\ref{thm:vtc-isdefequnitlike}); \texttt{IsDefEq} has neither rule, and both obligations are
+literal \texttt{sorry}.
+\item \lead{Kind} GAP.
+\item \lead{Why} the statement is not derivable from the current rule set; a proof-effort gap
+alone would not close it.
+\item \lead{Consequence} the checker's three top-level entry points are partial as stated: the
+checker can accept pairs the model cannot relate.
+\end{itemize}
+\paragraph{K-A7: let is substituted away; no zeta rule}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{tLetIn} as a term former, with both a zeta reduction and a
+context-variable-unfolding rule.
+\item \lead{Thesis} zeta kept as a rule, with an explicit conservativity argument for expanding
+it away.
+\item \lead{lean4lean} \texttt{VExpr} (\ref{ind:vexpr}) has six constructors and no let; the
+translation extends the context and returns the body's translation.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} the thesis's own conservativity argument licenses moving the expansion to the
+syntax, keeping the model at six constructors.
+\item \lead{Consequence} the kernel's zeta step must be proved to preserve \emph{translation}
+rather than to be a rule of the judgment.
+\end{itemize}
+\paragraph{K-A8: projections are recursor applications, not a term former}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{tProj} with its own typing rule, its own iota reduction, and its own
+congruence rule.
+\item \lead{Thesis} a Sigma-projection typing shape, with an eta rule the text marks as not a
+real Lean definitional equality.
+\item \lead{lean4lean} \texttt{TrProj} (\ref{def:trproj}, \ref{struct:trprojctor}) builds an
+application of the structure's own recursor, chaining earlier fields' projections into later
+motives.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} reuses the iota registry (K-A10) and the existing metatheory instead of adding
+a node with its own typing, iota and eta rules.
+\item \lead{Consequence} \texttt{TrProj} carries \texttt{HasType} side conditions inside a
+translation relation, unlike every other clause; coverage is partial (K-A9).
+\end{itemize}
+\paragraph{K-A9: the projection expansion covers only some structures}
+\begin{itemize}
+\item \lead{PCUIC} every declared projection typechecks, with no restriction on the structure's
+shape.
+\item \lead{Thesis} no counterpart.
+\item \lead{lean4lean} \texttt{inferProj.WF\_struct} (\ref{thm:vtc-inferproj-struct}) is stated
+only for a non-mutual, single-constructor, non-indexed structure, and is \texttt{sorry}; the
+general \texttt{inferProj.WF} (\ref{thm:vtc-inferproj}) is not provable as stated.
+\item \lead{Kind} GAP.
+\item \lead{Why} the recursor-expansion of K-A8 exists only where the generated recursor has the
+assumed shape; reflexive, indexed or nested structures have none.
+\item \lead{Consequence} a kernel-accepted term projecting such a structure has no translation
+derivation at all, so no statement about it can be formed.
+\end{itemize}
+\paragraph{K-A10: iota as a schematic registry; K-like reduction absent}
+\begin{itemize}
+\item \lead{PCUIC} one \texttt{cumul\_iota} rule, plus a fix rule guarded by
+\texttt{is\_constructor}; no K.
+\item \lead{Thesis} the constructor rule, plus K-like reduction for subsingleton eliminators,
+tied to axiom K.
+\item \lead{lean4lean} \texttt{VEnv} carries a \texttt{pats} registry (\ref{rule:isdefeq-pat});
+\texttt{addRecRule} registers only the constructor rule.
+\item \lead{Kind} DESIGN for the registry, GAP for K-like reduction.
+\item \lead{Why} one generic rule with a registry gives every recursor a reduction without a
+per-block case; K-like reduction needs a proof-irrelevance reconstruction the registry cannot
+express.
+\item \lead{Consequence} the kernel reduces \texttt{Eq.rec} on a non-constructor proof, the
+model does not: \texttt{reduceRecursor.WF} (\ref{thm:vtc-reducerecursor}) is \texttt{sorry}.
+\end{itemize}
+\paragraph{K-A11: quotients are a delta axiom, not an iota rule}
+\begin{itemize}
+\item \lead{PCUIC} no quotient types.
+\item \lead{Thesis} \texttt{Quot}, \texttt{mk}, \texttt{sound}, \texttt{lift}, with only
+\texttt{sound} a real axiom -- the rest "semi-builtin".
+\item \lead{lean4lean} \texttt{quotDefEq} is one \texttt{VDefEq} entry, fired by
+\texttt{IsDefEq.extra}, not a \texttt{pats} entry (\ref{thm:addquot-wf}).
+\item \lead{Kind} DESIGN.
+\item \lead{Why} a single closed equation with no pattern variables needs no \texttt{Pattern}/
+\texttt{PatWF} machinery.
+\item \lead{Consequence} the confluence apparatus of K-B6 needs every axiom realised by a
+\texttt{pats} rule, which fails as soon as an environment declares the quotient rule.
+\end{itemize}
+\paragraph{K-A12: inductive-block well-formedness is asserted, not derived}
+\begin{itemize}
+\item \lead{PCUIC} positivity, universe and elimination conditions, established for a real
+environment by \texttt{check\_wf\_env}.
+\item \lead{Thesis} generated from the block's specification, not pinned as fixed fields.
+\item \lead{lean4lean} \texttt{VInductDecl.WF} (\ref{structure:ind-wf}) is a 20-field syntactic
+specification; nothing derives it from the kernel's own inductive checker.
+\item \lead{Kind} GAP.
+\item \lead{Why} deriving it from \texttt{addInductive} is the missing \texttt{inductDecl} case
+of environment admission (K-E3).
+\item \lead{Consequence} every theorem about inductive blocks is conditional on a hypothesis no
+proof supplies for a kernel-built environment.
+\end{itemize}
+\paragraph{K-A13: no literal node; primitives verified as reflection}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{tPrim} as a term former, with its own typing rule and invariants.
+\item \lead{Thesis} no counterpart.
+\item \lead{lean4lean} no literal constructor in \texttt{VExpr}; a literal unfolds to
+constructors, and accelerated arithmetic closes into \texttt{Reflects} statements
+(\ref{vpc:thm:reflects-toconst}).
+\item \lead{Kind} DESIGN.
+\item \lead{Why} keeps the model at six constructors; acceleration is a property of a
+declaration the environment already holds.
+\item \lead{Consequence} eighteen per-primitive obligations appear with no counterpart on either
+reference side, all tainted through the environment's strengthened invariant.
+\end{itemize}
+\paragraph{K-A14: native reduction refused}
+\begin{itemize}
+\item \lead{PCUIC} no VM or native conversion modelled.
+\item \lead{Thesis} no counterpart.
+\item \lead{lean4lean} \texttt{reduceNative} does not support \texttt{reduceBool}; the
+obligation (\ref{thm:vtc-reducenative}) is vacuous, the branch never fires.
+\item \lead{Kind} OPEN.
+\item \lead{Why} verified compilation of native operations would be a project-sized addition on
+its own.
+\item \lead{Consequence} lean4lean rejects declarations the real kernel accepts through native
+reduction; soundness is unaffected, only coverage is reduced.
+\end{itemize}
+
+\subsection{K-B: judgments}
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.12\linewidth}p{0.31\linewidth}p{0.27\linewidth}l}
+\toprule
+id & notion & PCUIC/thesis & lean4lean & kind \\
+\midrule
+K-B1 & judgment shape & typing and \texttt{cumulSpec0} joined by one rule; thesis keeps them
+separate too & one relation \texttt{IsDefEq}, typing its diagonal & DESIGN \\
+K-B2 & typed conversion & \texttt{cumulSpec0} is untyped & \texttt{IsDefEq} carries the type;
+\texttt{IsDefEqU} forgets it & FORCED-LEAN \\
+K-B3 & binder names & \texttt{aname} on every binder, checked in every congruence & \texttt{VExpr}
+has no names at all & DESIGN \\
+K-B4 & algorithmic equality & a full algorithmic spec, proved equivalent; thesis:
+$\Leftrightarrow$ non-transitive, fails SR & no $\Leftrightarrow$ counterpart; stand-in is the
+checker's own chain & GAP \\
+K-B5 & bidirectional layer & \texttt{Bidirectional/}, \texttt{infer} stated against it &
+\texttt{InferType} exists (\ref{thm:infertype-exists}) but unwired to the executable checker &
+GAP \\
+K-B6 & reduction relation & \texttt{red1} first-class, rules of \texttt{cumulSpec0}; thesis:
+$\kappa$ on rec-normal forms & \texttt{ParRed}/\texttt{CParRed}/\texttt{WHRed}/\texttt{StRed}
+under an abstract class & DESIGN \\
+K-B7 & environments & one \texttt{wf Sigma} predicate for everything & two notions,
+\texttt{WF'} and \texttt{Ordered}, bridged silently & DESIGN \\
+\bottomrule
+\end{tabular}\par\smallskip
+\paragraph{K-B1: one relation instead of two}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{typing} and \texttt{cumulSpec0} as separate inductives, joined by one
+conversion rule.
+\item \lead{Thesis} typing and definitional equality likewise kept separate.
+\item \lead{lean4lean} one four-place \texttt{IsDefEq}\,$E\,U\,\Gamma\,e_1\,e_2\,A$
+(\ref{def:isdefeq}), with typing as its diagonal.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} proof irrelevance and eta already make the two mutually dependent; merging
+turns a mutual induction into one.
+\item \lead{Consequence} every structural lemma is proved once; a syntax-directed strong
+judgment (\ref{def:isdefeqstrong}) is reconstructed separately where inversion needs it.
+\end{itemize}
+\paragraph{K-B2: conversion is typed}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{cumulSpec0} relates two terms with no type index.
+\item \lead{Thesis} $\equiv$ likewise carries no type, but $\eta$/irrelevance still read one
+implicitly.
+\item \lead{lean4lean} \texttt{IsDefEq} carries the type as its last argument
+(\ref{def:isdefeq}); the untyped form \texttt{IsDefEqU} is derived, agreeing only via
+\texttt{thm:unique-typing}.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} \texttt{proofIrrel} and \texttt{eta} read the type of the sides they relate.
+\item \lead{Consequence} composing equalities at different types needs a family of lemmas that
+depend on unique typing, where \texttt{cumul\_Trans} is unconditional in PCUIC.
+\end{itemize}
+\paragraph{K-B3: no binder names in the model}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{aname} on every binder; \texttt{eq\_binder\_annot} in every
+congruence rule.
+\item \lead{Thesis} named binders throughout, matching Lean's real syntax.
+\item \lead{lean4lean} \texttt{VExpr}'s \texttt{lam}/\texttt{forallE} carry no name and no
+\texttt{BinderInfo} (\ref{family:expr-beq}).
+\item \lead{Kind} DESIGN.
+\item \lead{Why} names carry no logical content; dropping them removes a premise from three
+congruence rules.
+\item \lead{Consequence} the kernel's own equality on names/\texttt{BinderInfo} needs a separate
+\texttt{EquivBEq} lawfulness argument, not a full \texttt{LawfulBEq}.
+\end{itemize}
+\paragraph{K-B4: algorithmic equality is not formalised}
+\begin{itemize}
+\item \lead{PCUIC} a full algorithmic specification, proved equivalent to the declarative one.
+\item \lead{Thesis} $\Leftrightarrow$: no transitivity, a head-reduction escape hatch, proved
+non-transitive and shown to fail subject reduction.
+\item \lead{lean4lean} no relation plays $\Leftrightarrow$'s role; its stand-in is the checker's
+own correctness chain.
+\item \lead{Kind} GAP.
+\item \lead{Why} with $\Leftrightarrow$ unformalised there is no object to state the thesis's
+negative results about.
+\item \lead{Consequence} nothing marks that a checker-accepted pair need only be algorithmically,
+not definitionally, equal.
+\end{itemize}
+\paragraph{K-B5: the bidirectional layer exists but is unwired}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{Bidirectional/} proves an inference judgment equivalent to
+declarative typing; \texttt{infer} is stated against it.
+\item \lead{Thesis} no separate algorithmic layer of this kind.
+\item \lead{lean4lean} \texttt{VEnv.InferType} (\ref{thm:infertype-exists}) is sound, complete
+and deterministic, but the executable checker is verified against \texttt{IsDefEq} directly.
+\item \lead{Kind} GAP.
+\item \lead{Why} \texttt{InferType} lives under the abstract reduction class of K-B6, which no
+realistic environment satisfies.
+\item \lead{Consequence} the completeness route is present in outline and unusable in practice;
+\texttt{InferType.exists} is itself doubly tainted.
+\end{itemize}
+\paragraph{K-B6: reduction is abstract and parameterised}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{red1} is first-class; \texttt{cumulSpec0} carries the reductions
+directly as rules, unconditionally over \texttt{wf Sigma}.
+\item \lead{Thesis} $\kappa$ restricts reduction to $\beta/\delta/\zeta/\iota$ on rec-normal-form
+terms.
+\item \lead{lean4lean} \texttt{ParRed}/\texttt{CParRed}/\texttt{WHRed}/\texttt{StRed} all live
+under one abstract \texttt{Params} class fixing an environment and a rule family.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} abstracting over the rule family proves confluence once for delta and iota
+alike.
+\item \lead{Consequence} confluence is only as good as the one instance, which requires every
+axiom to be realised by a \texttt{pats} rule (K-C1).
+\end{itemize}
+\paragraph{K-B7: two environment invariants, bridged silently}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{wf Sigma} is one predicate, \texttt{on\_global\_env}, carrying
+everything.
+\item \lead{Thesis} a single well-formedness notion, matching PCUIC's.
+\item \lead{lean4lean} \texttt{VEnv.WF'} (build-in-order) and \texttt{Ordered} (the weaker
+invariant structural lemmas consume), bridged by a coercion instance
+(\ref{instance:coeout-orderedstrong}).
+\item \lead{Kind} DESIGN.
+\item \lead{Why} \texttt{Ordered} is cheap and monotone, so weakening and substitution avoid
+carrying declaration history.
+\item \lead{Consequence} the coercion hides a \texttt{sorry}-backed hypothesis at every call
+site with no visible cue.
+\end{itemize}
+
+\subsection{K-C: metatheory}
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.15\linewidth}p{0.34\linewidth}p{0.26\linewidth}l}
+\toprule
+id & notion & PCUIC/thesis & lean4lean & kind \\
+\midrule
+K-C1 & confluence & unconditional, triangle method; thesis: Church-Rosser for $\kappa$ up to
+$\equiv_p$ & \texttt{church\_rosser} under \texttt{Params}, two open sorries & GAP \\
+K-C2 & subject reduction & \texttt{subject\_reduction}, proved; thesis calls it "an easy
+induction" & built into the \texttt{pat} rule; the honest form is \texttt{sorry} & GAP \\
+K-C3 & principality & proved without normalisation; thesis: unique typing via
+$\vdash_n$-stratification & \texttt{IsDefEq.uniq} via \texttt{HasTypeStratified}, tainted twice &
+GAP \\
+K-C4 & type-former injectivity & derived from confluence, proved; thesis's \texttt{thm:1dinv}
+closes its induction & all three injectivity principles are \texttt{sorry} & GAP \\
+K-C5 & strong normalisation & a typeclass axiom, used once; thesis: an unfinished sketch, no
+theorem & none; the checker runs on explicit fuel & DESIGN \\
+K-C6 & canonicity, consistency & proved, under normalisation; thesis: ZFC + inaccessibles, on
+paper & none; only soundness relative to the model & GAP \\
+K-C7 & evaluation & weak-CBV evaluation, \texttt{wcbv\_standardization}; thesis has no
+standardization theorem & \texttt{ParRedS.standard}, about the ideal reduction only & GAP \\
+\bottomrule
+\end{tabular}\par\smallskip
+\paragraph{K-C1: confluence holds only for an unrealistic class of environments}
+\begin{itemize}
+\item \lead{PCUIC} the triangle method with an optimal-reduction function, proved
+unconditionally for any well-formed environment.
+\item \lead{Thesis} the analogue for $\kappa$, up to $\equiv_p$, via the Tait--Martin-L\"of
+method.
+\item \lead{lean4lean} \texttt{ParRedS.church\_rosser} holds up to \texttt{NormalEq}, but under
+\texttt{Params} and with two literal sorries in a supporting lemma.
+\item \lead{Kind} GAP.
+\item \lead{Why} the \texttt{Params} restriction is the price of K-B6's abstraction; the two
+sorries predate the branches.
+\item \lead{Consequence} Church-Rosser, standardisation, and the head-reduction lemmas are all
+unproved for any environment with a definition or the quotient rule.
+\end{itemize}
+\paragraph{K-C2: subject reduction for iota is a rule, not a theorem}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{subject\_reduction} and its one-step form \texttt{sr\_red1}, both
+proved.
+\item \lead{Thesis} the corresponding fact, dismissed as "an easy induction."
+\item \lead{lean4lean} \texttt{IsDefEq.pat} asserts the reduct's type with no typing premise on
+it; the honest form needs \texttt{VEnv.WF.patsStrong} (\ref{thm:wf-patsstrong}), which is
+\texttt{sorry}.
+\item \lead{Kind} GAP (for the obligation), DESIGN (for the rule's shape).
+\item \lead{Why} building it into the rule lets \texttt{IsDefEq} exist before the strong system
+does; the repayment is deferred.
+\item \lead{Consequence} every declaration depending on \texttt{VEnv.WF} becomes conditional on
+this one obligation.
+\end{itemize}
+\paragraph{K-C3: unique typing by a different route, and tainted}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{principal\_type}, proved explicitly without relying on normalisation.
+\item \lead{Thesis} \texttt{thm:unique} via a $\vdash_n$-indexed joint induction with
+Church-Rosser.
+\item \lead{lean4lean} \texttt{IsDefEq.uniq} (\ref{thm:unique-typing}) strengthens, projects to a
+syntax-directed judgment, then stratifies by derivation level.
+\item \lead{Kind} GAP (for the taint), DESIGN (for the route).
+\item \lead{Why} stratifying by derivation level avoids the thesis's mutual recursion between
+typing and conversion.
+\item \lead{Consequence} unique typing is available conditionally; because K-B2 routes
+compositions of equalities through it, the taint is pervasive.
+\end{itemize}
+\paragraph{K-C4: type-former injectivity is entirely open}
+\begin{itemize}
+\item \lead{PCUIC} sort and product injectivity under conversion, derived from confluence and
+proved.
+\item \lead{Thesis} \texttt{thm:1dinv}, the step closing the unique-typing induction.
+\item \lead{lean4lean} three declarations (\ref{thm:injectivity-open}), all \texttt{sorry}; the
+derived \texttt{forallE\_inv} inherits both gaps.
+\item \lead{Kind} GAP.
+\item \lead{Why} two routes are in flight -- the blocked Church-Rosser line, and an experimental
+logical-relations line with its own \texttt{sorry}.
+\item \lead{Consequence} unique typing, and the head-reduction lemmas that expose a type's head
+shape, all appeal to an already-open foundation.
+\end{itemize}
+\paragraph{K-C5: no normalization statement; the checker runs on fuel}
+\begin{itemize}
+\item \lead{PCUIC} normalisation as two typeclass assumptions, used to justify a fuel-free
+weak-head reduction.
+\item \lead{Thesis} an unfinished sketch of a terminating variant, stopping before any theorem.
+\item \lead{lean4lean} several independent fuel counters (\ref{thm:vtc-withfuel}); a
+fuel-exhausted run is unconstrained.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} Lean definitions need explicit termination witnesses, and a fuel counter is one.
+\item \lead{Consequence} the largest single axiom of the Rocq boundary is absent, but
+completeness becomes unstatable in the current shape.
+\end{itemize}
+\paragraph{K-C6: no canonicity, no consistency}
+\begin{itemize}
+\item \lead{PCUIC} canonicity and consistency, both proved under the normalisation assumption.
+\item \lead{Thesis} soundness of a proof-split variant in ZFC plus countably many
+inaccessibles, on paper, for a slightly stronger system.
+\item \lead{lean4lean} none; the project states correctness relative to the model, not
+consistency of the type theory.
+\item \lead{Kind} GAP.
+\item \lead{Why} out of scope by design: the statement is that the checker accepts a term only
+if the model derives its typing.
+\item \lead{Consequence} the trust chain terminates at \texttt{VEnv.IsDefEq}; nothing states
+that relation is consistent.
+\end{itemize}
+\paragraph{K-C7: standardization is about the ideal reduction only}
+\begin{itemize}
+\item \lead{PCUIC} one-shot big-step weak call-by-value evaluation, with
+\texttt{wcbv\_standardization} the sole use of strong normalisation in this part of the
+development.
+\item \lead{Thesis} no standardization theorem at all.
+\item \lead{lean4lean} \texttt{ParRedS.standard} (\ref{thm:parreds-standard}), after Kashima
+(2000), about the abstract ideal reduction, under \texttt{Params}.
+\item \lead{Kind} GAP.
+\item \lead{Why} the theorem serves the head-reduction lemmas exposing a type's head shape, not
+an observational statement about running programs.
+\item \lead{Consequence} no weak call-by-value evaluation relation, and no value predicate,
+exists for Lean terms anywhere in the development.
+\end{itemize}
+
+\subsection{K-D: checker and method}
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.12\linewidth}p{0.27\linewidth}p{0.25\linewidth}l}
+\toprule
+id & notion & PCUIC/thesis & lean4lean & kind \\
+\midrule
+K-D1 & checker guarantee & sound and complete; thesis proves $\equiv$ undecidable,
+$\Leftrightarrow$ non-transitive & sound only; failure of any kind is unconstrained & FORCED-LEAN
+\\
+K-D2 & verification method & checker equals spec, same terms, extracted; no thesis analogue &
+a port of the C++ kernel, verified through a refinement layer & DESIGN \\
+K-D3 & open obligations & none on the Rocq side; no thesis analogue & six sorries in
+\texttt{Verify/TypeChecker/} & GAP \\
+K-D4 & pointer equality & none, a pure function; no thesis analogue & one axiom the algorithm's
+fast path branches on & FORCED-LEAN4LEAN \\
+K-D5 & host data structures & defined in Rocq, nothing assumed; no thesis analogue & 32 bridge
+axioms over Lean's own unverified containers & FORCED-LEAN4LEAN \\
+K-D6 & guard condition & two named axioms, the largest single hole; thesis: recursion compiled
+before the kernel & nothing to axiomatise; no fix constructor at all & FORCED-LEAN \\
+K-D7 & termination & fuel-free, well-founded on strong normalisation; no thesis analogue &
+several independent fuel counters & DESIGN \\
+K-D8 & level decision procedure & graph acyclicity, one algorithm; thesis: a rule system, no
+algorithm stated & a canonical form, proved complete, plus a coNP-hardness result & DESIGN \\
+\bottomrule
+\end{tabular}\par\smallskip
+\paragraph{K-D1: soundness only, and completeness is not merely unproved}
+\begin{itemize}
+\item \lead{PCUIC} sound \emph{and} complete against the declarative specification, every
+rejection carrying a refutation.
+\item \lead{Thesis} proves $\equiv$ undecidable and $\Leftrightarrow$ non-transitive, so no
+algorithm decides either.
+\item \lead{lean4lean} the three public entry points (\ref{thm:vtc-toplevel}) give soundness
+only: a \texttt{true} result relates the two terms, nothing else is constrained.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} any completeness claim would have to be relative to $\Leftrightarrow$, which
+K-B4 says is not formalised.
+\item \lead{Consequence} a rejection carries no information; nothing detects an incompleteness
+bug of the kind the Rocq checker's method found.
+\end{itemize}
+\paragraph{K-D2: verification by translation to a model, not by construction}
+\begin{itemize}
+\item \lead{PCUIC} the checker is written in Rocq against the same syntax its specification
+uses; checked and specified object coincide.
+\item \lead{Thesis} no checker-construction analogue; describes only the ideal judgments.
+\item \lead{lean4lean} a port of Lean's C++ kernel on the real \texttt{Lean.Expr}; correctness
+goes through \texttt{TrExprS}/\texttt{TrEnv} and a companion \texttt{.WF} lemma per function.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} fidelity: the verified object is the algorithm that actually runs, at the
+performance of the real kernel.
+\item \lead{Consequence} an entire refinement layer exists with no counterpart, bringing its own
+trust boundary (K-D4, K-D5) and its own vacuity risks (K-E3).
+\end{itemize}
+\paragraph{K-D3: six open obligations in the checker's verification}
+\begin{itemize}
+\item \lead{PCUIC} no open per-function obligations.
+\item \lead{Thesis} no checker-construction analogue.
+\item \lead{lean4lean} six sorries: \ref{thm:vtc-tryetastruct}, \ref{thm:vtc-isdefequnitlike}
+(K-A6); \texttt{reduceProjCore.WF}; \ref{thm:vtc-reducerecursor} (K-A10);
+\ref{thm:vtc-inferproj-struct}, \ref{thm:vtc-inferproj} (K-A9).
+\item \lead{Kind} GAP.
+\item \lead{Why} four of the six trace to K-A6 and K-A8/K-A9: the model has no structure eta and
+no projection node.
+\item \lead{Consequence} every statement in the top-level triple is partial as stated; the iota
+step itself is proved but not wired into the recursor obligation.
+\end{itemize}
+\paragraph{K-D4: pointer equality as an axiom}
+\begin{itemize}
+\item \lead{PCUIC} the checker is a pure Rocq function; no physical-identity test anywhere.
+\item \lead{Thesis} no checker-construction analogue.
+\item \lead{lean4lean} \texttt{ptrEqExpr\_eq} axiomatises that pointer-equal expressions are
+equal; the \texttt{EquivManager} cache built on top is verified separately
+(\ref{thm:eqvmgr-isdefeq-wf}).
+\item \lead{Kind} FORCED-LEAN4LEAN.
+\item \lead{Why} the ported algorithm branches on pointer identity for performance; the axiom
+states what that branch assumes.
+\item \lead{Consequence} mostly benign, except one call site where the axiom gates a different
+algorithm, not merely a shortcut.
+\end{itemize}
+\paragraph{K-D5: bridge axioms over the host's own data structures}
+\begin{itemize}
+\item \lead{PCUIC} environments, maps and arrays are all defined in Rocq; nothing is assumed
+about them.
+\item \lead{Thesis} no checker-construction analogue.
+\item \lead{lean4lean} 32 axioms relate the model to Lean's own \texttt{PersistentHashMap},
+\texttt{PersistentArray}, \texttt{Expr}, \texttt{Level} and \texttt{Syntax}.
+\item \lead{Kind} FORCED-LEAN4LEAN.
+\item \lead{Why} the kernel runs on Lean's own container implementations; verifying those is a
+separate project.
+\item \lead{Consequence} the trust boundary is a mixture of mathematical gaps and library
+lemmas, not a short list of axioms as on the Rocq side.
+\end{itemize}
+\paragraph{K-D6: no guard condition to axiomatise}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{guard\_checking} and \texttt{guard\_checking\_correct}, its largest
+single trust axiom.
+\item \lead{Thesis} recursion is compiled into recursor applications before the kernel sees a
+declaration.
+\item \lead{lean4lean} nothing: \texttt{VExpr} (\ref{ind:vexpr}) has no fix constructor and
+\texttt{IsDefEq} has no fix rule.
+\item \lead{Kind} FORCED-LEAN.
+\item \lead{Why} Lean's design puts termination checking outside the kernel entirely.
+\item \lead{Consequence} the Lean side's named-axiom boundary is smaller here; with K-C5 removing
+the other Rocq axiom too, neither has a direct counterpart.
+\end{itemize}
+\paragraph{K-D7: fuel instead of well-founded recursion on normalisation}
+\begin{itemize}
+\item \lead{PCUIC} \texttt{reduce\_stack} is fuel-free, well-founded on an order whose
+accessibility comes from the normalisation axiom.
+\item \lead{Thesis} no checker-construction analogue.
+\item \lead{lean4lean} several independent fuel counters (\ref{thm:vtc-withfuel}); the real
+kernel uses one shared recursion-depth bound.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} Lean definitions need explicit termination witnesses, and a fuel counter is
+one.
+\item \lead{Consequence} the two implementations can disagree on deeply recursive input purely
+by bound, and exhaustion is indistinguishable from rejection.
+\end{itemize}
+\paragraph{K-D8: a complete level decision procedure, and a hardness result}
+\begin{itemize}
+\item \lead{PCUIC} weighted-graph acyclicity, deciding constraint consistency, not equivalence
+of level expressions.
+\item \lead{Thesis} the rule system of K-A2, with no algorithm and no complexity result stated.
+\item \lead{lean4lean} a canonical form proved sound and complete (\ref{thm:lvl-normalize-complete}),
+plus a coNP-hardness result (\ref{thm:levelsat-equiv-iff-unsat}) for the decision problem.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} the semantic order of K-A2 must be decided completely, not merely
+approximated.
+\item \lead{Consequence} lean4lean decides level order for strictly more pairs than the real
+kernel, and never the converse, a deliberate one-directional divergence.
+\end{itemize}
+
+\subsection{K-E: the trust boundary}
+
+\par\smallskip\noindent
+\begin{tabular}{llp{0.27\linewidth}p{0.32\linewidth}l}
+\toprule
+id & notion & PCUIC/thesis & lean4lean & kind \\
+\midrule
+K-E1 & boundary shape & two named axioms plus quoting; no thesis analogue & 16 live sorries,
+110 axioms, 12 opaque, quoted per statement & GAP \\
+K-E2 & reification & Template quoting, unverified; no thesis analogue & none; \texttt{Replay}
+reads the real environment directly & DESIGN \\
+K-E3 & vacuous layers & none reported; no thesis analogue & three proved apparatuses, each
+inhabited by nothing reachable & GAP \\
+\bottomrule
+\end{tabular}\par\smallskip
+\paragraph{K-E1: the shape of the trust boundary}
+\begin{itemize}
+\item \lead{PCUIC} the guard condition and normalisation, two named axioms, plus the unverified
+quoting layer and OCaml extraction.
+\item \lead{Thesis} no boundary statement of this kind; describes the ideal judgments only.
+\item \lead{lean4lean} 16 live sorries outside \texttt{Experimental/}, 110 axioms and 12 opaque
+constants, quoted per top-level statement.
+\item \lead{Kind} GAP.
+\item \lead{Why} the refinement method of K-D2 spreads the boundary across theory gaps and
+library assumptions, where a correct-by-construction checker has only the first.
+\item \lead{Consequence} a reader cannot state what lean4lean assumes in one line; roughly 8\%
+of user-level declarations are \texttt{sorryAx}-tainted.
+\end{itemize}
+\paragraph{K-E2: no reification layer}
+\begin{itemize}
+\item \lead{PCUIC} the Template layer quotes Rocq's own term representation into the checked
+syntax, in OCaml, unverified.
+\item \lead{Thesis} no reification step; the ideal judgments are stated directly on Lean-shaped
+terms.
+\item \lead{lean4lean} \texttt{Replay.lean} reads declarations out of a real imported
+environment and replays them through the executable kernel.
+\item \lead{Kind} DESIGN.
+\item \lead{Why} Lean's syntax is already a Lean datatype; no reification is needed.
+\item \lead{Consequence} one item of the Rocq boundary closes outright, at the cost of depending
+on Lean's own container implementations (K-D5).
+\end{itemize}
+\paragraph{K-E3: three vacuous layers}
+\begin{itemize}
+\item \lead{PCUIC} no layer is proved yet inhabited by nothing; theorems are stated over a
+predicate a real checker establishes.
+\item \lead{Thesis} no counterpart.
+\item \lead{lean4lean} the \texttt{inductDecl} case of environment admission is \texttt{sorry}
+(\ref{structure:ind-wf}); the confluence class needs every axiom realised as a pattern
+(\ref{thm:indparams-defeqs-as-pats-vacuous}); \texttt{TrEnv.proj\_defeq}
+(\ref{thm:tr-env-proj-defeq}) has no caller.
+\item \lead{Kind} GAP.
+\item \lead{Why} in each case the specification side is finished and the refinement side that
+would inhabit it is not.
+\item \lead{Consequence} counting proved declarations overstates what is established; a vacuity
+pass is the only honest reading of the census.
+\end{itemize}
+
+\section{Thesis versus code}
+\label{sec:ref-thesis-code}
+
+Thirteen further items compare Carneiro's thesis directly against the code, where the code
+either departs from the thesis by design or goes beyond it; each is cross-referenced to the
+K-A--K-E item that treats it in full.
+
+\par\smallskip\noindent
+\begin{tabular}{lp{0.12\linewidth}p{0.20\linewidth}p{0.19\linewidth}lp{0.22\linewidth}}
+\toprule
+id & notion & thesis & code & kind & why \\
+\midrule
+K-T1 & levels & the nine-rule system of \texttt{axioms.tex} & \texttt{VLevel.LE}, a semantic
+order & DESIGN & no rule-completeness proof needed (K-A2) \\
+K-T2 & level complexity & no complexity result stated & \texttt{LevelSat.lean} proves the
+problem coNP-hard & DESIGN & bounds what any complete algorithm can cost (K-A2, K-D8) \\
+K-T3 & let/zeta & zeta kept, with a conservativity argument & no zeta rule; let substituted away
+& DESIGN & keeps the model at six constructors (K-A7) \\
+K-T4 & algorithmic equality & $\Leftrightarrow$: undecidable, non-transitive, fails subject
+reduction & $\Leftrightarrow$ has no formal counterpart at all & GAP & the thesis's negative
+results have no formal home (K-B4, K-D1) \\
+K-T5 & unique typing & $\vdash_n$-indexed stratification & \texttt{HasTypeStratified}, a strong
+syntax-directed judgment & DESIGN & replaces alternation-counting with level-counting (K-C3) \\
+K-T6 & rec-normal forms & the eta-vs-iota fight on partially applied eliminators & no
+counterpart & GAP & the fight is not modelled at all \\
+K-T7 & eight primitives & \texttt{Wtypes.tex}'s $\Sigma$/$W$/\texttt{acc} encoding & not
+formalised; only the Sigma-projection shape reused & DESIGN & the shape serves \texttt{TrProj},
+the reduction does not (K-A8) \\
+K-T8 & soundness & a ZFC-plus-inaccessibles model, on paper & no counterpart & GAP & correctness
+is stated relative to the model, not consistency (K-C6) \\
+K-T9 & iota vs.\ K-split & \texttt{normalization.tex} splits $K^+$ from $\iota$ & one uniform
+iota rule & DESIGN & matches the stub's weaker relation, not its split (K-A10) \\
+K-T10 & compilation stub & a 25-line fragment, no theorem & native reduction refused outright &
+OPEN & no verified-compilation route exists yet (K-A14) \\
+K-T11 & inductive blocks & the recursor and iota rules generated from the block's spec &
+\texttt{VInductDecl.WF} pins 20 fields directly & DESIGN & makes well-formedness decidable, at
+the cost of K-A12 \\
+K-T12 & standardization & no theorem stated & \texttt{ParRedS.standard}, after Kashima (2000) &
+DESIGN & beyond the thesis; serves the head-reduction lemmas (K-C7) \\
+K-T13 & regularity of reductions & called "an easy induction" & \texttt{VEnv.WF.patsStrong}, the
+one open obligation & GAP & the widest-reaching gap in the project (K-C2) \\
+\bottomrule
+\end{tabular}\par\smallskip
+
+\section{What is aligned}
+\label{sec:ref-aligned}
+
+The remaining notions line up name for name, with no divergence of kind; each row is a MetaRocq
+or thesis element and its lean4lean counterpart.
+
+\par\smallskip\noindent
+\begin{tabular}{p{0.23\linewidth}p{0.19\linewidth}p{0.27\linewidth}p{0.20\linewidth}}
+\toprule
+notion & PCUIC & lean4lean & thesis \\
+\midrule
+variable lookup & \texttt{type\_Rel} & \texttt{Lookup}, \texttt{IsDefEq.bvar} & the variable rule
+\\
+sorts & \texttt{type\_Sort} & \texttt{IsDefEq.sortDF} & -- \\
+product formation & \texttt{type\_Prod}, \texttt{sort\_of\_product} & \texttt{IsDefEq.forallEDF}
+with \texttt{imax} & Pi-formation, the \texttt{imax} clause \\
+abstraction & \texttt{type\_Lambda} & \texttt{IsDefEq.lamDF} & -- \\
+application & \texttt{type\_App} & \texttt{IsDefEq.appDF} & -- \\
+universe-polymorphic constants & \texttt{type\_Const} & \texttt{IsDefEq.constDF} & -- \\
+conversion & \texttt{type\_Cumul} & \texttt{IsDefEq.defeqDF} (modulo K-A3) & -- \\
+context well-formedness & \texttt{wf\_local} & \texttt{OnCtx}\,$\Gamma\,(\mathrm{IsType})$ &
+$\vdash \Gamma$ ok \\
+beta & \texttt{cumul\_beta} & \texttt{IsDefEq.beta} & -- \\
+delta & \texttt{cumul\_delta} & \texttt{IsDefEq.extra} over \texttt{env.defeqs} & definitions \\
+iota & \texttt{cumul\_iota} & \texttt{IsDefEq.pat} over \texttt{env.pats} (modulo K-A10) & the
+iota section \\
+weakening & \texttt{weakening\_typing} & \texttt{IsDefEq.weakN} & \texttt{thm:weak} \\
+substitution & \texttt{substitution} & \texttt{IsDefEq.instN} & \texttt{thm:subst}, item
+\texttt{subst\_ty} \\
+validity, regularity of types & \texttt{validity} & \texttt{IsDefEq.isType} & \texttt{thm:reg},
+item 4 \\
+free variables in context & \texttt{PCUICClosed} & \texttt{IsDefEq.closedN} & \texttt{thm:reg},
+item 2 \\
+context conversion & \texttt{PCUICContextConversion} & \texttt{IsDefEqCtx},
+\texttt{IsDefEq.defeqDFC} & -- \\
+environment weakening & \texttt{weakening\_env} & \texttt{IsDefEq.mono} along the extension order
+& -- \\
+universe instantiation & \texttt{typing\_subst\_instance} & \texttt{IsDefEq.instL} &
+universe-polymorphic constants \\
+simultaneous substitution & \texttt{subslet} & \texttt{Ctx.SubstEq}, \texttt{IsDefEq.substDF} &
+-- \\
+parallel reduction & \texttt{pred1} & \texttt{ParRed} (\ref{def:parred}) & $\rightsquigarrow_\kappa$
+(compatibility direction) \\
+complete parallel reduction & \texttt{rho} & \texttt{CParRed} (\ref{def:cparred}) & -- \\
+triangle lemma & the triangle property & \texttt{ParRed.triangle} & \texttt{thm:tri} \\
+confluence & \texttt{PCUICConfluence.v} & \texttt{ParRedS.church\_rosser} (status differs, K-C1)
+& \texttt{thm:church\_rosser} \\
+defeq via reduction plus irrelevance & -- & \texttt{IsDefEq.church\_rosser}
+(\ref{thm:isdefeq-church-rosser}) & \texttt{thm:ckappa} \\
+bidirectional inference & \texttt{Bidirectional/} & \texttt{VEnv.InferType} (unwired, K-B5) & --
+\\
+head-reduce to a sort or product & \texttt{reduce\_to\_sort}/\texttt{reduce\_to\_prod} &
+\texttt{IsDefEq.reduce\_sort}/\texttt{.reduce\_forallE} & -- \\
+level valuation semantics & \texttt{Universes.val}/\texttt{satisfies} &
+\texttt{VLevel.eval}/\texttt{VLevel.LE} (\ref{ind:vlevel}) & level semantics paragraph \\
+declaration admission & \texttt{check\_wf\_decl} & \texttt{VDecl.WF}, \texttt{VEnv.WF'} & \S2.5,
+\S2.6, \S2.7.1 \\
+mutual blocks & MetaRocq's mutual definitions & \texttt{VEnv.addConsts} then
+\texttt{addDefEqs} & -- \\
+monotonicity of well-formedness & \texttt{weakening\_env\_decl} & \texttt{VConstant.WF.mono},
+\texttt{VDefEq.WF.mono}, \texttt{PatWF.mono} & -- \\
+\bottomrule
+\end{tabular}\par\smallskip
+
+\section*{Caveats}
+
+\begin{itemize}
+\item Every claim above is read off a source file, a blueprint label, or the analysis behind
+this chapter; none is inferred from a paper's abstract or from a title alone.
+\item [CCC] is superseded by [JACM] on every shared topic; it is cited here only for its earlier
+framing (PCUIC's introduction) or for historical firsts (Sec 3, first sound checker).
+\item [MR] appears only where lean4lean's own evidence explicitly names it; it establishes no
+kernel-verification result and should never be cited for one.
+\item A "kind" is read off the current state of the code and the current state of the two
+papers; a later proof could move a GAP item into DESIGN without changing what is proved today.
+\item Kind counts (FORCED-LEAN 7, FORCED-LEAN4LEAN 2, DESIGN 22, GAP 19, OPEN 2) total all 52
+items: K-A--K-E (DESIGN 14, GAP 15, OPEN 1) plus the K-T table of \S\ref{sec:ref-thesis-code}
+(DESIGN 8, GAP 4, OPEN 1).
+\end{itemize}
