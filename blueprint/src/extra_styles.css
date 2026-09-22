@@ -25,6 +25,10 @@ div.proof_content {
 }
 
 
+img {
+	max-width: 100%;
+}
+
 /* --- schematic style: compact lists inside nodes, readable tables ------------------- */
 
 div[class$="_thmcontent"] ul,

@@ -1,0 +1,87 @@
+digraph layers {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="filled,rounded", fontname="Helvetica", fontsize=11,
+        margin="0.16,0.12", color="#333333"];
+  edge [fontname="Helvetica", fontsize=10, fontcolor="#333333"];
+
+  subgraph cluster_lean {
+    label="Lean";
+    fontname="Helvetica-Bold";
+    fontsize=13;
+    style=dashed;
+    color="#B35900";
+    labelloc="t";
+
+    lean_theory [fillcolor="#FDEBD0", label=<
+      <b>Kernel theory</b><br/>
+      Carneiro's thesis: typing, defeq,<br/>
+      reduction, universes w/ imax,<br/>
+      inductive/recursor calculus<br/>
+      <font color="#0072B2"><b>[CT]</b></font>
+    >];
+    lean_verif [fillcolor="#FDEBD0", label=<
+      <b>Kernel verification</b><br/>
+      lean4lean's executable kernel,<br/>
+      ported from Lean's C++ kernel<br/>
+      <font color="#0072B2"><b>[CT]</b></font>
+    >];
+    lean_against [fillcolor="#FDEBD0", label=<
+      <b>Verified against</b><br/>
+      VEnv/VExpr model, via TrExprS;<br/>
+      sound, fuelled, completeness<br/>
+      not claimed<br/>
+      <font color="#0072B2"><b>[CT]</b></font>
+    >];
+
+    lean_theory -> lean_verif -> lean_against [style=invis];
+    {rank=same; lean_theory; lean_verif; lean_against;}
+  }
+
+  subgraph cluster_rocq {
+    label="Rocq";
+    fontname="Helvetica-Bold";
+    fontsize=13;
+    style=dashed;
+    color="#1B7F3B";
+    labelloc="t";
+
+    rocq_theory [fillcolor="#D5F5E3", label=<
+      <b>Kernel theory</b><br/>
+      PCUIC's declarative spec:<br/>
+      universes &amp; valuations,<br/>
+      cumulativity, typing, wf envs<br/>
+      <font color="#009E73"><b>[JACM]</b></font> <font color="#D55E00"><b>[HAB]</b></font>
+    >];
+    rocq_verif [fillcolor="#D5F5E3", label=<
+      <b>Kernel verification</b><br/>
+      MetaRocq's SafeChecker, in Rocq,<br/>
+      then extracted<br/>
+      <font color="#009E73"><b>[JACM]</b></font> <font color="#D55E00"><b>[HAB]</b></font>
+    >];
+    rocq_against [fillcolor="#D5F5E3", label=<
+      <b>Verified against</b><br/>
+      declarative PCUIC spec; checker<br/>
+      proved sound AND complete<br/>
+      <font color="#009E73"><b>[JACM]</b></font> <font color="#D55E00"><b>[HAB]</b></font>
+    >];
+
+    rocq_theory -> rocq_verif -> rocq_against [style=invis];
+    {rank=same; rocq_theory; rocq_verif; rocq_against;}
+  }
+
+  lean_theory  -> rocq_theory  [label="same method?", style=dashed, color="#555555"];
+  lean_verif   -> rocq_verif   [label="differs: refinement layer\nvs. same-syntax checker",
+                                 color="#B35900"];
+  lean_against -> rocq_against [label="differs: sound only\nvs. sound and complete",
+                                 color="#B35900"];
+
+  legend [shape=note, style=filled, fillcolor="#FAFAFA", color="#888888", fontsize=9, label=<
+    <b>Legend</b><br align="left"/>
+    orange = Lean / lean4lean (sound only)<br align="left"/>
+    green = Rocq / MetaRocq (sound and complete)<br align="left"/>
+    dashed edge = comparable method<br align="left"/>
+    solid edge = method diverges<br align="left"/>
+  >];
+  legend -> lean_theory [style=invis];
+}

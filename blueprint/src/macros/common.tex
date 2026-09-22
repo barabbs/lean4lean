@@ -82,3 +82,45 @@
 
 % Axiom footprint of a node that depends on a sorry.
 \newcommand{\axfoot}[1]{\par\noindent{\small\stTainted{} \textcolor{bpmeta}{\texttt{#1}}}\par}
+
+% ---------------------------------------------------------------------------
+% References-chapter macros (blueprint/src/chapters/references.tex,
+% intro.tex): coloured source tags, kind badges, coloured divergence ids.
+% Plain \newcommand/\textcolor/\textbf (plus one delimited \def for \did's
+% group-colour lookup): must render identically in xelatex and plasTeX.
+% ---------------------------------------------------------------------------
+
+% Source tags: one colour per cited source.
+\definecolor{srcCT}{HTML}{0072B2}
+\definecolor{srcJACM}{HTML}{009E73}
+\definecolor{srcCCC}{HTML}{CC79A7}
+\definecolor{srcMR}{HTML}{E69F00}
+\definecolor{srcHAB}{HTML}{D55E00}
+\definecolor{srcMRD}{HTML}{555555}
+\newcommand{\src}[1]{\textcolor{src#1}{\textbf{[#1]}}}
+\newcommand{\srcs}[2]{\textcolor{src#1}{\textbf{[#1, #2]}}}
+
+% Divergence-kind badges (see \S\ref{sec:ref-divergences}).
+\definecolor{kindFL}{HTML}{7B2D8B}
+\definecolor{kindFK}{HTML}{B266CC}
+\definecolor{kindDS}{HTML}{0B6E99}
+\definecolor{kindGP}{HTML}{6E6E6E}
+\definecolor{kindOP}{HTML}{E65100}
+\newcommand{\kFL}{\textcolor{kindFL}{\textbf{[F-Lean]}}}
+\newcommand{\kFK}{\textcolor{kindFK}{\textbf{[F-l4l]}}}
+\newcommand{\kDS}{\textcolor{kindDS}{\textbf{[Design]}}}
+\newcommand{\kGP}{\textcolor{kindGP}{\textbf{[Gap]}}}
+\newcommand{\kOP}{\textcolor{kindOP}{\textbf{[Open]}}}
+
+% Divergence id, coloured by its group letter (A object language, B
+% judgments, C metatheory, D checker, E trust boundary, T thesis-vs-code).
+\definecolor{didgrpA}{HTML}{0B6E99}
+\definecolor{didgrpB}{HTML}{1B7F3B}
+\definecolor{didgrpC}{HTML}{9A3B00}
+\definecolor{didgrpD}{HTML}{6A3D9A}
+\definecolor{didgrpE}{HTML}{B00020}
+\definecolor{didgrpT}{HTML}{555555}
+\makeatletter
+\newcommand{\did}[1]{\did@i#1\did@nil}
+\def\did@i K-#1#2\did@nil{\textcolor{didgrp#1}{\textbf{K-#1#2}}}
+\makeatother
