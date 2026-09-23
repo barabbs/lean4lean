@@ -341,3 +341,152 @@ theorem VEnv.WF.orderedStrong (H : WF env) : OrderedStrong env :=
 
 -- Every use of the strong system is therefore conditional on `VEnv.WF.patsStrong`.
 instance : CoeOut (VEnv.WF env) env.OrderedStrong := ⟨(·.orderedStrong)⟩
+
+/-! ### Origin of a well-formed environment's contents -/
+
+namespace VEnv.WF'
+
+/-- Every declaration of a well-formed list is a well-formed step `env₀ ⊢ d ⤳ env₁` from the
+environment of the remaining suffix, and the environment it produces is a prefix of `env`. -/
+theorem step_of_mem {ds : List VDecl} {env : VEnv} (H : env.WF' ds) {d : VDecl}
+    (hd : d ∈ ds) :
+    ∃ (ds₀ : List VDecl) (env₀ env₁ : VEnv),
+      (d :: ds₀) <:+ ds ∧ env₀.WF' ds₀ ∧ VDecl.WF env₀ d env₁ ∧ env.WFPrefix env₁ := by
+  induction H with
+  | empty => cases hd
+  | decl hwf H ih =>
+    rcases List.mem_cons.1 hd with rfl | hd'
+    · exact ⟨_, _, _, List.suffix_refl _, H, hwf, .rfl⟩
+    · obtain ⟨ds₀, env₀, env₁, hs, h₀, h₁, hp⟩ := ih hd'
+      exact ⟨ds₀, env₀, env₁, hs.trans (List.suffix_cons _ _), h₀, h₁, .decl hwf hp⟩
+
+/-- An inductive block of a well-formed list was added by a well-formed `addInduct` step,
+whose result is a sub-environment of `env`. -/
+theorem induct_origin {ds : List VDecl} {env : VEnv} (H : env.WF' ds) {decl : VInductDecl}
+    (hd : VDecl.induct decl ∈ ds) :
+    ∃ env₀ env₁, decl.WF env₀ ∧ env₀.addInduct decl = some env₁ ∧ env₁ ≤ env := by
+  obtain ⟨_, _, _, _, _, h, hp⟩ := H.step_of_mem hd
+  cases h with | induct hdecl hadd => exact ⟨_, _, hdecl, hadd, hp.le⟩
+
+/-- Every constant of a well-formed environment was introduced by exactly one step of its
+declaration list: absent before that step, bound to its final value after it. -/
+theorem consts_origin {ds : List VDecl} {env : VEnv} (H : env.WF' ds) {c : Name}
+    {ci : VConstant} (hc : env.constants c = some ci) :
+    ∃ (d : VDecl) (ds₀ : List VDecl) (env₀ env₁ : VEnv),
+      (d :: ds₀) <:+ ds ∧ env₀.WF' ds₀ ∧ VDecl.WF env₀ d env₁ ∧ env₁ ≤ env ∧
+      env₀.constants c = none ∧ env₁.constants c = some ci := by
+  induction H with
+  | empty => cases hc
+  | @decl d env' ds env hwf H ih =>
+    cases h₀ : env.constants c with
+    | none => exact ⟨d, ds, env, env', List.suffix_refl _, H, hwf, .rfl, h₀, hc⟩
+    | some ci₀ =>
+      obtain rfl : ci₀ = ci := Option.some.inj ((hwf.le.constants h₀).symm.trans hc)
+      obtain ⟨d₁, ds₀, env₀, env₁, hs, h₁, h₂, hle, h₃, h₄⟩ := ih h₀
+      exact ⟨d₁, ds₀, env₀, env₁, hs.trans (List.suffix_cons _ _), h₁, h₂, hle.trans hwf.le,
+        h₃, h₄⟩
+
+/-- Every definitional axiom headed by a constant `c` has `c` declared, and is the only
+definitional axiom headed by `c`. -/
+private def DefEqsConst (env : VEnv) : Prop :=
+  ∀ df c us, env.defeqs df → df.lhs = .const c us →
+    env.constants c ≠ none ∧ ∀ df' us', env.defeqs df' → df'.lhs = .const c us' → df = df'
+
+private theorem DefEqsConst.mono {env env' : VEnv} (H : DefEqsConst env) (hle : env ≤ env')
+    (hd : env'.defeqs = env.defeqs) : DefEqsConst env' := by
+  intro df c us h hl
+  rw [hd] at h
+  obtain ⟨hc, hu⟩ := H _ _ _ h hl
+  obtain ⟨a, ha⟩ := Option.ne_none_iff_exists'.1 hc
+  exact ⟨by rw [hle.constants ha]; nofun, fun _ _ h' hl' => hu _ _ (hd ▸ h') hl'⟩
+
+private theorem DefEqsConst.addDefEq {env : VEnv} {df₀ : VDefEq} {c₀ us₀}
+    (H : DefEqsConst env) (hc : env.constants c₀ ≠ none)
+    (hfresh : ∀ df us, env.defeqs df → df.lhs ≠ .const c₀ us)
+    (hl : df₀.lhs = .const c₀ us₀) : DefEqsConst (env.addDefEq df₀) := by
+  intro df c us h hl'
+  rcases h with rfl | h
+  · obtain rfl : c = c₀ := by rw [hl] at hl'; cases hl'; rfl
+    refine ⟨hc, fun _ _ h' hl'' => ?_⟩
+    rcases h' with rfl | h'
+    · rfl
+    · exact (hfresh _ _ h' hl'').elim
+  · obtain ⟨hc', hu⟩ := H _ _ _ h hl'
+    refine ⟨hc', fun _ _ h' hl'' => ?_⟩
+    rcases h' with rfl | h'
+    · obtain rfl : c = c₀ := by rw [hl] at hl''; cases hl''; rfl
+      exact (hfresh _ _ h hl').elim
+    · exact hu _ _ h' hl''
+
+private theorem DefEqsConst.addDefEq_app {env : VEnv} {df₀ : VDefEq}
+    (H : DefEqsConst env) (hl : ∀ c us, df₀.lhs ≠ .const c us) :
+    DefEqsConst (env.addDefEq df₀) := by
+  intro df c us h hl'
+  rcases h with rfl | h
+  · exact (hl _ _ hl').elim
+  · obtain ⟨hc', hu⟩ := H _ _ _ h hl'
+    refine ⟨hc', fun _ _ h' hl'' => ?_⟩
+    rcases h' with rfl | h'
+    · exact (hl _ _ hl'').elim
+    · exact hu _ _ h' hl''
+
+private theorem DefEqsConst.addDefEqs : ∀ {env : VEnv} {cis : List VDefVal},
+    DefEqsConst env → (∀ ci ∈ cis, env.constants ci.name ≠ none) →
+    (∀ ci ∈ cis, ∀ df us, env.defeqs df → df.lhs ≠ .const ci.name us) →
+    (cis.map (·.name)).Nodup → DefEqsConst (env.addDefEqs cis)
+  | _, [], H, _, _, _ => H
+  | env, ci :: cis, H, hc, hfresh, hnd => by
+    rw [List.map_cons, List.nodup_cons] at hnd
+    show DefEqsConst ((env.addDefEq ci.toDefEq).addDefEqs cis)
+    refine DefEqsConst.addDefEqs
+      (H.addDefEq (hc _ (.head _)) (hfresh _ (.head _)) rfl)
+      (fun c hm => hc c (.tail _ hm)) (fun c hm df us h hl => ?_) hnd.2
+    rcases h with rfl | h
+    · obtain ⟨h₁, -⟩ := VExpr.const.inj hl
+      exact hnd.1 (h₁ ▸ List.mem_map_of_mem (f := (·.name)) hm)
+    · exact hfresh c (.tail _ hm) _ _ h hl
+
+private theorem defEqsConst {ds : List VDecl} {env : VEnv} (H : env.WF' ds) :
+    DefEqsConst env := by
+  induction H with
+  | empty => intro _ _ _ h; cases h
+  | decl hwf _ ih =>
+    cases hwf with
+    | «axiom» _ h2 => exact ih.mono (addConst_le h2) (addConst_defeqs h2)
+    | «opaque» _ h2 => exact ih.mono (addConst_le h2) (addConst_defeqs h2)
+    | «example» _ => exact ih
+    | induct _ h2 => exact ih.mono (addInduct_le h2) (addInduct_defeqs h2)
+    | «def» _ h2 =>
+      obtain ⟨hnone, hsome, -⟩ := addConst_eq h2
+      refine (ih.mono (addConst_le h2) (addConst_defeqs h2)).addDefEq
+        (by rw [hsome]; nofun) (fun _ _ h hl => ?_) rfl
+      rw [addConst_defeqs h2] at h
+      exact (ih _ _ _ h hl).1 hnone
+    | mutualDef _ h2 _ =>
+      have hd := addConsts_defeqs h2
+      refine (ih.mono (addConsts_le h2) hd).addDefEqs
+        (fun ci hm => by rw [addConsts_constants h2 ci hm]; nofun)
+        (fun ci hm _ _ h hl => ?_) (addConst_foldlM_nodup h2)
+      rw [hd] at h
+      exact (ih _ _ _ h hl).1 (addConst_foldlM_fresh h2 ci hm)
+    | quot _ h2 =>
+      rw [VEnv.addQuot] at h2
+      obtain ⟨e1, s1, h2⟩ := Option.bind_eq_some_iff.1 h2
+      obtain ⟨e2, s2, h2⟩ := Option.bind_eq_some_iff.1 h2
+      obtain ⟨e3, s3, h2⟩ := Option.bind_eq_some_iff.1 h2
+      obtain ⟨e4, s4, h2⟩ := Option.bind_eq_some_iff.1 h2
+      cases h2
+      refine ((((ih.mono (addConst_le s1) (addConst_defeqs s1)).mono (addConst_le s2)
+        (addConst_defeqs s2)).mono (addConst_le s3) (addConst_defeqs s3)).mono
+        (addConst_le s4) (addConst_defeqs s4)).addDefEq_app fun _ _ h => ?_
+      cases h
+
+/-- A well-formed environment has at most one definitional axiom per constant head: its δ
+rules are functional. -/
+theorem defeqs_const_uniq {ds : List VDecl} {env : VEnv} (H : env.WF' ds)
+    {df df' : VDefEq} (h : env.defeqs df) (h' : env.defeqs df') {c : Name}
+    {us us' : List VLevel} (hlhs : df.lhs = .const c us) (hlhs' : df'.lhs = .const c us') :
+    df = df' :=
+  (defEqsConst H _ _ _ h hlhs).2 _ _ h' hlhs'
+
+end VEnv.WF'

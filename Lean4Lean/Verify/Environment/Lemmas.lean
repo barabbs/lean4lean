@@ -206,6 +206,22 @@ theorem AddQuot.pull {x ci} (hq : ∀ q, ConstantInfo.quotInfo q ≠ ci)
     _ _ wf H
   rintro m env hwf ⟨rfl, _⟩; exact hfind
 
+/-- A constant other than a `quotInfo` resolvable after adding the quotient constants was
+already resolvable before. -/
+theorem AddQuot.pull_of {x ci} (H : AddQuot C₁ C₂ env₁ env₂) (wf : C₁.WF)
+    (hq : ∀ v, ci ≠ .quotInfo v) (hfind : C₂.find? x = some ci) : C₁.find? x = some ci := by
+  have step {P : ConstMap → VEnv → Prop} {name kind ci'}
+      (H1 : ∀ m env, m.WF → P m env → m.find? x = some ci) (m env) (wf : m.WF)
+      (H2 : AddQuot1 name kind ci' P m env) : m.find? x = some ci := by
+    let ⟨_, _, _, _, h2, _, h4⟩ := H2
+    have h := H1 _ _ (wf.insert _ _ h2) h4
+    rw [wf.find?_insert] at h; split at h
+    · exact absurd (Option.some.inj h).symm (hq _)
+    · exact h
+  dsimp [AddQuot] at H
+  refine (step <| step <| step <| step ?_) _ _ wf H
+  rintro m env _ ⟨rfl, _⟩; exact hfind
+
 /-- Inserting a whole block of definitions preserves constant-map well-formedness,
 provided every name is fresh and the block has no duplicate names. -/
 theorem insertDefs_wf : ∀ {cis : List DefinitionVal} {C : ConstMap}, C.WF →
@@ -910,6 +926,140 @@ theorem TrEnv.pats_iota_inv_shape {safety : DefinitionSafety} {env : Environment
       (hc : rhs.Closed) (rci : VConstant),
       TrEnv'.IotaRule env.constants venv recName cName M N r rval rule cval rhs hc rci :=
   TrEnv'.pats_iota_inv_shape H hp
+
+/-! ### The block behind a kernel type former or constructor -/
+
+/-- A type former or constructor resolvable in `C` and visible at `safety` was inserted by an
+`induct` step: it is one of the kernel constants of an `AddInduct` block `decl`, well-formed
+over the environment `env₀` it extends, whose result `env₁` lies below `venv`. Every other
+step inserts only definitions, axioms, theorems, opaques, quotient constants, or (`ignore`)
+constants invisible at `safety`. -/
+theorem TrEnv'.find?_induct {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
+    {venv : VEnv} {x : Name} {ci : ConstantInfo}
+    (H : TrEnv' safety C Q venv) (h : C.find? x = some ci) (hsafe : safety ≤ ci.safety)
+    (hk : ci.isInductive ∨ ci.isCtor) :
+    ∃ (C₀ C₁ : ConstMap) (env₀ env₁ : VEnv) (decl : VInductDecl),
+      decl.WF env₀ ∧ env₁ ≤ venv ∧
+      ∃ A : AddInduct safety C₀ env₀ decl C₁ env₁,
+        ci ∈ AddInduct.consts A.ivals A.rvals ∧ ci.name = x := by
+  induction H with
+  | empty => simp [SMap.find?] at h
+  | ignore _ h2 Hprev ih =>
+    rw [Hprev.map_wf.find?_insert] at h; split at h
+    · cases h; exact absurd hsafe h2
+    · exact ih h
+  | «axiom» _ _ _ h4 Hprev ih =>
+    rw [Hprev.map_wf.find?_insert] at h; split at h
+    · cases h; simp [ConstantInfo.isInductive, ConstantInfo.isCtor] at hk
+    · obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih h
+      exact ⟨_, _, _, _, _, hwf, hle.trans (VEnv.addConst_le h4), A, hA⟩
+  | defn _ _ _ h4 Hprev ih =>
+    rw [Hprev.map_wf.find?_insert] at h; split at h
+    · cases h; simp [ConstantInfo.isInductive, ConstantInfo.isCtor] at hk
+    · obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih h
+      exact ⟨_, _, _, _, _, hwf,
+        hle.trans ((VEnv.addConst_le h4).trans VEnv.addDefEq_le), A, hA⟩
+  | mutualDef _ hnd hfr _ hadd _ Hprev ih =>
+    rcases insertDefs_find? Hprev.map_wf hfr hnd h with h | ⟨_, _, _, rfl⟩
+    · obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih h
+      exact ⟨_, _, _, _, _, hwf,
+        hle.trans ((VEnv.addConsts_le hadd).trans VEnv.addDefEqs_le), A, hA⟩
+    · simp [ConstantInfo.isInductive, ConstantInfo.isCtor] at hk
+  | thm _ _ _ _ h5 Hprev ih =>
+    rw [Hprev.map_wf.find?_insert] at h; split at h
+    · cases h; simp [ConstantInfo.isInductive, ConstantInfo.isCtor] at hk
+    · obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih h
+      exact ⟨_, _, _, _, _, hwf, hle.trans (VEnv.addConst_le h5), A, hA⟩
+  | «opaque» _ _ _ h4 Hprev ih =>
+    rw [Hprev.map_wf.find?_insert] at h; split at h
+    · cases h; simp [ConstantInfo.isInductive, ConstantInfo.isCtor] at hk
+    · obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih h
+      exact ⟨_, _, _, _, _, hwf, hle.trans (VEnv.addConst_le h4), A, hA⟩
+  | quot _ h2 Hprev ih =>
+    have hq : ∀ v, ci ≠ .quotInfo v := by
+      rintro v rfl; simp [ConstantInfo.isInductive, ConstantInfo.isCtor] at hk
+    obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih (h2.pull_of Hprev.map_wf hq h)
+    exact ⟨_, _, _, _, _, hwf, hle.trans h2.le, A, hA⟩
+  | induct hwf hadd Hprev ih =>
+    rcases hadd.find? Hprev.map_wf h with h | hA
+    · obtain ⟨_, _, _, _, _, hwf, hle, A, hA⟩ := ih h
+      exact ⟨_, _, _, _, _, hwf, hle.trans hadd.le, A, hA⟩
+    · exact ⟨_, _, _, _, _, hwf, .rfl, hadd, hA⟩
+
+/-- The block that declared a kernel type former `ival` as the model type former `t`: `decl`
+is well-formed over `env₀`, its type formers extend `env₀` to `envT` and the whole block to
+`env₁ ≤ venv`, and `t ∈ decl.types` translates `ival` with the constructors `cvals`
+(`TrIndType`: `ival` translating to `t` in `env₀`, `ival.ctors` the names of `cvals`, each
+constructor translating in `envT` with its Π-arity). -/
+structure TrEnv'.InductOrigin (safety : DefinitionSafety) (venv : VEnv) (ival : InductiveVal)
+    (decl : VInductDecl) (env₀ envT env₁ : VEnv) (t : VInductiveType)
+    (cvals : List ConstructorVal) : Prop where
+  wf : decl.WF env₀
+  addTypes : decl.addTypes env₀ = some envT
+  addInduct : env₀.addInduct decl = some env₁
+  le : env₁ ≤ venv
+  mem : t ∈ decl.types
+  tr : TrIndType safety env₀ envT decl.nparams (decl.types.map (·.name)) ival cvals t
+
+/-- The type former and block behind an `inductInfo` of `C`: the inverse of `TrEnv'`'s
+`induct` clause for type formers. Visibility at `safety` is needed, as for `pats_iota'`: an
+`ignore` step inserts a type former of no block. -/
+theorem TrEnv'.inductInfo_inv {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
+    {venv : VEnv} {I : Name} {ival : InductiveVal}
+    (H : TrEnv' safety C Q venv) (hI : C.find? I = some (.inductInfo ival))
+    (hsafe : safety ≤ (Lean.ConstantInfo.inductInfo ival).safety) :
+    ∃ (decl : VInductDecl) (env₀ envT env₁ : VEnv) (t : VInductiveType)
+      (cvals : List ConstructorVal),
+      t.name = I ∧ InductOrigin safety venv ival decl env₀ envT env₁ t cvals := by
+  obtain ⟨_, _, env₀, env₁, decl, hwf, hle, A, hmem, hn⟩ :=
+    H.find?_induct hI hsafe (.inl rfl)
+  rcases AddInduct.mem_consts.1 hmem with ⟨iv, hiv, he⟩ | ⟨_, _, _, _, he⟩ | ⟨_, _, he⟩ <;>
+    cases he
+  obtain ⟨t, ht, htr⟩ := A.types.forall_exists_l iv hiv
+  exact ⟨decl, env₀, A.envT, env₁, t, iv.2, htr.tr.2.symm.trans hn,
+    ⟨hwf, A.stT, A.env_eq, hle, ht, htr⟩⟩
+
+/-- The type former and block behind a `ctorInfo` of `C`: `cval` is among the constructors
+`cvals` of a type former `t` of a block `decl`, with the data of `InductOrigin`; its model
+constructor and translation are the matching entry of `tr.ctors`. -/
+theorem TrEnv'.ctorInfo_inv {safety : DefinitionSafety} {C : ConstMap} {Q : Bool}
+    {venv : VEnv} {x : Name} {cval : ConstructorVal}
+    (H : TrEnv' safety C Q venv) (hc : C.find? x = some (.ctorInfo cval))
+    (hsafe : safety ≤ (Lean.ConstantInfo.ctorInfo cval).safety) :
+    ∃ (ival : InductiveVal) (decl : VInductDecl) (env₀ envT env₁ : VEnv) (t : VInductiveType)
+      (cvals : List ConstructorVal),
+      cval ∈ cvals ∧ cval.name = x ∧ InductOrigin safety venv ival decl env₀ envT env₁ t cvals := by
+  obtain ⟨_, _, env₀, env₁, decl, hwf, hle, A, hmem, hn⟩ :=
+    H.find?_induct hc hsafe (.inr rfl)
+  rcases AddInduct.mem_consts.1 hmem with ⟨_, _, he⟩ | ⟨iv, hiv, _, hcv, he⟩ | ⟨_, _, he⟩ <;>
+    cases he
+  obtain ⟨t, ht, htr⟩ := A.types.forall_exists_l iv hiv
+  exact ⟨iv.1, decl, env₀, A.envT, env₁, t, iv.2, hcv, hn, ⟨hwf, A.stT, A.env_eq, hle, ht, htr⟩⟩
+
+/-- `TrEnv'.inductInfo_inv` against the environment's own `find?`. -/
+theorem TrEnv.inductInfo_inv {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
+    {I : Name} {ival : InductiveVal}
+    (H : TrEnv safety env venv) (hI : env.find? I = some (.inductInfo ival))
+    (hsafe : safety ≤ (Lean.ConstantInfo.inductInfo ival).safety) :
+    ∃ (decl : VInductDecl) (env₀ envT env₁ : VEnv) (t : VInductiveType)
+      (cvals : List ConstructorVal),
+      t.name = I ∧ TrEnv'.InductOrigin safety venv ival decl env₀ envT env₁ t cvals := by
+  have h : env.constants.find?' I = some (.inductInfo ival) := hI
+  rw [(TrEnv'.map_wf H).find?'_eq_find?] at h
+  exact TrEnv'.inductInfo_inv H h hsafe
+
+/-- `TrEnv'.ctorInfo_inv` against the environment's own `find?`. -/
+theorem TrEnv.ctorInfo_inv {safety : DefinitionSafety} {env : Environment} {venv : VEnv}
+    {x : Name} {cval : ConstructorVal}
+    (H : TrEnv safety env venv) (hc : env.find? x = some (.ctorInfo cval))
+    (hsafe : safety ≤ (Lean.ConstantInfo.ctorInfo cval).safety) :
+    ∃ (ival : InductiveVal) (decl : VInductDecl) (env₀ envT env₁ : VEnv) (t : VInductiveType)
+      (cvals : List ConstructorVal),
+      cval ∈ cvals ∧ cval.name = x ∧
+      TrEnv'.InductOrigin safety venv ival decl env₀ envT env₁ t cvals := by
+  have h : env.constants.find?' x = some (.ctorInfo cval) := hc
+  rw [(TrEnv'.map_wf H).find?'_eq_find?] at h
+  exact TrEnv'.ctorInfo_inv H h hsafe
 
 /-- A registered ι rule, matched against a well-typed redex with its `Realizes` side
 conditions discharged, gives a definitional equality between redex and reduct. Thin
