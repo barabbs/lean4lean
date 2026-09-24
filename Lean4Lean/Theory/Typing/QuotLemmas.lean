@@ -57,4 +57,33 @@ theorem addQuot_quotLift : env'.constants ``Quot.lift = quotLiftConst := (addQuo
 theorem addQuot_quotInd : env'.constants ``Quot.ind = quotIndConst := (addQuot_objs henv).2.1
 theorem addQuot_defeq : env'.defeqs quotDefEq := (addQuot_objs henv).1
 
+/-- `Quot.ind` on `Quot.mk` is definitionally its minor premise at the element. No rule is
+needed: the motive lands in `Prop`, so both sides are proofs of `β (Quot.mk r a)` and
+`IsDefEq.proofIrrel` relates them. -/
+theorem quotInd_defeq {U : Nat} {Γ : List VExpr} {u : VLevel} {α r β h a : VExpr} (hu : u.WF U)
+    (hα : env'.HasType U Γ α (.sort u))
+    (hr : env'.HasType U Γ r (.forallE α (.forallE α.lift (.sort .zero))))
+    (hβ : env'.HasType U Γ β (.forallE (.mkApps (.const ``Quot [u]) [α, r]) (.sort .zero)))
+    (hh : env'.HasType U Γ h
+      (.forallE α (.app β.lift (.mkApps (.const ``Quot.mk [u]) [α.lift, r.lift, .bvar 0]))))
+    (ha : env'.HasType U Γ a α) :
+    env'.IsDefEq U Γ
+      (.mkApps (.const ``Quot.ind [u]) [α, r, β, h, .mkApps (.const ``Quot.mk [u]) [α, r, a]])
+      (.app h a) (.app β (.mkApps (.const ``Quot.mk [u]) [α, r, a])) := by
+  have hl : ∀ l ∈ [u], l.WF U := by simpa using hu
+  simp only [VExpr.mkApps, List.foldl] at hβ hh ⊢
+  have mk : env'.HasType U Γ _ _ := .const (addQuot_quotMk henv) hl rfl
+  have ind : env'.HasType U Γ _ _ := .const (addQuot_quotInd henv) hl rfl
+  simp [quotMkConst, quotIndConst, VExpr.instL, VLevel.inst] at mk ind
+  replace mk := mk.appDF hα; replace ind := ind.appDF hα
+  simp [VExpr.inst, VExpr.instVar] at mk ind
+  replace mk := mk.appDF hr; replace ind := ind.appDF hr
+  simp [VExpr.inst, VExpr.instVar, VExpr.inst_liftN_lo] at mk ind
+  replace mk := mk.appDF ha; replace ind := ind.appDF hβ
+  simp [VExpr.inst, VExpr.instVar, VExpr.inst_liftN_lo] at mk ind
+  replace ind := ind.appDF hh; simp [VExpr.inst, VExpr.inst_liftN_lo] at ind
+  replace ind := ind.appDF mk; have hred := hh.appDF ha
+  simp [VExpr.inst, VExpr.instVar, VExpr.inst_liftN_lo] at ind hred
+  exact .proofIrrel (hβ.appDF mk) ind hred
+
 end
