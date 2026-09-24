@@ -13,9 +13,10 @@ projection reduction follows the registered $\iota$ rule (\ref{thm:tr-env-proj-d
 \stSorry{} 1 proof (\ref{thm:add-decl-wf}, the \texttt{inductDecl} case); \stTainted{} 3
 lemmas via \texttt{orderedStrong}/\texttt{patsStrong} (\ref{family:beta-telescope},
 \ref{thm:tr-env-proj-defeq}, \ref{thm:tr-expr-mk-app-list}).
-\item \lead{Contribution} \texttt{iota} gave \texttt{AddInduct} a real witness and proved
-quotient initialization; \texttt{trproj} added structure-likeness and derived the
-projection rule from the registered $\iota$ rule.
+\item \lead{Contribution} \texttt{iota} gave \texttt{AddInduct} a real witness, proved
+quotient initialization, and inverted the \texttt{induct} step to recover a type
+former's or constructor's originating block (\ref{thm:tr-env-find-induct}); \texttt{trproj}
+added structure-likeness and derived the projection rule from the registered $\iota$ rule.
 \item \lead{Lean files} \texttt{Lean4Lean/Verify/Environment/\{Basic,Lemmas,Quot,
 Checker,Extension\}.lean}, \texttt{Lean4Lean/Verify/\{Environment,Axioms\}.lean}.
 \item \lead{Thesis} axioms.tex \S\S ``Definitions'', ``Inductive types'', ``The recursor'',
@@ -577,13 +578,14 @@ derivation; hence its kernel map is a well-formed \texttt{SMap}.
 \begin{lemma}[Pulling a lookup back]
 \label{family:quot-pullbacks}
 \contrib{mixed}
-\lean{Lean4Lean.pull_insert, Lean4Lean.AddQuot1.pull, Lean4Lean.AddQuot.pull}
+\lean{Lean4Lean.pull_insert, Lean4Lean.AddQuot1.pull, Lean4Lean.AddQuot.pull, Lean4Lean.AddQuot.pull_of}
 \leanok
 \srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{184}
 
 \lead{In short} A lookup that is not the inserted constant \hl{survives} the insertion
 (\texttt{pull\_insert}), hence four in a row (\texttt{AddQuot1.pull}, iterated as
-\texttt{AddQuot.pull}).
+\texttt{AddQuot.pull}). \texttt{pull\_of} restates \texttt{AddQuot.pull} with the dual
+hypothesis shape $\forall v,\ ci \ne \mathtt{quotInfo}\ v$.
 \end{lemma}
 \begin{proof}
 \uses{def:add-quot-witness}
@@ -596,7 +598,7 @@ assumed difference; iterate four times.
 \label{thm:insert-defs-wf}
 \lean{Lean4Lean.insertDefs_wf}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{211}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{227}
 
 \lead{In short} Fresh, pairwise distinct names keep the map \hl{well-formed}.
 \end{lemma}
@@ -611,7 +613,7 @@ insertion.
 \label{family:tr-env-find}
 \lean{Lean4Lean.TrEnv.find?_iff, Lean4Lean.TrEnv.find?, Lean4Lean.TrEnv.find?_uniq}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{284}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{300}
 
 \lead{In short} The three \texttt{Aligned} lookup lemmas, restated for
 $\mathtt{TrEnv}\ safety\ env\ venv$.
@@ -627,7 +629,7 @@ then apply the \texttt{Aligned} version.
 \label{family:insert-defs-lookup}
 \lean{Lean4Lean.VEnv.addDefEqs_self, Lean4Lean.insertDefs_find?}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{304}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{320}
 
 \lead{In short} Every block member's defining equation is present after insertion; a lookup
 after \hl{predates or is} the block.
@@ -643,7 +645,7 @@ after \hl{predates or is} the block.
 \contrib{iota}
 \lean{Lean4Lean.insertDefs_find?_mono, Lean4Lean.AddQuot1.find?_mono, Lean4Lean.AddQuot.find?_mono}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{412}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{428}
 
 \lead{In short} A resolvable constant \hl{stays resolvable}, same value, across a
 definition block or quotient initialization.
@@ -663,7 +665,7 @@ for quotients: the forward duals of \ref{family:quot-pullbacks}.
 \lean{Lean4Lean.TrEnv'.of_value, Lean4Lean.TrEnv.of_value}
 \leanok
 \uses{ind:tr-env}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{333}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{349}
 \thesisref{axioms.tex, \S ``Definitions ($\delta$ reduction)''.}
 
 \lead{In short} If a translated environment resolves a name to $ci$, visible at $safety$,
@@ -685,7 +687,7 @@ equation or proof irrelevance; \texttt{induct} uses \texttt{AddInduct.value\_fin
 \contrib{trproj}
 \lean{Lean4Lean.Aligned.constants_pull}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{439}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{455}
 
 \lead{In short} If $C$ is aligned with $env$, $env \le env'$, and $c$ resolves in $C$
 visible at $safety$, then $c$'s model constant in $env'$ is already $env$'s: it
@@ -704,7 +706,7 @@ injectivity of \texttt{some} identifies the two.
 \lean{Lean4Lean.TrEnv'.ctor_arity, Lean4Lean.TrEnv.ctor_arity}
 \leanok
 \uses{ind:tr-env, struct:tr-ind-type, def:pi-telescope}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{449}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{465}
 \thesisref{axioms.tex, \S ``Inductive types''.}
 
 \lead{In short} If a translated environment resolves $c$ to a kernel $cval$ and the model
@@ -724,7 +726,7 @@ non-\texttt{induct} insertion; in the block case, read the arity off
 \contrib{trproj}
 \lean{Lean4Lean.mkRecName_inj}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{513}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{529}
 
 \lead{In short} $\mathtt{mkRecName}\ a = \mathtt{mkRecName}\ b$ implies $a = b$.
 \end{lemma}
@@ -740,7 +742,7 @@ non-\texttt{induct} insertion; in the block case, read the arity off
 \lean{Lean4Lean.TrEnv'.structure_rec, Lean4Lean.TrEnv.structure_rec}
 \leanok
 \uses{ind:tr-env, struct:tr-ind-type, struct:tr-recursor}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{523}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{539}
 \thesisref{axioms.tex, \S ``The recursor''.}
 
 \lead{In short} Given a translated environment resolving $S$ to $ival$ and
@@ -768,7 +770,7 @@ come from the block, using \texttt{name\_major}.
 \lean{Lean4Lean.TrEnv'.pats_iota', Lean4Lean.TrEnv.pats_iota'}
 \leanok
 \uses{ind:tr-env, def:pattern-iota-rhs, ind:trexprs}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{674}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{690}
 \thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
 
 \lead{In short} Given a translated environment resolving $recName$ to $rval$, visible at
@@ -793,7 +795,7 @@ insertion lemmas; \texttt{induct} uses \ref{thm:add-induct-rec-find} and
 \lean{Lean4Lean.TrEnv'.IotaRule}
 \leanok
 \uses{def:pattern-iota-rhs, def:ind-rec-shape, def:ind-rule-shape, def:ind-minor-for, ind:trexprs}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{782}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{798}
 \thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
 
 \lead{In short} Ties one registered pattern back to \hl{the kernel rule it came from}:
@@ -812,7 +814,7 @@ reduct of matching \texttt{RuleShape}.
 \contrib{trproj}
 \lean{Lean4Lean.TrEnv'.IotaRule.step}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{807}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{823}
 
 \lead{In short} Given $venv \le venv'$ and a map embedding preserving lookups, an
 \texttt{IotaRule} over $(C, venv)$ is one over $(C', venv')$, the kernel data unchanged --
@@ -831,7 +833,7 @@ it \hl{survives} a model/map extension.
 \lean{Lean4Lean.TrEnv'.pats_iota_inv_shape}
 \leanok
 \uses{struct:iota-rule, ind:tr-env}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{826}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{842}
 \thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
 
 \lead{In short} If a translated environment's $venv.\mathtt{pats}$ contains
@@ -853,7 +855,7 @@ new case supplying both sides' shape via \ref{thm:add-induct-rec-reg}.
 \contrib{trproj}
 \lean{Lean4Lean.TrEnv.pats_iota_inv_shape}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{903}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{919}
 
 \lead{In short} The same statement \hl{instantiated} at $C = env.\mathtt{constants}$.
 \lead{Caveat} Unlike its sibling \ref{thm:tr-env-pats-iota}, it does not convert the
@@ -872,7 +874,7 @@ definitionally equal.
 \contrib{iota}
 \lean{Lean4Lean.TrEnv.iota_defeq}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{917}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1067}
 \thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
 
 \lead{In short} Given $venv.\mathtt{pats}\ p\ r$, $e$ matching $p$ with substitutions
@@ -892,7 +894,7 @@ well-typed pattern reduces \hl{by definitional equality}.
 \lean{Lean4Lean.TrEnv.iota_rec}
 \leanok
 \uses{ind:tr-env, def:pattern-iota-rhs}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{929}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1079}
 \thesisref{axioms.tex, \S ``The computation rule ($\iota$ reduction)''.}
 
 \lead{In short} Given a translated environment resolving $recName$ to a visible $rval$
@@ -913,6 +915,84 @@ trivial check, identifying the two constructors.
 \texttt{inductiveReduceRecCore.WF} has no \texttt{sorry} of its own, but the enclosing
 \texttt{reduceRecursor.WF} is \texttt{sorry}, so the chain to \texttt{whnf} does not close.
 \end{remark}
+
+\section{Recovering an inductive block's origin}
+
+\begin{theorem}[Resolving to a block]
+\label{thm:tr-env-find-induct}
+\contrib{iota}
+\lean{Lean4Lean.TrEnv'.find?_induct}
+\leanok
+\uses{ind:tr-env, struct:add-induct}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{937}
+
+\lead{In short} A type former or constructor $ci$ resolvable in $C$ and visible at
+$safety$ \hl{comes from an \texttt{AddInduct} block}: some well-formed $decl$ over
+$env_0$, with $env_1 \le venv$, whose witness lists $ci$ among its constants. Every
+other $\mathtt{TrEnv}'$ step inserts only a definition, axiom, theorem, opaque,
+quotient constant, or an \texttt{ignore} constant invisible at $safety$.
+\end{theorem}
+\begin{proof}
+\uses{family:add-induct-find, family:quot-pullbacks, family:insert-defs-lookup}
+\leanok
+\lead{Idea} Induction on $\mathtt{TrEnv}'$, one case per step; \texttt{quot} pulls the
+lookup back by \texttt{AddQuot.pull\_of}, \texttt{mutualDef} by
+\texttt{insertDefs\_find?}, \texttt{induct} closes immediately by
+\texttt{AddInduct.find?}.
+\end{proof}
+
+\begin{definition}[Block data behind a type former, \texttt{InductOrigin}]
+\label{struct:induct-origin}
+\contrib{iota}
+\lean{Lean4Lean.TrEnv'.InductOrigin}
+\leanok
+\uses{struct:tr-ind-type, struct:add-induct}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{994}
+
+\lead{In short} The block behind a kernel type former $ival$: \hl{well-formed and below
+$venv$}, one of its type formers translating $ival$.
+\begin{itemize}
+\item \texttt{wf}: $decl.\mathtt{WF}\ env_0$;
+\item \texttt{addTypes}: $decl.\mathtt{addTypes}\ env_0 = \mathtt{some}\ env_T$;
+\item \texttt{addInduct}: $env_0.\mathtt{addInduct}\ decl = \mathtt{some}\ env_1$;
+\item \texttt{le}: $env_1 \le venv$;
+\item \texttt{mem}: $t \in decl.\mathtt{types}$;
+\item \texttt{tr}: \texttt{TrIndType} translates $ival$ (constructors $cvals$) to $t$,
+over $env_0$, $env_T$.
+\end{itemize}
+\end{definition}
+
+\begin{lemma}[Inductive and constructor lookups trace to a block]
+\label{family:tr-env-induct-ctor-info-inv}
+\contrib{iota}
+\lean{Lean4Lean.TrEnv'.inductInfo_inv, Lean4Lean.TrEnv.inductInfo_inv, Lean4Lean.TrEnv'.ctorInfo_inv, Lean4Lean.TrEnv.ctorInfo_inv}
+\leanok
+\uses{thm:tr-env-find-induct, struct:induct-origin}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1007}
+
+\lead{In short} The inverse of $\mathtt{TrEnv}'$'s \texttt{induct} clause, by name:
+resolving $C$ (visible at $safety$) to an \texttt{inductInfo} or \texttt{ctorInfo}
+\hl{recovers an \texttt{InductOrigin}} witness -- the same visibility hypothesis
+\texttt{pats\_iota'} needs, since an \texttt{ignore} step can insert an invisible type
+former.
+\begin{itemize}
+\item \texttt{inductInfo\_inv}: $C.\mathtt{find?}\ I = \mathtt{some}\ (\mathtt{inductInfo}\
+ival)$ gives a block whose type former $t$ has $t.\mathtt{name} = I$.
+\item \texttt{ctorInfo\_inv}: $C.\mathtt{find?}\ x = \mathtt{some}\ (\mathtt{ctorInfo}\
+cval)$ gives a block whose type former's constructors $cvals$ contain $cval$, named
+$x$.
+\item The \texttt{TrEnv} variants restate both against $env.\mathtt{find?}$.
+\end{itemize}
+\end{lemma}
+\begin{proof}
+\uses{thm:tr-env-find-induct, family:add-induct-membership, thm:tr-env-aligned}
+\leanok
+\lead{Idea} \texttt{find?\_induct} at the \texttt{.inl}/\texttt{.inr} disjunct,
+\texttt{AddInduct.mem\_consts} to locate the type former or constructor, then the
+matching entry of \texttt{TrIndType}'s pointwise list; \texttt{TrEnv'.map\_wf} converts
+the lookup for the \texttt{TrEnv} variants.
+\end{proof}
+
 \section{Beta telescopes and projection reduction}
 
 \begin{lemma}[$\beta$-reduction of a saturated $\lambda$-telescope]
@@ -920,7 +1000,7 @@ trivial check, identifying the two constructors.
 \contrib{trproj}
 \lean{Lean4Lean.VEnv.HasType.mkApps_inv_head, Lean4Lean.VEnv.IsDefEqU.beta_app, Lean4Lean.VEnv.IsDefEqU.mkApps_congr, Lean4Lean.VEnv.IsDefEqU.betaN}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{959}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1109}
 \thesisref{axioms.tex, \S ``Definitional equality'', the $\beta$ rule.}
 \axfoot{sorryAx via VEnv.WF.orderedStrong, VEnv.WF.patsStrong}
 
@@ -944,7 +1024,7 @@ time by unique typing.
 \lean{Lean4Lean.TrEnv.proj_defeq}
 \leanok
 \uses{ind:tr-env, struct:trprojctor, def:proj-field-selector}
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1171}
 \thesisref{typesys.tex, \S\texttt{sec:undecidable}: the $\mathsf{inv}_x$ recursor idiom the
 projection expansion copies.}
 \axfoot{sorryAx via VEnv.WF.orderedStrong, VEnv.WF.patsStrong; plus the three PersistentHashMap axioms}
@@ -972,7 +1052,7 @@ split, the $\iota$ step, then two \texttt{betaN} steps to $fields[i]$.
 \contrib{trproj}
 \lean{Lean4Lean.TrExpr.mkAppList}
 \leanok
-\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1166}
+\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1316}
 \axfoot{sorryAx via VEnv.WF.orderedStrong, VEnv.WF.patsStrong}
 
 \lead{In short} Given a translated head and argument list with model spine
@@ -1604,6 +1684,9 @@ candidates: performance shims, not genuine gaps.
 \item The \texttt{inductDecl} case of \ref{thm:add-decl-wf} is \texttt{sorry}, and nothing
 builds an \texttt{AddInduct} witness from \texttt{Environment.addInductive}: the whole
 inductive-block apparatus is conditional on that hypothesis.
+\item \ref{struct:induct-origin} and \ref{thm:tr-env-find-induct} recover a block's data
+from an already-resolved constant; they do not build a fresh \texttt{AddInduct} witness,
+so they do not close the gap left by \ref{thm:add-decl-wf}.
 \item \ref{thm:tr-env-proj-defeq} has no non-test consumer: \texttt{reduceProjCore.WF},
 \texttt{inferProj.WF\_struct} and \texttt{inferProj.WF} are still \texttt{sorry}, and its
 premise \texttt{TrProjCtor} is inhabited only by hand in tests.

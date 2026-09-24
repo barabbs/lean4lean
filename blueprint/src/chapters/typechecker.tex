@@ -15,7 +15,8 @@
   Lemma~\ref{thm:vtc-tryetastruct}, Lemma~\ref{thm:vtc-isdefequnitlike},
   Theorem~\ref{thm:vtc-inferproj-struct}, Theorem~\ref{thm:vtc-inferproj}.
 \item \lead{Contribution} \texttt{iota}: the pure $\iota$ step, proved
-  (\ref{thm:vtc-iota-reduce-core}), unwired to \ref{thm:vtc-reducerecursor}.
+  (\ref{thm:vtc-iota-reduce-core}), unwired to \ref{thm:vtc-reducerecursor}; and the
+  ambient-context generalization of the checker's soundness (\ref{thm:vtc-m-run-ambient}).
   \texttt{trproj}: repairs \ref{thm:vtc-inferproj}, adds scoped \ref{thm:vtc-inferproj-struct};
   both open.
 \item \lead{Lean files} \texttt{Verify/TypeChecker/\{Basic,Reduce,WHNF,InferType,IsDefEq\}.lean},
@@ -1123,24 +1124,87 @@ public interface \ref{thm:vtc-toplevel} & every entry point called & \stTainted 
   \axfoot{sorryAx via all four component theorems}
 \end{proof}
 
+\begin{definition}[Ambient verification context]
+  \label{def:vtc-vcontext-ofmlctx}
+  \lean{Lean4Lean.TypeChecker.VContext.ofMLCtx1, Lean4Lean.TypeChecker.VContext.ofMLCtx, Lean4Lean.TypeChecker.VContext.ofMLCtx1_venv, Lean4Lean.TypeChecker.VContext.ofMLCtx1_lparams, Lean4Lean.TypeChecker.VContext.ofMLCtx1_mlctx, Lean4Lean.TypeChecker.VContext.ofMLCtx1_lctx, Lean4Lean.TypeChecker.VContext.mk1_eq_ofMLCtx1}
+  \leanok
+  \uses{def:vtc-venvat, def:vtc-vcontext, def:vtc-mlctx-wf}
+  \contrib{iota}\srcloc{Lean4Lean/Verify/TypeChecker.lean}{81}
+
+  \lead{In short} \texttt{VContext.ofMLCtx1}/\texttt{ofMLCtx} build the verification context at a
+  well-formed \texttt{MLCtx} \texttt{m}, with \texttt{lctx := m.lctx} in place of the empty
+  context; \hl{\texttt{VContext.mk1} is its \texttt{nil}-context instance}, by \texttt{rfl}
+  (\texttt{mk1\_eq\_ofMLCtx1}).
+\end{definition}
+
+\begin{lemma}[Ambient initial-state invariant]
+  \label{thm:vtc-vstate-wf-initial}
+  \lean{Lean4Lean.TypeChecker.VState.WF.initial1, Lean4Lean.TypeChecker.VState.WF.initial}
+  \leanok
+  \uses{def:vtc-vcontext-ofmlctx, def:vtc-vstate-wf}
+  \contrib{iota}\srcloc{Lean4Lean/Verify/TypeChecker.lean}{123}
+
+  \lead{In short} The initial checker state satisfies \hl{\texttt{VState.WF}} at an ambient
+  \texttt{ofMLCtx1}/\texttt{ofMLCtx} context, given the initial name generator reserves every
+  free variable \texttt{m} introduces.
+  \begin{itemize}
+  \item \lead{Given} \texttt{m : MLCtx} is well formed and every \texttt{fv} of
+    \texttt{m.vlctx.fvars} is reserved by the empty state's name generator;
+  \item \lead{Then} \texttt{VState.WF (.ofMLCtx1 wf lparams m mwf fuel) \{\}} (resp.\
+    \texttt{ofMLCtx}) holds.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  \uses{def:vtc-vcontext-ofmlctx}
+  \leanok
+  \lead{Idea} Unfold each field of \texttt{VState.WF} at \texttt{ofMLCtx1}; freshness discharges
+  the reserved-variable clause directly.
+\end{proof}
+
 \begin{definition}[Initial context and state]
   \label{def:vtc-vcontext-mk}
   \lean{Lean4Lean.TypeChecker.VContext.mk1, Lean4Lean.TypeChecker.VContext.mk', Lean4Lean.TypeChecker.VState.WF.empty1, Lean4Lean.TypeChecker.VState.WF.empty}
   \leanok
-  \uses{def:vtc-venvat, def:vtc-vcontext, def:vtc-vstate-wf}
-  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{64}
+  \uses{def:vtc-venvat, def:vtc-vcontext, def:vtc-vstate-wf, thm:vtc-vstate-wf-initial}
+  \contrib{mixed}\srcloc{Lean4Lean/Verify/TypeChecker.lean}{64}
 
   \lead{In short} \texttt{VContext.mk1} builds the \hl{initial} context from a \texttt{VEnvAt},
   level parameters and fuel, with \texttt{MLCtx.nil}; \texttt{VState.WF.empty1} shows the empty
-  state satisfies the invariant.
+  state satisfies the invariant, as the \texttt{nil} instance of
+  \ref{thm:vtc-vstate-wf-initial}.
 \end{definition}
+
+\begin{theorem}[Soundness of the checker at an ambient context]
+  \label{thm:vtc-m-run-ambient}
+  \lean{Lean4Lean.TypeChecker.M.WF.run1', Lean4Lean.TypeChecker.M.WF.run'}
+  \leanok
+  \uses{def:vtc-vcontext-ofmlctx, thm:vtc-vstate-wf-initial, def:vtc-m-wf}
+  \contrib{iota}\srcloc{Lean4Lean/Verify/TypeChecker.lean}{154}
+
+  \lead{In short} A computation verified sound at an ambient \texttt{MLCtx}-derived context is
+  \hl{sound when \texttt{M.run} actually runs it} in \texttt{m.lctx}.
+  \begin{itemize}
+  \item \lead{Given} \texttt{m} well formed, every free variable of \texttt{m.vlctx} reserved by
+    the initial name generator, and \texttt{x} satisfies \texttt{M.WF} at the ambient context and
+    the empty state;
+  \item \lead{Then} \texttt{M.run env safety m.lctx lparams fuel x} satisfies
+    \texttt{Except.WF Q}; \texttt{run1}/\texttt{run} (Theorem~\ref{thm:vtc-m-run}) are its
+    corollaries at the empty context.
+  \end{itemize}
+\end{theorem}
+\begin{proof}
+  \uses{thm:vtc-vstate-wf-initial}
+  \leanok
+  \lead{Idea} Unfold \texttt{M.run}, discard the error branch, apply at
+  \texttt{VState.WF.initial1} with the given freshness hypothesis.
+\end{proof}
 
 \begin{theorem}[Discharging the monad at the top level]
   \label{thm:vtc-m-run}
   \lean{Lean4Lean.TypeChecker.M.WF.run1, Lean4Lean.TypeChecker.M.WF.run}
   \leanok
   \uses{def:vtc-vcontext-mk, def:vtc-m-wf}
-  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{96}
+  \contrib{mixed}\srcloc{Lean4Lean/Verify/TypeChecker.lean}{172}
   \thesisref{soundness.tex, the Corollary}
 
   \lead{In short} If \texttt{x : M} $\alpha$ satisfies \texttt{M.WF} at the initial context and
@@ -1149,17 +1213,37 @@ public interface \ref{thm:vtc-toplevel} & every entry point called & \stTainted 
   value is \hl{justified by the model}.
 \end{theorem}
 \begin{proof}
+  \uses{thm:vtc-m-run-ambient}
   \leanok
-  \lead{Idea} Unfold \texttt{M.run}, discard the error branch, apply at
-  \texttt{VState.WF.empty1}.
+  \lead{Idea} Delegate to \ref{thm:vtc-m-run-ambient} at the empty (\texttt{nil}) context, where
+  the freshness hypothesis is vacuous.
 \end{proof}
+
+\begin{example}[A one-variable ambient context]
+  \label{ex:ambient-context}
+  \lean{Lean4Lean.Tests.AmbientContext.ambient, Lean4Lean.Tests.AmbientContext.ambient_wf, Lean4Lean.Tests.AmbientContext.ambient_fresh}
+  \leanok
+  \uses{def:vtc-vcontext-ofmlctx, thm:vtc-vstate-wf-initial, thm:vtc-m-run-ambient}
+  \contrib{iota}\srcloc{Lean4Lean/Tests/AmbientContext.lean}{16}
+
+  \lead{In short} A non-empty sanity check: \texttt{ambient} holds one variable
+  \texttt{x : Prop}, \hl{well formed over every environment model} and never produced by the
+  empty state's name generator.
+  \begin{itemize}
+  \item \texttt{ambient\_wf}: \texttt{ambient.WF venv []} for every \texttt{venv};
+  \item \texttt{ambient\_fresh}: no free variable of \texttt{ambient} is reserved by
+    \texttt{(\{\} : State).ngen};
+  \item an unnamed example applies Theorem~\ref{thm:vtc-m-run-ambient} to infer \texttt{x}'s type
+    in \texttt{ambient.lctx}, soundly.
+  \end{itemize}
+\end{example}
 
 \begin{lemma}[Loop rules for the declaration checker]
   \label{thm:vtc-forin}
   \lean{Lean4Lean.TypeChecker.M.WF.forIn, Lean4Lean.TypeChecker.M.WF.bindThrow, Lean4Lean.TypeChecker.M.WF.forInFresh, Lean4Lean.TypeChecker.M.WF.forInForall₂}
   \leanok
   \uses{def:vtc-m-wf}
-  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{113}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{184}
 
   \lead{In short} Three Hoare rules for \texttt{for ... in} loops in \texttt{M}, \hl{consumed by
   declaration checking}: a generic invariant rule (\texttt{Inv []}: every element handled);
@@ -1177,7 +1261,7 @@ public interface \ref{thm:vtc-toplevel} & every entry point called & \stTainted 
   \lean{Lean4Lean.TypeChecker.whnf.WF, Lean4Lean.TypeChecker.whnfCore.WF, Lean4Lean.TypeChecker.unfoldDefinition.WF, Lean4Lean.TypeChecker.inferType.WF', Lean4Lean.TypeChecker.inferType.WF, Lean4Lean.TypeChecker.checkType.WF, Lean4Lean.TypeChecker.isDefEq.WF, Lean4Lean.TypeChecker.isProp.WF, Lean4Lean.TypeChecker.ensureSort.WF, Lean4Lean.TypeChecker.ensureForall.WF, Lean4Lean.TypeChecker.ensureType.WF', Lean4Lean.TypeChecker.ensureType.WF}
   \leanok
   \uses{def:vtc-m-wf, def:isfvarupset}
-  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{186}
+  \srcloc{Lean4Lean/Verify/TypeChecker.lean}{257}
   \thesisref{typesys.tex, \texttt{item:alg\_defn}}
 
   \lead{In short} Every entry point the declaration checker calls, at \texttt{M} level: \hl{the

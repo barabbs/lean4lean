@@ -9,14 +9,17 @@
   (\ref{thm:isdefeq-instn}); Regularity of types (\ref{thm:isdefeq-istype}); a well-formed
   environment is ordered (\ref{thm:wf-ordered}) and strongly typed (\ref{thm:wf-strong},
   \ref{thm:wf-orderedstrong}).
-\item \lead{Status} \stProved{} the judgment and its structural metatheory; \stSorry{}
-  \ref{thm:wf-patsstrong} (subject reduction for $\iota$) and \ref{thm:injectivity-open}
-  (three inversion principles, pre-existing); \stTainted{} \ref{thm:wf-orderedstrong} and
-  \ref{thm:foralle-inv-derived}.
+\item \lead{Status} \stProved{} the judgment and its structural metatheory, and the origin
+  lemmas for well-formed environments; \stSorry{} \ref{thm:wf-patsstrong} (subject reduction
+  for $\iota$) and \ref{thm:injectivity-open} (four inversion principles, one iota-contributed);
+  \stTainted{} \ref{thm:wf-orderedstrong} and \ref{thm:foralle-inv-derived}.
 \item \lead{Contribution} iota: the \texttt{pat} rule and admissibility
   (\ref{rule:isdefeq-pat}--\ref{def:patwf}); a \texttt{pat} case in twelve inductions; the
   well-formed-to-strong bootstrap (\ref{def:patsstrong}--\ref{thm:wf-orderedstrong}), open at
-  \ref{thm:wf-patsstrong}. trproj: none.
+  \ref{thm:wf-patsstrong}; the origin lemmas for a well-formed list
+  (\ref{thm:wf-step-of-mem}--\ref{thm:wf-defeqs-const-uniq}); a fourth, open inversion
+  principle in \ref{thm:injectivity-open} (\texttt{const\_arity\_inv}); \texttt{Quot.ind}'s
+  derived reduction (\ref{thm:quotind-defeq}). trproj: none.
 \item \lead{Lean files} \texttt{Lean4Lean/Theory/Typing/Basic.lean}, \texttt{Env.lean},
   \texttt{Lemmas.lean}, \texttt{Meta.lean}, \texttt{QuotLemmas.lean}, \texttt{EnvLemmas.lean},
   \texttt{Injectivity.lean}.
@@ -769,6 +772,30 @@ constants} at their declared types and the quotient axiom.
 \lead{Idea} Peel the four binds, then project.
 \end{proof}
 
+\begin{theorem}[\texttt{Quot.ind} needs no reduction rule]
+\label{thm:quotind-defeq}
+\contrib{iota}
+\lean{Lean4Lean.VEnv.quotInd_defeq}
+\leanok
+\uses{def:venv-addquot, def:hastype-istype, def:isdefeq}
+\srcloc{Lean4Lean/Theory/Typing/QuotLemmas.lean}{60}
+\thesisref{axioms.tex \S2.7.1 (quotient types)}
+
+\lead{In short} A well-typed \texttt{Quot.ind} redex on \texttt{Quot.mk} is definitionally
+\hl{its minor premise applied to the element} -- derived, not a registered rule.
+\begin{itemize}
+\item \lead{Given} $\alpha,r,\beta,h,a$ typed as \texttt{Quot}, \texttt{Quot.mk},
+  \texttt{Quot.lift}'s signatures require, after \texttt{addQuot}.
+\item \lead{Then} $\mathrm{ind}_r\,\beta\,h\,(\mathrm{mk}_r\,a) \equiv h\,a : \beta\,(\mathrm{mk}_r\,a)$.
+\end{itemize}
+\end{theorem}
+\begin{proof}
+\uses{fam:addquot-objs, def:isdefeq}
+\leanok
+\lead{Idea} The motive $\beta$ lands in \texttt{Sort 0}: both sides type as proofs of
+$\beta\,(\mathrm{mk}_r\,a)$, so \texttt{IsDefEq.proofIrrel} relates them.
+\end{proof}
+
 \section{From well-formedness to the ordered invariant}
 
 \texttt{VEnv.WF} is what the kernel guarantees; \texttt{Ordered} is what the lemmas need.
@@ -809,6 +836,95 @@ fresh and distinct, and preserves orderedness when every constant is typed alrea
 \leanok
 \lead{Idea} Induction on \texttt{VEnv.WF'}, one case per form; on upstream \texttt{induct} was
 vacuous (three \texttt{sorry}s), the iota branch gives it real content.
+\end{proof}
+
+\section{Origin of an environment's contents}
+
+Where a declaration, an inductive block or a constant of a well-formed environment came from.
+
+\begin{lemma}[Origin of a declaration step]
+\label{thm:wf-step-of-mem}
+\contrib{iota}
+\lean{Lean4Lean.VEnv.WF'.step_of_mem}
+\leanok
+\uses{def:venv-wf, def:vdecl-wf, def:wfprefix}
+\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{349}
+\thesisref{no thesis counterpart}
+
+\lead{In short} Every declaration of a well-formed list is a \hl{well-formed step} from the
+environment of its own remaining suffix.
+\begin{itemize}
+\item \lead{Given} \texttt{env.WF' ds} and $d \in ds$.
+\item \lead{Then} a suffix $d :: ds_0$ of $ds$ with $env_0.WF'\,ds_0$, a step
+  \texttt{VDecl.WF}\,$env_0\,d\,env_1$, and \texttt{env.WFPrefix}\,$env_1$.
+\end{itemize}
+\end{lemma}
+\begin{proof}
+\uses{def:venv-wf, def:wfprefix}
+\leanok
+\lead{Idea} Induction on \texttt{WF'}: the head declaration is its own witness, or recurse and
+extend the prefix by the step just taken.
+\end{proof}
+
+\begin{lemma}[Origin of an inductive block]
+\label{thm:wf-induct-origin}
+\contrib{iota}
+\lean{Lean4Lean.VEnv.WF'.induct_origin}
+\leanok
+\uses{thm:wf-step-of-mem, structure:ind-wf, def:ind-add-induct, struct:venv-le}
+\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{363}
+\thesisref{no thesis counterpart}
+
+\lead{In short} An inductive block of a well-formed list was added by a \hl{well-formed
+\texttt{addInduct} step}, whose result is a sub-environment of the final one.
+\end{lemma}
+\begin{proof}
+\uses{thm:wf-step-of-mem}
+\leanok
+\lead{Idea} Apply \ref{thm:wf-step-of-mem} to the block's declaration and match the step
+against \texttt{induct}.
+\end{proof}
+
+\begin{lemma}[Origin of a constant]
+\label{thm:wf-consts-origin}
+\contrib{iota}
+\lean{Lean4Lean.VEnv.WF'.consts_origin}
+\leanok
+\uses{thm:wf-step-of-mem, def:vdecl-wf, struct:venv-le}
+\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{371}
+\thesisref{no thesis counterpart}
+
+\lead{In short} Every constant of a well-formed environment was introduced by \hl{exactly one
+declaration step}: absent just before it, bound to its final value just after.
+\end{lemma}
+\begin{proof}
+\uses{thm:wf-step-of-mem}
+\leanok
+\lead{Idea} Induction on \texttt{WF'}, case-splitting on whether the constant is already
+present at each step.
+\end{proof}
+
+\begin{theorem}[Definitional axioms are functional]
+\label{thm:wf-defeqs-const-uniq}
+\contrib{iota}
+\lean{Lean4Lean.VEnv.WF'.defeqs_const_uniq}
+\leanok
+\uses{def:venv-wf}
+\srcloc{Lean4Lean/Theory/Typing/EnvLemmas.lean}{484}
+\thesisref{no thesis counterpart}
+
+\lead{In short} A well-formed environment has \hl{at most one $\delta$ rule per constant
+head}: two axioms both headed by $\mathrm{const}\,c$ coincide.
+\begin{itemize}
+\item \lead{Caveat} Rests on a private per-constant invariant (\texttt{DefEqsConst}), proved
+  alongside by the same induction and not exposed as its own node.
+\end{itemize}
+\end{theorem}
+\begin{proof}
+\uses{def:venv-wf}
+\leanok
+\lead{Idea} Induction on \texttt{WF'} maintaining \texttt{DefEqsConst}; every declaration form
+preserves it, monotonically in the environment.
 \end{proof}
 
 \section{The strong-system bootstrap}
@@ -1041,23 +1157,30 @@ Two long-open principles, needed by \ref{thm:wf-patsstrong}.
 
 \begin{lemma}[Definitional inversion (open)]
 \label{thm:injectivity-open}
-\lean{Lean4Lean.VEnv.IsDefEqU.sort_inv, Lean4Lean.VEnv.IsDefEqU.forallE_inv_stratified, Lean4Lean.VEnv.IsDefEqU.sort_forallE_inv}
+\contrib{mixed}
+\lean{Lean4Lean.VEnv.IsDefEqU.sort_inv, Lean4Lean.VEnv.IsDefEqU.forallE_inv_stratified, Lean4Lean.VEnv.IsDefEqU.sort_forallE_inv, Lean4Lean.VEnv.IsDefEqU.const_arity_inv}
 \leanok
-\uses{def:hastype-istype, def:venv-wf, def:hastypestratified, def:onctx}
+\uses{def:hastype-istype, def:venv-wf, def:hastypestratified, def:onctx, structure:ind-wf}
 \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{11}
 \thesisref{unique.tex Theorem (Definitional inversion) thm:1dinv items 1--3; soundness.tex ``Type injectivity''}
 
 \lead{In short} Over a well-formed environment and context: \hl{sorts and $\Pi$-types are
-injective} under definitional equality.
+injective} under definitional equality, and neither is an applied inductive type former.
 \begin{itemize}
 \item Equal sorts have equivalent levels; equal $\Pi$-types have equal domains/codomains
   (for the stratified \texttt{HasTypeStratified}); a sort is never equal to a $\Pi$-type.
+\item \texttt{const\_arity\_inv} (iota): a well-typed application of a declared inductive
+  block's type former is defeq to neither a sort nor a $\Pi$-type.
+\item \lead{Caveat} \texttt{const\_arity\_inv} has no consumer yet; it is meant to discharge
+  the saturation hypothesis of the type checker's recursor-reduction proof.
 \end{itemize}
-\axfoot{sorryAx (all three are sorry), Quot.sound, propext}
+\axfoot{sorryAx (all four are sorry), Quot.sound, propext}
 \end{lemma}
 \begin{proof}
-\stSorry{} \lead{Missing} All three proofs; pre-existing upstream holes, not contributed, and
-the ingredient \ref{thm:wf-patsstrong} names as missing.
+\stSorry{} \lead{Missing} All four proofs. The first three are pre-existing upstream holes and
+the ingredient \ref{thm:wf-patsstrong} names as missing; \texttt{const\_arity\_inv} (iota)
+needs the same root and is new, for reasoning about a block's shape in the style of
+\ref{thm:wf-consts-origin}.
 \end{proof}
 
 \begin{lemma}[$\Pi$-injectivity for the unstratified judgment]
@@ -1077,9 +1200,8 @@ and $B\equiv B'$ at some sort in $A::\Gamma$.
 \uses{thm:injectivity-open, thm:isdefeq-strong, def:hastypestratified}
 \leanok
 \lead{Idea} Strengthen via \texttt{IsDefEq.strong}, stratify, apply the admitted
-\texttt{forallE\_inv\_stratified}. Byte-identical to upstream; \texttt{IsDefEq.strong}'s
-environment hypothesis moved to \texttt{OrderedStrong}, so this proof now carries a second,
-independent gap.
+\texttt{forallE\_inv\_stratified}. Byte-identical to upstream; \texttt{IsDefEq.strong} takes its
+environment hypothesis at \texttt{OrderedStrong}, a second, independent gap of this proof.
 \end{proof}
 
 \section*{Caveats}
@@ -1090,8 +1212,9 @@ independent gap.
   \texttt{OrderedStrong} (\ref{thm:wf-orderedstrong}).
 \item \ref{rule:isdefeq-pat} builds subject reduction for $\iota$ into the judgment itself;
   false over a merely \texttt{Ordered} environment.
-\item The three principles of \ref{thm:injectivity-open} are \texttt{sorry} (pre-existing);
-  a proof of \ref{thm:wf-patsstrong} needs them.
+\item Three of \ref{thm:injectivity-open}'s four principles are pre-existing \texttt{sorry}s
+  that a proof of \ref{thm:wf-patsstrong} needs; the fourth, \texttt{const\_arity\_inv}
+  (iota), is a new, unconsumed \texttt{sorry}.
 \item \texttt{PatTyped} (\ref{def:pattyped}) is existential and constrains only the holes a
   reduct uses: a rule can be well-formed at one convenient instantiation.
 \item The \texttt{Check}/\texttt{Realizes} side-condition machinery is exercised only at the

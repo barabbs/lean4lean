@@ -6,7 +6,7 @@ itself, with a Rocq-style formal development that states and partially proves th
 re-implementation correct against Mario Carneiro's thesis, \emph{The Type Theory of Lean}. Two
 contributed branches extend it:
 \texttt{iota} (recursor reduction for inductive blocks) and \texttt{trproj} (structure
-projections). This blueprint states the development as a dependency graph of roughly 950 nodes
+projections). This blueprint states the development as a dependency graph of roughly 960 nodes
 across fourteen content chapters (Chapters~\ref{chap:syntax}--\ref{chap:experimental-reduction});
 this chapter is the map.
 
@@ -105,12 +105,18 @@ inductive block (\ref{structure:ind-wf}).
 \item \lead{Result} closes master's three inductive-theory \texttt{sorry}s; \texttt{addInduct\_WF}
 is a real proof, and the previously vacuous quotient-initialisation proof \texttt{addQuot.WF}
 (\ref{thm:add-quot-wf}) is now proved for real, sorry-free; checked against the real kernel on 48
-type formers (\texttt{Tests/IotaShape.lean}).
+type formers (\texttt{Tests/IotaShape.lean}); and traces every constant and inductive block of
+a well-formed environment to the declaration step that introduced it (the origin lemmas), shows
+a well-formed environment has at most one $\delta$ rule per constant head, generalises the
+checker's own soundness proof to an ambient local context, and derives the
+\texttt{Quot.ind} reduction from proof irrelevance rather than a new rule.
 \item \lead{Caveat} one open \texttt{sorry}, \texttt{VEnv.WF.patsStrong} (\ref{thm:wf-patsstrong}):
 it gates what was master's unconditional \texttt{Ordered.strong}, tainting unique typing and
 master's primitives layer with \texttt{sorryAx}.
 \item \lead{Caveat} \texttt{VInductDecl.WF} pins recursor types and $\iota$ rules as 20 syntactic
 fields, where the thesis generates them from the block's specification.
+\item \lead{Caveat} a sibling gap, \texttt{IsDefEqU.const\_arity\_inv}, is now registered alongside
+the pre-existing type-former injectivity sorries, currently unconsumed.
 \end{itemize}
 
 \textbf{\texttt{trproj}} replaces master's opaque \texttt{TrProj := sorry}, the relation
@@ -170,7 +176,7 @@ it could be proved but an ancestor is not. A single open \texttt{sorry} such as
 \section{Node counts by chapter and attribution}
 \label{sec:intro-node-counts}
 
-953 nodes across the fourteen content chapters; the four attribution categories are
+962 nodes across the fourteen content chapters; the four attribution categories are
 \texttt{master}, \texttt{iota}, \texttt{trproj} and \texttt{mixed} (a master declaration modified
 by a branch).
 
@@ -180,7 +186,7 @@ by a branch).
 Chapter & Total & master & iota & trproj & mixed \\
 \midrule
 syntax (\ref{chap:syntax}) & 69 & 37 & 14 & 11 & 7 \\
-typing (\ref{chap:typing}) & 50 & 18 & 19 & -- & 13 \\
+typing (\ref{chap:typing}) & 55 & 17 & 24 & -- & 14 \\
 metatheory (\ref{chap:metatheory}) & 77 & 45 & 11 & -- & 21 \\
 inductive (\ref{chap:inductive}) & 74 & 5 & 61 & 6 & 2 \\
 proj (\ref{chap:proj}) & 68 & -- & 17 & 51 & -- \\
@@ -189,24 +195,26 @@ trexpr (\ref{chap:trexpr}) & 79 & 56 & 2 & 12 & 9 \\
 trenv (\ref{chap:trenv}) & 86 & 32 & 32 & 11 & 11 \\
 primitives-core (\ref{chap:primitives-core}) & 76 & 49 & -- & -- & 27 \\
 primitives-arith (\ref{chap:primitives-arith}) & 58 & 32 & -- & -- & 26 \\
-typechecker (\ref{chap:typechecker}) & 59 & 56 & 1 & 1 & 1 \\
+typechecker (\ref{chap:typechecker}) & 63 & 54 & 5 & 1 & 3 \\
 levels (\ref{chap:levels}) & 77 & 77 & -- & -- & -- \\
 experimental-logrel (\ref{chap:experimental-logrel}) & 63 & 63 & -- & -- & -- \\
 experimental-reduction (\ref{chap:experimental-reduction}) & 47 & 38 & -- & -- & 9 \\
 \midrule
-Total & 953 & 575 & 157 & 93 & 128 \\
+Total & 962 & 572 & 166 & 93 & 131 \\
 \bottomrule
 \end{tabular}\par\smallskip
 
 \begin{itemize}
 \item \lead{Caveat} node granularity is uneven: master's code is grouped coarsely, the branches'
 material broken out finely. Read shares, not raw counts, as size.
-\item The branches together touch 378 of the 953 nodes (157 iota + 93 trproj + 128 mixed).
+\item The branches together touch 390 of the 962 nodes (166 iota + 93 trproj + 131 mixed).
 \texttt{iota}'s share concentrates in inductive (61 of 74); \texttt{trproj}'s in proj (51 of 68).
 Levels and experimental-logrel are untouched by either branch.
 \item \texttt{mixed} concentrates in the two primitives chapters (27, 26), from retyping master's
 substitution family \texttt{Ordered} to \texttt{OrderedStrong}, not new primitive-arithmetic
-content.
+content. Three further \texttt{mixed} nodes, in typing and typechecker, come from the same
+origin-lemma and ambient-context round: one adds a sibling declaration to an existing family,
+two have their proofs rewritten to delegate to it, neither changing a Lean type.
 \end{itemize}
 
 \section{Sources and where lean4lean sits}

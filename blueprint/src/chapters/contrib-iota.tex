@@ -24,6 +24,13 @@ Ch.~\ref{chap:syntax}, \ref{def:venv-addpat} \\
 reduct. & Ch.~\ref{chap:typing}, \ref{rule:isdefeq-pat} \\
 \texttt{PatTyped}, \texttt{PatWF} & Typing predicate for a schematic rule (existential) and
 its template-headed shape. & Ch.~\ref{chap:typing}, \ref{def:pattyped} \\
+Origin lemmas (\texttt{step\_of\_mem}, \texttt{induct\_origin}, \texttt{consts\_origin}) &
+Trace every constant and inductive block of a well-formed environment's declaration list to
+the step that introduced it; \texttt{defeqs\_const\_uniq} shows a constant's $\delta$ rule is
+unique. & Ch.~\ref{chap:typing}, \ref{thm:wf-step-of-mem} \\
+\texttt{Quot.ind} reduction (\texttt{quotInd\_defeq}) & Derives the
+\texttt{Quot.ind}-on-\texttt{Quot.mk} reduction from proof irrelevance; the motive lands in
+\texttt{Prop}, so no new rule is needed. & Ch.~\ref{chap:typing}, \ref{thm:quotind-defeq} \\
 \texttt{VInductDecl.WF} & 20-field specification of a well-formed inductive block:
 positivity, universes, large elimination. & Ch.~\ref{chap:inductive}, \ref{structure:ind-wf} \\
 \texttt{addInduct} & Four-stage construction (types, constructors, recursors, rules)
@@ -32,8 +39,16 @@ replacing the unproved extension. & Ch.~\ref{chap:inductive}, \ref{def:ind-add-i
 \texttt{DefEqsAsPats}. & Ch.~\ref{chap:inductive}, \ref{def:indparams-toparams} \\
 Quotient safety & Kernel check rejecting an unsafe \texttt{Eq}; the quotient extension proved
 sound and unconditional. & Ch.~\ref{chap:kernel}, \ref{def:kernel-check-eq-type} \\
+Ambient-context checker soundness (\texttt{ofMLCtx1}/\texttt{ofMLCtx},
+\texttt{M.WF.run1'}/\texttt{run'}) & Generalizes the checker's soundness from the empty
+context to any well-formed ambient \texttt{MLCtx}; \texttt{run1}/\texttt{run} are now its
+corollaries at the empty context. & Ch.~\ref{chap:typechecker}, \ref{thm:vtc-m-run-ambient} \\
 \texttt{AddInduct} & Refinement bookkeeping: lookup and distinctness theorems derived, not
 assumed. & Ch.~\ref{chap:trenv}, \ref{struct:add-induct} \\
+Inductive/constructor inversion (\texttt{find?\_induct}, \texttt{InductOrigin},
+\texttt{inductInfo\_inv}, \texttt{ctorInfo\_inv}) & Recovers the declaring \texttt{AddInduct}
+block and its well-formedness from a resolved type former or constructor, the inverse of the
+\texttt{induct} translation clause. & Ch.~\ref{chap:trenv} \\
 $\iota$-lookup bridge & Environment lookup for a registered rule, feeding the type checker's
 recursor reduction. & Ch.~\ref{chap:trenv}, \ref{thm:tr-env-iota-rec} \\
 \bottomrule
@@ -56,6 +71,22 @@ matches a registered rule exactly; taint reaches it through \texttt{TrProj.uniq}
 own \texttt{NormalEq.parRed}.
 \item \stSorry{} \ref{thm:wf-patsstrong}: every registered rule preserves types (see What is
 not proved).
+\item \stProved{} \ref{thm:wf-step-of-mem}, \ref{thm:wf-induct-origin},
+\ref{thm:wf-consts-origin}: a well-formed environment's constants and inductive blocks trace
+back to their declaration step, and (\ref{thm:wf-defeqs-const-uniq}) a constant's $\delta$
+rule is unique; axiom footprint \texttt{propext}, \texttt{Quot.sound}, no
+\texttt{Classical.choice}.
+\item \stProved{} \ref{thm:vtc-m-run-ambient}: the checker's soundness proof generalizes to an
+ambient local context; \texttt{M.WF.run1}/\texttt{run} (Ch.~\ref{chap:typechecker}) become
+corollaries at the empty context.
+\item \stProved{} \texttt{find?\_induct}, \texttt{InductOrigin}, \texttt{inductInfo\_inv},
+\texttt{ctorInfo\_inv} (Ch.~\ref{chap:trenv}): a resolved type former or constructor's
+declaring block is recoverable, the inverse of the \texttt{induct} clause.
+\item \stProved{} \ref{thm:quotind-defeq}: \texttt{Quot.ind}'s reduction on \texttt{Quot.mk}
+is derived from proof irrelevance, not a new rule.
+\item \stSorry{} \texttt{IsDefEqU.const\_arity\_inv} (\ref{thm:injectivity-open}): a declared
+inductive's type former is defeq to neither a sort nor a $\Pi$-type, a fourth sibling of the
+pre-existing type-former-injectivity gap, unconsumed as of this contribution.
 \end{itemize}
 
 \section{What is not proved}
@@ -73,6 +104,9 @@ Type-former injectivity & Three bare \texttt{sorry}s, untouched by this contribu
 \texttt{AddInduct} witness for a real inductive. & \srcloc{Lean4Lean/Verify/Environment.lean}{208} \\
 \texttt{DefEqsAsPats} & Assumed, not proved: fails once a \texttt{def} or the quotient rule
 is declared. & \srcloc{Lean4Lean/Theory/Typing/InductiveParams.lean}{350--377} \\
+\texttt{IsDefEqU.const\_arity\_inv} & Same root as the three pre-existing injectivity
+sorries; a declared inductive's type former is never a sort or $\Pi$-type. &
+\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{36} \\
 \bottomrule
 \end{tabular}\par\smallskip
 
@@ -96,6 +130,9 @@ $\iota$ rule (\S2.6.4) & Reduct's shape fully pinned; regularity is a proved the
 Reduct pinned only in count, not shape or minor-premise binders; \texttt{rules\_wf} checks
 the stored rule's well-typedness, not that it equals the thesis's generated rule; regularity
 taken as the rule itself (\ref{rule:isdefeq-pat}), open as \ref{thm:wf-patsstrong}. \\
+\texttt{Quot.ind} reduction & A separate computation rule alongside \texttt{Quot.lift}'s. &
+Not needed: both sides are \texttt{Prop}-valued, so proof irrelevance suffices;
+\texttt{quotDefEq} remains only \texttt{Quot.lift}'s rule. \\
 K-like reduction (\S4.1) & A second rule for subsingleton eliminators. & Not registered. \\
 Scope of $\iota$ (\S4) & Excludes subsingleton inductives, covered instead by K$^+$. &
 Registered for every constructor of every block. \\
@@ -117,4 +154,13 @@ is still \texttt{sorry}.
 \item \ref{def:indparams-toparams}, its specialisation, and
 \ref{thm:indparams-cr-defeq-of-induct} have no consumer elsewhere in the project.
 \item K-like reduction is recorded (\texttt{VRecursor.k}) but never registered as a rule.
+\item \texttt{IsDefEqU.const\_arity\_inv}, unlike this chapter's other open obligations, is
+new to this contribution rather than inherited untouched; it has no consumer yet, meant to
+discharge the saturation hypothesis of \texttt{inductiveReduceRecCore.WF}.
+\item The origin lemmas (\texttt{step\_of\_mem}, \texttt{induct\_origin},
+\texttt{consts\_origin}) and the inversion lemmas (\texttt{find?\_induct},
+\texttt{InductOrigin}, \texttt{inductInfo\_inv}, \texttt{ctorInfo\_inv}) describe an
+already-well-formed environment; neither constructs a fresh \texttt{AddInduct} witness from
+the kernel's own \texttt{Environment.addInductive}, so \texttt{addDecl.WF}'s inductive case
+above stays \texttt{sorry}.
 \end{itemize}

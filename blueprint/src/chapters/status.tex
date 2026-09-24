@@ -4,30 +4,30 @@
 \section*{At a glance}
 \begin{itemize}
 \item \lead{Goal} the project's own trust boundary: the declaration census, the live \texttt{sorry}s outside \texttt{Experimental/}, the axioms trusted, and the known modelling gaps.
-\item \lead{Status} \stSorry{} 16 live sorries outside \texttt{Experimental/} (11 master, 4 trproj, 1 iota); \stTainted{} \ref{thm:vtc-toplevel} and \ref{thm:tr-env-proj-defeq} depend on them.
-\item \lead{Contribution} iota's one open obligation, \texttt{patsStrong}, reaches 343 declarations; trproj's \texttt{TrProj}/\texttt{TrProjCtor} metatheory proves \ref{thm:tr-env-proj-defeq} but leaves \texttt{inferProj.WF} and \texttt{inferProj.WF\_struct} open.
+\item \lead{Status} \stSorry{} 17 live sorries outside \texttt{Experimental/} (11 master, 4 trproj, 2 iota); \stTainted{} \ref{thm:vtc-toplevel} and \ref{thm:tr-env-proj-defeq} depend on them.
+\item \lead{Contribution} iota adds sorry-free origin lemmas for well-formed environments and inductive blocks, plus an ambient-context generalization of the checker's soundness; its two open obligations are \texttt{patsStrong} (343 declarations) and the newly registered, unconsumed \texttt{const\_arity\_inv}. trproj's \texttt{TrProj}/\texttt{TrProjCtor} metatheory proves \ref{thm:tr-env-proj-defeq} but leaves \texttt{inferProj.WF} and \texttt{inferProj.WF\_struct} open.
 \item \lead{Lean files} none of its own: this chapter aggregates Chapters~\ref{chap:syntax}--\ref{chap:experimental-reduction}.
 \end{itemize}
 
-Every technical object named below is a node defined in Chapters~\ref{chap:syntax}--\ref{chap:experimental-reduction}, cited here by \ref{} to its label or by \srcloc{}{} to a source location with no node of its own. Numbers are read from the compiled \texttt{trproj} tree, HEAD \texttt{20ec229}, Lean \texttt{v4.33.0-rc2}, built 2026-09-10.
+Every technical object named below is a node defined in Chapters~\ref{chap:syntax}--\ref{chap:experimental-reduction}, cited here by \ref{} to its label or by \srcloc{}{} to a source location with no node of its own. Numbers are read from the compiled \texttt{trproj} tree, HEAD \texttt{8cc17a5}, Lean \texttt{v4.33.0-rc2}, built 2026-09-23.
 
 \section{Census}
 \label{status:sec:census}
 
-\lead{Given} every user-level declaration in the compiled environment: 7833 of 20725 raw constants survive after filtering internal names (numeric components, \texttt{\_}-prefixed names, \texttt{match\_}/\texttt{proof\_}/\texttt{eq\_} prefixes, recursor/eliminator/\texttt{sizeOf} suffixes). \lead{Where} branch attribution is the majority tag over a declaration's line range: \texttt{master}, \texttt{iota}, \texttt{trproj}, or \texttt{mixed} where the range mixes tags.
+\lead{Given} every user-level declaration in the compiled environment: 7876 of 20795 raw constants survive after filtering internal names (numeric components, \texttt{\_}-prefixed names, \texttt{match\_}/\texttt{proof\_}/\texttt{eq\_} prefixes, recursor/eliminator/\texttt{sizeOf} suffixes). \lead{Where} branch attribution is the majority tag over a declaration's line range: \texttt{master}, \texttt{iota}, \texttt{trproj}, or \texttt{mixed} where the range mixes tags.
 
 \begin{center}
 \begin{tabular}{lrrrrrr}
 \toprule
 directory & decls & sorryAx & \% sorryAx & master & iota & trproj/mixed \\
 \midrule
-Theory & 1573 & 90 & 5.7\% & 971 & 274 & 88 / 77 \\
-Verify & 2700 & 233 & 8.6\% & 2156 & 149 & 45 / 151 \\
+Theory & 1585 & 91 & 5.7\% & 971 & 286 & 88 / 77 \\
+Verify & 2728 & 233 & 8.5\% & 2156 & 177 & 45 / 151 \\
 Experimental & 2403 & 306 & 12.7\% & 2295 & 1 & 0 / 8 \\
-Tests & 418 & 0 & 0.0\% & 64 & 113 & 173 / 3 \\
+Tests & 421 & 0 & 0.0\% & 64 & 116 & 173 / 3 \\
 kernel & 739 & 0 & 0.0\% & 713 & 12 & 3 / 2 \\
 \midrule
-all & 7833 & 629 & 8.0\% & 6199 & 549 & 309 / 241 \\
+all & 7876 & 630 & 8.0\% & 6199 & 592 & 309 / 241 \\
 \bottomrule
 \end{tabular}\par\smallskip
 \end{center}
@@ -37,16 +37,16 @@ all & 7833 & 629 & 8.0\% & 6199 & 549 & 309 / 241 \\
 \begin{itemize}
 \item \texttt{kernel} and \texttt{Tests} carry zero \texttt{sorryAx}-tainted declarations.
 \item \texttt{Experimental} has the highest taint rate (12.7\%) but is almost entirely master's own scratch work (2295 of 2403 declarations, 1 iota, 8 mixed) and sits outside \texttt{lake}'s \texttt{defaultTargets}.
-\item \texttt{Tests} concentrates the branches' own declarations: 113 iota + 173 trproj + 3 mixed = 289 of 418 (69\%).
-\item \texttt{Theory} and \texttt{Verify} concentrate the specification and refinement work: 274 iota + 88 trproj + 77 mixed = 439 of 1573 in \texttt{Theory} (28\%); 149 iota + 45 trproj + 151 mixed = 345 of 2700 in \texttt{Verify} (13\%).
-\item Project-wide, of the 7298 declarations with a resolved branch tag: 549 iota (7.5\%), 309 trproj (4.2\%), 241 mixed (3.3\%), 6199 master (85.0\%). The contributed share concentrates in \texttt{Theory} and \texttt{Verify}, where \S\ref{status:sec:sorries} and \S\ref{status:sec:issues} also concentrate.
+\item \texttt{Tests} concentrates the branches' own declarations: 116 iota + 173 trproj + 3 mixed = 292 of 421 (69\%).
+\item \texttt{Theory} and \texttt{Verify} concentrate the specification and refinement work: 286 iota + 88 trproj + 77 mixed = 451 of 1585 in \texttt{Theory} (28\%); 177 iota + 45 trproj + 151 mixed = 373 of 2728 in \texttt{Verify} (14\%).
+\item Project-wide, of the 7341 declarations with a resolved branch tag: 592 iota (8.1\%), 309 trproj (4.2\%), 241 mixed (3.3\%), 6199 master (84.4\%). The contributed share concentrates in \texttt{Theory} and \texttt{Verify}, where \S\ref{status:sec:sorries} and \S\ref{status:sec:issues} also concentrate.
 \end{itemize}
 
 \section{Live sorries outside Experimental}
 \label{status:sec:sorries}
 \label{status:sorries:diff}
 
-Sixteen sorry occurrences survive outside \texttt{Experimental/}, across thirteen open declarations: eleven master, four trproj, one iota. \texttt{Experimental/} carries further live sorries of its own; all predate both branches.
+Seventeen sorry occurrences survive outside \texttt{Experimental/}, across fourteen open declarations: eleven master, four trproj, two iota. \texttt{Experimental/} carries further live sorries of its own; all predate both branches.
 
 \begin{center}
 \begin{tabular}{p{0.21\linewidth}p{0.22\linewidth}p{0.22\linewidth}p{0.22\linewidth}}
@@ -60,13 +60,13 @@ Declaration & Source & Missing & Depends on it \\
 The only route from \texttt{VEnv.WF} to \texttt{OrderedStrong} (\texttt{WF.orderedStrong}, \ref{thm:wf-orderedstrong}, and a \texttt{CoeOut} instance); master's route, \texttt{Ordered.strong}, was a proved theorem.
 &
 343 declarations: all of \texttt{UniqueTyping.lean}, most of \texttt{ChurchRosser.lean}/\texttt{HeadReduction.lean}, the \texttt{Verify} primitives layer (Chapters~\ref{chap:primitives-core}, \ref{chap:primitives-arith}). \\
-\texttt{IsDefEqU.sort\_inv}, \texttt{.forallE\_inv\_stratified}, \texttt{.sort\_forallE\_inv} (\ref{thm:injectivity-open})
+\contrib{mixed}\texttt{IsDefEqU.sort\_inv}, \texttt{.forallE\_inv\_stratified}, \texttt{.sort\_forallE\_inv}, \texttt{.const\_arity\_inv} (\ref{thm:injectivity-open})
 &
-\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{12}, \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{21}, \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{34}
+\srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{12}, \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{21}, \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{34}, \srcloc{Lean4Lean/Theory/Typing/Injectivity.lean}{45}
 &
-Three type-former injectivity principles; the whole file.
+Four type-former injectivity principles; the whole file.
 &
-What a proof of \texttt{patsStrong} is said to need (\texttt{EnvLemmas.lean:323}): iota's obligation rests on an already-open master foundation. \\
+What a proof of \texttt{patsStrong} is said to need (\texttt{EnvLemmas.lean:323}) rests on the first three; \texttt{const\_arity\_inv} has no consumers yet, reserved for a future \texttt{inductiveReduceRecCore.WF} saturation-hypothesis removal. \\
 \texttt{NormalEq.parRed} (\ref{thm:normaleq-parred})
 &
 \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1193}, \srcloc{Lean4Lean/Theory/Typing/ChurchRosser.lean}{1212}
@@ -159,7 +159,7 @@ Beyond the three standard axioms and \texttt{sorryAx}, the project declares 110 
 \item \textbf{Native certificates.} 7 \texttt{bv\_decide}-generated LRAT axioms (\srcloc{Lean4Lean/Verify/Expr.lean}{1}, \srcloc{Lean4Lean/Verify/Level.lean}{1}), narrow reach, pre-existing.
 \item \textbf{Pointer equality.} \texttt{ptrEqExpr\_eq} and \texttt{ptrEqConstantInfo\_eq} (\srcloc{Lean4Lean/PtrEq.lean}{1}), reaching 65 and 63 declarations: pointer equality implies structural equality, honestly documented. At \srcloc{Lean4Lean/TypeChecker.lean}{739} the assumption gates a different algorithm, not a mere shortcut.
 \item \textbf{Experimental axioms,} confined outside \texttt{defaultTargets}: \texttt{Params.extra\_pat} (14 declarations) asserts that every environment defeq instantiates a registered pattern rule, the hard content of $\iota$; \texttt{mySorry : $\alpha$} (two files, 25 declarations) is a proof of \texttt{False}, making both files inconsistent by construction; \texttt{Thierry2.lean} further axiomatizes the judgment it interprets (\texttt{DefEq}/\texttt{DefEq.U}/\texttt{DefEq.left}, up to 20 declarations); eleven further small axioms (e.g.\ \texttt{InferTypeN}, \texttt{IsTy}) posit the fixpoints several draft files exist to construct.
-\item \textbf{sorryAx.} The sixteen live sorries of \S\ref{status:sec:sorries}, plus further ones confined to \texttt{Experimental/}.
+\item \textbf{sorryAx.} The seventeen live sorries of \S\ref{status:sec:sorries}, plus further ones confined to \texttt{Experimental/}.
 \end{itemize}
 
 \textbf{What the top-level theorems assume.} \ref{thm:vtc-toplevel} (\texttt{inferType.WF'}, \texttt{checkType.WF}, \texttt{isDefEq.WF}) depends, beyond the standard axioms and the \texttt{Verify/Axioms.lean} bridge, on \texttt{sorryAx} via the four structure/recursor obligations of \S\ref{status:sec:sorries} and via \texttt{patsStrong} wherever \texttt{OrderedStrong} is discharged from \texttt{VEnv.WF}; every statement in \ref{thm:vtc-toplevel} is partial as of this HEAD. \ref{thm:tr-env-proj-defeq} has the pinned axiom profile \texttt{[propext, Classical.choice, Quot.sound, sorryAx, Lean.PersistentHashMap.WF.find?\_eq, .WF.toList'\_insert, .findAux\_isSome]}, its \texttt{sorryAx} traced through unique typing, $\Pi$-injectivity and \texttt{patsStrong}. The \ref{struct:add-induct} family is vacuous end-to-end: no theorem in it is known true of any environment \texttt{Environment.addInductive} actually produces. There is no single labelled trust axiom: the trust boundary is the union of the bridge axioms above and the sorry set of \S\ref{status:sec:sorries}, quoted per top-level theorem.
@@ -179,7 +179,7 @@ K3 & \contrib{iota}\srcloc{Lean4Lean/Verify/Environment/Basic.lean}{583} & Nothi
 K4 & \contrib{iota}\srcloc{Lean4Lean/Theory/Inductive.lean}{174} & \texttt{VExpr.RuleShape} pins only the argument count the reduct passes the minor premise, not its shape, so \texttt{VInductDecl.WF} accepts $\iota$ rules the kernel would never generate. \\
 K5 & \contrib{iota}\srcloc{Lean4Lean/Theory/Inductive.lean}{257} & K-like reduction is not modelled: \texttt{addRecRule} registers only the constructor rule; \texttt{VRecursor.k} is recorded but never used. \\
 K6 & \contrib{trproj}\srcloc{Lean4Lean/Verify/TypeChecker/InferType.lean}{400} & \texttt{inferProj.WF}'s own docstring states it is not provable as stated: kernel-accepted projections of reflexive, indexed or nested structures have no \ref{def:trproj} derivation. \texttt{inferType.WF'} and \texttt{checkType.WF} are, as stated, unprovable without extending the model. \\
-K7 & \contrib{trproj}\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1021} & \ref{thm:tr-env-proj-defeq}, trproj's strongest projection result, is orphaned: its only consumer anywhere is a \texttt{\#print axioms} check. \\
+K7 & \contrib{trproj}\srcloc{Lean4Lean/Verify/Environment/Lemmas.lean}{1171} & \ref{thm:tr-env-proj-defeq}, trproj's strongest projection result, is orphaned: its only consumer anywhere is a \texttt{\#print axioms} check. \\
 K8 & \contrib{trproj}\srcloc{Lean4Lean/Verify/Environment/Primitive/Condition.lean}{1236} & The $\iota$ retype of \texttt{VEnv.WF} to \texttt{OrderedStrong} taints \texttt{Reflection.WF.genTele}, attributed line-for-line to master, because one of its calls now coerces the other way. \\
 K9 & \contrib{trproj}\srcloc{Lean4Lean/Verify/TypeChecker/Reduce.lean}{143} & \texttt{reduceProjCore.WF} and \texttt{tryEtaStructCore.WF}, the two structure-side obligations the \texttt{TrProj}/\texttt{TrProjCtor} metatheory was built to support, were left unattempted. \\
 K10 & \srcloc{Lean4Lean/Verify/Environment.lean}{208} & \texttt{addDecl.WF}'s \texttt{inductDecl} case is master's oldest hole: the $\sim$1000-line inductive-block apparatus both branches build is correct but, end to end, vacuous. \\
@@ -193,7 +193,7 @@ The full registry is in \texttt{blueprint/review-data/ISSUES.md}.
 
 \section*{Caveats}
 \begin{itemize}
-\item One build snapshot: every number above comes from a single compiled tree, HEAD \texttt{20ec229}, 2026-09-10; nothing here is rebuilt.
+\item One build snapshot: every number above comes from a single compiled tree, HEAD \texttt{8cc17a5}, 2026-09-23; nothing here is rebuilt.
 \item \texttt{Experimental/}'s five modules cannot be imported together, so its census is one pass per module, merged; cross-module clashes surface only where a source read caught them.
 \item Reach counts (343/138/92/61/0 in \S\ref{status:sec:sorries}) are exact where a source computed them; reach for the master sorries is qualitative, not an exhaustive transitive closure.
 \item Branch attribution is a line-majority heuristic, not a commit-history fact: a file can be mis-attributed whole, and relocated master code can be counted as contributed.
